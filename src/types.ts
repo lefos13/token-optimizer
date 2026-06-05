@@ -12,6 +12,8 @@ export interface VerdictResult {
   failures: FailureDetail[];
   rawLogPath: string;
   needsRawLogs?: boolean;
+  likelyRelevantToRecentChanges?: boolean;
+  estimatedTokensSaved?: number;
 }
 
 export interface RunTestVerdictArgs {
@@ -19,5 +21,15 @@ export interface RunTestVerdictArgs {
   taskSummary: string;
   changedFiles?: string[];
   testCommand?: string;
+  maxOutputLines?: number;
+  timeoutMs?: number;
+  parallel?: boolean;
+}
+
+export interface RunCommandDigestArgs {
+  workspacePath: string;
+  command: string | string[];
+  intent: string;
+  timeoutMs?: number;
   maxOutputLines?: number;
 }

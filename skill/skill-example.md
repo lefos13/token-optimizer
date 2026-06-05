@@ -15,6 +15,9 @@ Currently implemented server tools:
 - `run_failure_triage`: analyzes an existing log file and returns compact root-cause/fix guidance.
 - `run_changed_files_review`: reads changed files under 500 KB and asks the local LLM for likely issues before expensive validation.
 - `run_regression_check`: runs auto-detected commands, compares success state with `.codex-local-test-runs/baseline.json`, writes the current run as the new baseline, and returns whether a regression was detected.
+- `run_command_digest`: runs any arbitrary command (or sequence) and returns a compact, intent-steered local-LLM digest, for noisy non-test commands whose raw output would otherwise flood context.
+- `query_log`: asks a targeted question against a stored log (by `runId` or path) and returns a compact answer plus the relevant excerpt, so you do not read the whole log.
+- `grep_log`: deterministic, no-LLM regex search over a stored log (by `runId` or path), returning matching line windows.
 
 ## Workflow
 
@@ -26,17 +29,18 @@ Currently implemented server tools:
 6. Pass a short `taskSummary` that describes the concrete code change or validation goal, not a broad audit request.
 7. Pass `changedFiles` when available, using repo-relative paths for tools that resolve files under `workspacePath`.
 8. Treat returned JSON as the primary signal and avoid raw logs while the summary is actionable.
-9. When `verdict` is `fail` or `uncertain`, prefer `run_failure_triage` on the returned log file before reading raw logs, unless the returned summary already contains enough detail to fix the issue.
+9. When `verdict` is `fail` or `uncertain`, prefer `run_failure_triage`, `query_log`, or `grep_log` on the returned `runId`/log before reading raw logs, unless the returned summary already contains enough detail to fix the issue.
 10. Use `run_regression_check` only when auto-detected commands are appropriate and updating `.codex-local-test-runs/baseline.json` is acceptable for the workspace.
 
 ## Tool Call Shapes
 
-Call `run_changed_files_review`:
+Call `run_changed_files_review` (set `useDiff` to review only changed hunks vs `HEAD`):
 
 ```json
 {
   "workspacePath": "/absolute/path/to/workspace",
-  "changedFiles": ["src/example.ts"]
+  "changedFiles": ["src/example.ts"],
+  "useDiff": true
 }
 ```
 
@@ -47,7 +51,10 @@ Call `run_test_verdict`:
   "workspacePath": "/absolute/path/to/workspace",
   "taskSummary": "Implemented X; validate build/lint/tests for that change.",
   "changedFiles": ["src/example.ts"],
-  "testCommand": "npm test"
+  "testCommand": "npm test",
+  "maxOutputLines": 300,
+  "timeoutMs": 300000,
+  "parallel": false
 }
 ```
 
@@ -69,6 +76,38 @@ Call `run_regression_check` only when the project has a meaningful auto-detected
 }
 ```
 
+Call `run_command_digest` for any noisy command whose raw output you do not want in context (installs, builds, migrations, large `grep`/`find`, `git log`, codegen). State what you want to learn in `intent`:
+
+```json
+{
+  "workspacePath": "/absolute/path/to/workspace",
+  "command": "npm install",
+  "intent": "Did the install report any errors, peer-dependency warnings, or deprecated packages?",
+  "timeoutMs": 600000
+}
+```
+
+Call `query_log` to interrogate a stored log instead of reading the whole file. Use the `runId` returned by a prior run (or a `logPath`):
+
+```json
+{
+  "workspacePath": "/absolute/path/to/workspace",
+  "runId": "2026-06-05T17-20-45-148Z",
+  "question": "Which test failed and on what assertion?"
+}
+```
+
+Call `grep_log` when you already know the token to find and want exact lines with no model call:
+
+```json
+{
+  "workspacePath": "/absolute/path/to/workspace",
+  "runId": "2026-06-05T17-20-45-148Z",
+  "pattern": "Error|FAIL|Traceback",
+  "context": 3
+}
+```
+
 Use commands that exercise the changed surface:
 
 - Narrow change: run the most specific relevant test, lint target, typecheck, or build.
@@ -77,11 +116,16 @@ Use commands that exercise the changed surface:
 
 ## Interpreting Results
 
-- `run_changed_files_review`: Treat `hasIssues: true` as advisory. Verify serious findings with tests, typecheck, or direct code inspection before changing code.
+- `run_changed_files_review`: Treat `hasIssues: true` as advisory. Verify serious findings with tests, typecheck, or direct code inspection before changing code. If `reviewAvailable` is `false`, the local model did not run; do not read `hasIssues: false` as a clean review. Check `skipped` to see whether any changed files were not reviewed (missing, not a file, or over the 500 KB limit).
+- `run_test_verdict`: When present, `likelyRelevantToRecentChanges` is the local model's guess about whether a failure stems from the reported `changedFiles`; use it to prioritize, not as proof. Set `maxOutputLines` to bound how much log the model sees on very noisy commands, `timeoutMs` for long suites, and `parallel: true` only when the detected commands are independent. `estimatedTokensSaved` reports the rough context saved versus the raw log.
+- `run_changed_files_review`: Prefer `useDiff: true` in a git repo to review only changed hunks (cheaper, sharper); it falls back to whole-file content for files with no diff or outside git.
 - `run_test_verdict` `pass`: Report the commands run, the verdict, and any residual risk. Do not read or paste raw logs.
 - `run_test_verdict` `fail`: Use the LLM summary and `failures` first. If the fix is not clear, call `run_failure_triage` with the log path before opening raw logs.
 - `run_test_verdict` `uncertain`: Call `run_failure_triage` with the referenced log path. Inspect the raw log file only if triage is missing, vague, contradictory, or not enough for the next debugging step.
 - `run_regression_check`: Treat `isRegression: true` as a signal that the current run failed after a previously successful baseline. Remember the tool overwrites the baseline with the current run.
+- `run_command_digest`: Use `summary` and `keyFindings` as the answer to your `intent`; do not paste the raw output. `exitCode`/`exitCodes` are authoritative, the digest only describes. If `needsRawLogs` is `true` (or the digest is empty because the model was offline), interrogate the log with `query_log`/`grep_log` using the returned `runId` instead of reading it whole.
+- `query_log`: Prefer this over reading `rawLogPath` after a `fail`/`uncertain` verdict. Use `answer` and `relevantExcerpt`; cite `lineRange` if you need to open the exact spot. If `available` is `false`, fall back to `grep_log` or read only the cited slice of the raw log.
+- `grep_log`: Use for exact, cheap lookups (stack-trace markers, a symbol, a filename). Returns line-numbered windows; widen `context` or raise `maxMatches` only if the first pass is insufficient.
 
 The server writes `rawLogPath` relative to `workspacePath`, usually inside `.codex-local-test-runs/`.
 
