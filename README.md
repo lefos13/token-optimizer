@@ -1,6 +1,6 @@
-# local-tester-mcp
+# Local LLM subagent
 
-`local-tester-mcp` is an MCP server for running local validation commands and turning long build, lint, test, and smoke-check logs into compact verdicts with help from a local LLM.
+Local LLM subagent is an MCP server for running local validation commands and turning long build, lint, test, and smoke-check logs into compact verdicts with help from a local LLM like Qwen2.5-Coder-7B-Instruct (GGUF on Llama.cpp). This tool has been tested with the Q4_K_M variation on a Macbook M4 Pro (24GB RAM).
 
 It is designed for coding agents that need to verify changes without pasting raw logs into the conversation. The server runs commands in the target workspace, writes full logs to disk, sends trimmed context to a local OpenAI-compatible model endpoint, and returns structured JSON that an agent can act on.
 
