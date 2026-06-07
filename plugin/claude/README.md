@@ -1,6 +1,6 @@
 # local-tester plugin (Claude Code)
 
-Bundles the `local_tester` MCP server and the `local-test-verdict` skill so an
+Bundles the `local_tester` MCP server and the `local-llm-subagent` skill so an
 agent can validate code changes, triage failures, review changed files, check
 regressions, and scout code without flooding chat context with raw logs.
 
@@ -10,16 +10,31 @@ regressions, and scout code without flooding chat context with raw logs.
 
 - `.claude-plugin/plugin.json` — plugin manifest (`local-tester` v1.0.0).
 - `.claude-plugin/marketplace.json` — local single-plugin marketplace.
-- `.mcp.json` — registers the `local_tester` stdio server (tools are exposed as `mcp__local_tester__*`).
-- `skills/local-test-verdict/SKILL.md` — usage guidance, copied from `skill/skill-example.md`.
+- `.mcp.json` — registers the `local_tester` stdio server (tools exposed as `mcp__local_tester__*`).
+- `server/` — the compiled MCP server plus a launcher (`start.sh`) and a minimal `package.json`.
+- `skills/local-llm-subagent/SKILL.md` — usage guidance, copied from `skill/skill-example.md`.
 
-## Prerequisites
+## How the server runs (portable)
 
-1. Build the server first so `dist/index.js` exists: `npm run build`.
-2. A local OpenAI-compatible LLM endpoint. Defaults: `LOCAL_LLM_API_URL=http://localhost:8080/v1`,
-   `LOCAL_LLM_MODEL=local-model`. Optional per-task overrides:
-   `LOCAL_LLM_VERDICT_MODEL`, `LOCAL_LLM_TRIAGE_MODEL`, `LOCAL_LLM_REVIEW_MODEL`,
-   `LOCAL_LLM_DIGEST_MODEL`, `LOCAL_LLM_SCOUT_MODEL`, `LOCAL_LLM_QUERY_MODEL`.
+`.mcp.json` launches `${CLAUDE_PLUGIN_ROOT}/server/start.sh`. On first run the
+launcher installs the single runtime dependency
+(`@modelcontextprotocol/sdk`) into the persistent `${CLAUDE_PLUGIN_DATA}`
+directory, then starts the server. No absolute repo paths are baked in, so the
+plugin is portable across machines.
+
+**Requirements on the target machine:** `node` and `npm` on `PATH`, plus network
+access the first time (to install the dependency). After that it runs offline.
+
+The skill is invoked as `/local-tester:local-llm-subagent` and is also model-invoked
+automatically based on its description.
+
+## LLM configuration
+
+A local OpenAI-compatible LLM endpoint is expected. Defaults:
+`LOCAL_LLM_API_URL=http://localhost:8080/v1`, `LOCAL_LLM_MODEL=local-model`.
+Optional per-task overrides: `LOCAL_LLM_VERDICT_MODEL`, `LOCAL_LLM_TRIAGE_MODEL`,
+`LOCAL_LLM_REVIEW_MODEL`, `LOCAL_LLM_DIGEST_MODEL`, `LOCAL_LLM_SCOUT_MODEL`,
+`LOCAL_LLM_QUERY_MODEL`.
 
 ## Install
 
@@ -28,5 +43,4 @@ claude plugin marketplace add /Users/eevangelinos/.gemini/antigravity/scratch/lo
 claude plugin install local-tester@local-tester-marketplace
 ```
 
-The server runs this repo's built `dist/index.js`, so keep the repo (and its
-`node_modules`) in place after installing.
+Then restart Claude Code (or run `/reload-plugins`) so the server and skill load.
