@@ -60,7 +60,10 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "1.0.0";
+  /* Bump this on every meaningful change. Claude only pulls plugin updates
+     when the version changes; keeping it static pins installs to the commit
+     they were first installed from and updates become silent no-ops. */
+  const VERSION = "1.1.0";
 
   /* Pin the runtime dep to the version this repo was built and tested against. */
   const sdkVersion = require(
@@ -75,9 +78,10 @@ try {
     author: { name: "Lefos13" },
     license: "Apache-2.0",
     keywords: ["local-test", "mcp", "verdict", "triage", "validation"],
-    /* Declare component paths explicitly alongside auto-discovery. */
-    skills: "./skills",
-    mcpServers: "./.mcp.json",
+    /* Components are auto-discovered from their default locations: skills/ and
+       .mcp.json at the plugin root. The manifest deliberately does NOT pin
+       custom skills/mcpServers paths, since some clients interpret an explicit
+       "skills" path as a single-skill directory rather than a container. */
   };
   fs.writeFileSync(
     path.join(metaDir, "plugin.json"),

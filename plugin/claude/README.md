@@ -8,7 +8,7 @@ regressions, and scout code without flooding chat context with raw logs.
 
 ## Contents
 
-- `.claude-plugin/plugin.json` — plugin manifest (`local-tester` v1.0.0).
+- `.claude-plugin/plugin.json` — plugin manifest (`local-tester` v1.1.0).
 - `.mcp.json` — registers the `local_tester` stdio server (tools exposed as `mcp__local_tester__*`).
 - `server/` — the compiled MCP server plus a launcher (`start.sh`) and a minimal `package.json`.
 - `skills/local-llm-subagent/SKILL.md` — usage guidance, copied from `skill/skill-example.md`.
