@@ -1,9 +1,9 @@
 ---
-name: local-test-verdict
-description: Use the local tester MCP server and its local LLM triage flow to validate code changes, review changed files, triage failures, check regressions, classify command output, and keep raw logs out of context. Trigger after implementing code changes, fixing bugs, touching tests/build/lint behavior, preparing final verification, triaging failures, reviewing changed files, checking regressions, or when the user asks to use the local tester, run_test_verdict, local LLM test triage, or avoid reading raw logs.
+name: local-llm-subagent
+description: Use this MCP server and its local LLM flow to scout codebases, validate code changes, review changed files, triage failures, check regressions, classify command output, and keep raw logs out of context. Trigger when starting scouting a codebase, implementing code changes, fixing bugs, touching tests/build/lint behavior, preparing final verification, triaging failures, reviewing changed files, checking regressions, or when the user asks to use the local llm subagent, local llm test triage, or avoid reading raw logs or using an llm subagent to unload high context tasks from the main model.
 ---
 
-# Local Test Verdict
+# Local LLM Subagent
 
 ## Overview
 
@@ -18,6 +18,7 @@ Currently implemented server tools:
 - `run_command_digest`: runs any arbitrary command (or sequence) and returns a compact, intent-steered local-LLM digest, for noisy non-test commands whose raw output would otherwise flood context.
 - `query_log`: asks a targeted question against a stored log (by `runId` or path) and returns a compact answer plus the relevant excerpt, so you do not read the whole log.
 - `grep_log`: deterministic, no-LLM regex search over a stored log (by `runId` or path), returning matching line windows.
+- `scout_codebase`: recon subagent — greps the workspace for seed terms, then the local LLM ranks the matches into pointers (file + lineRange + why + confidence) so you know where to read before exploring an unfamiliar area broadly.
 
 ## Workflow
 
@@ -109,6 +110,17 @@ Call `grep_log` when you already know the token to find and want exact lines wit
 }
 ```
 
+Call `scout_codebase` before exploring an unfamiliar area, to get ranked pointers to where the relevant code lives instead of scanning the whole tree. Supply precise `seedTerms` when you know the symbols:
+
+```json
+{
+  "workspacePath": "/absolute/path/to/workspace",
+  "goal": "where is auth token refresh handled?",
+  "seedTerms": ["refreshToken", "expires_in"],
+  "roots": ["src"]
+}
+```
+
 Use commands that exercise the changed surface:
 
 - Narrow change: run the most specific relevant test, lint target, typecheck, or build.
@@ -129,6 +141,7 @@ Use commands that exercise the changed surface:
 - `run_command_digest`: Use `summary` and `keyFindings` as the answer to your `intent`; do not paste the raw output. `exitCode`/`exitCodes` are authoritative, the digest only describes. If `needsRawLogs` is `true` (or the digest is empty because the model was offline), interrogate the log with `query_log`/`grep_log` using the returned `runId` instead of reading it whole.
 - `query_log`: Prefer this over reading `rawLogPath` after a `fail`/`uncertain` verdict. Use `answer` and `relevantExcerpt`; cite `lineRange` if you need to open the exact spot. If `available` is `false`, fall back to `grep_log` or read only the cited slice of the raw log.
 - `grep_log`: Use for exact, cheap lookups (stack-trace markers, a symbol, a filename). Returns line-numbered windows; widen `context` or raise `maxMatches` only if the first pass is insufficient.
+- `scout_codebase`: Use `pointers` (verify each `file`/`lineRange` by opening it — they are hints, not authority) and `summary` to decide where to read. When `scoutAvailable` is `false`, the local model did not rank; fall back to the deterministic `candidateFiles`. If `needsDeeperLook` is `true` or pointers miss the goal, refine `seedTerms` (see `suggestedNextSearches`) or widen `roots`.
 
 The server writes `rawLogPath` relative to `workspacePath`, usually inside `.codex-local-test-runs/`.
 

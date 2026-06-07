@@ -42,3 +42,30 @@ export interface RunCommandDigestArgs {
   maxOutputLines?: number;
 }
 
+export interface ScoutPointer {
+  file: string;
+  lineRange: string;
+  why: string;
+  confidence: number;
+}
+
+export interface ScoutResponse {
+  pointers: ScoutPointer[];
+  suggestedNextSearches: string[];
+  summary: string;
+  /* True when the gathered candidates look insufficient to satisfy the goal, so the main model should widen the search itself. The orientation analogue of needsRawLogs. */
+  needsDeeperLook: boolean;
+  /* False when the local LLM was unreachable or returned unparseable output, so callers can tell "no strong pointers" apart from "ranking did not run". */
+  scoutAvailable?: boolean;
+  note?: string;
+}
+
+export interface RunScoutArgs {
+  workspacePath: string;
+  goal: string;
+  seedTerms?: string[];
+  roots?: string[];
+  maxCandidates?: number;
+  contextLines?: number;
+}
+

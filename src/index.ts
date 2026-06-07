@@ -5,10 +5,10 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { detectCommands } from './detector';
-import { runSuite, trimLog, numberLines, getGitDiff } from './runner';
-import { queryLocalLLM, queryCodeReview, queryCommandDigest, queryLogQuestion, getLLMUsage, attachLLMUsage, combineLLMUsage } from './llm';
+import { runSuite, trimLog, numberLines, getGitDiff, gatherCandidates } from './runner';
+import { queryLocalLLM, queryCodeReview, queryCommandDigest, queryLogQuestion, queryScout, getLLMUsage, attachLLMUsage, combineLLMUsage } from './llm';
 import { resolveLogPath, grepLog } from './registry';
-import { RunTestVerdictArgs, RunCommandDigestArgs } from './types';
+import { RunTestVerdictArgs, RunCommandDigestArgs, RunScoutArgs } from './types';
 import { buildAnalyticsRecord, inferWorkspaceFromLogPath, recordAnalytics } from './analytics';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -202,6 +202,42 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             }
           },
           required: ['workspacePath', 'question']
+        }
+      },
+      {
+        name: 'scout_codebase',
+        description: 'Subagent recon for the main model: instead of scanning the whole tree yourself, hand off a navigation goal and let the local LLM point you at the few relevant code regions. The server greps the workspace for seed terms (deterministically), then the local model ranks the matches into pointers (file + lineRange + why + confidence). Returns both the LLM-ranked pointers AND the raw grep-derived candidateFiles, so it stays useful even if the local model is offline. Pointers are hints to verify, not authority. Use before a broad exploration to narrow where to read.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            workspacePath: {
+              type: 'string',
+              description: 'Absolute path to the project workspace directory.'
+            },
+            goal: {
+              type: 'string',
+              description: 'What you are trying to locate or understand (e.g. "where is auth token refresh handled?").'
+            },
+            seedTerms: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional literal terms/symbols to grep for. If omitted, terms are derived from the goal. Providing precise symbols greatly improves results.'
+            },
+            roots: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional workspace-relative directories to scope the search (e.g. ["src"]). Defaults to the whole workspace.'
+            },
+            maxCandidates: {
+              type: 'number',
+              description: 'Optional cap on how many matching files are considered. Defaults to 30.'
+            },
+            contextLines: {
+              type: 'number',
+              description: 'Optional number of source lines kept around each grep hit. Defaults to 4.'
+            }
+          },
+          required: ['workspacePath', 'goal']
         }
       },
       {
@@ -823,8 +859,107 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
   }
 
+  if (name === 'scout_codebase') {
+    const { workspacePath, goal, seedTerms, roots, maxCandidates, contextLines } = args as unknown as RunScoutArgs;
+    try {
+      /* Seed terms drive the deterministic grep. When the caller does not supply them, derive coarse tokens from the goal (drop short/stop words). Caller-provided symbols are always far better, hence the schema nudge. */
+      const terms = (seedTerms && seedTerms.length > 0)
+        ? seedTerms
+        : deriveSeedTerms(goal);
+
+      if (terms.length === 0) {
+        const output = {
+          goal,
+          candidateFiles: [],
+          pointers: [],
+          summary: 'No usable seed terms could be derived from the goal. Provide seedTerms explicitly.',
+          needsDeeperLook: true,
+          scoutAvailable: false
+        };
+        const text = jsonText(output);
+        recordToolAnalytics(workspacePath, { toolName: 'scout_codebase', rawSourceText: '', responseText: text });
+        return { content: [{ type: 'text', text }] };
+      }
+
+      const gathered = await gatherCandidates(workspacePath, terms, { roots, maxCandidates, contextLines });
+      const candidateFiles = gathered.candidates.map((c) => c.file);
+
+      if (gathered.candidates.length === 0) {
+        const output = {
+          goal,
+          searchedWith: gathered.searchedWith,
+          seedTerms: terms,
+          filesMatched: gathered.filesMatched,
+          candidateFiles: [],
+          pointers: [],
+          suggestedNextSearches: [],
+          summary: `No candidate regions matched the seed terms ${JSON.stringify(terms)}. Try different seedTerms or roots.`,
+          needsDeeperLook: true,
+          scoutAvailable: false
+        };
+        const text = jsonText(output);
+        recordToolAnalytics(workspacePath, { toolName: 'scout_codebase', rawSourceText: '', responseText: text });
+        return { content: [{ type: 'text', text }] };
+      }
+
+      const scout = await queryScout(goal, gathered.candidates);
+
+      const rawSourceText = gathered.candidates
+        .map((c) => `${c.file}\n${c.regions.map((r) => r.snippet).join('\n')}`)
+        .join('\n');
+      const output = {
+        goal,
+        searchedWith: gathered.searchedWith,
+        seedTerms: terms,
+        filesMatched: gathered.filesMatched,
+        candidateFiles,
+        pointers: scout.pointers,
+        suggestedNextSearches: scout.suggestedNextSearches,
+        summary: scout.summary,
+        needsDeeperLook: scout.needsDeeperLook,
+        scoutAvailable: scout.scoutAvailable,
+        ...(scout.note ? { note: scout.note } : {})
+      };
+      const text = jsonText(output);
+      recordToolAnalytics(workspacePath, {
+        toolName: 'scout_codebase',
+        rawSourceText,
+        llmInputText: rawSourceText,
+        responseText: text,
+        llmResult: scout
+      });
+
+      return { content: [{ type: 'text', text }] };
+    } catch (err: any) {
+      return {
+        content: [{ type: 'text', text: `Error executing scout_codebase: ${err.message || err}` }],
+        isError: true
+      };
+    }
+  }
+
   throw new Error(`Unknown tool: ${name}`);
 });
+
+const STOP_WORDS = new Set([
+  'the', 'and', 'for', 'with', 'where', 'what', 'which', 'how', 'does', 'this', 'that',
+  'from', 'into', 'when', 'who', 'whom', 'are', 'was', 'were', 'has', 'have', 'had',
+  'find', 'locate', 'show', 'handle', 'handled', 'handling', 'code', 'file', 'files',
+  'function', 'functions', 'where\'s', 'about', 'used', 'using', 'use'
+]);
+
+/* Coarse fallback when the caller gives no seedTerms: keep distinctive words from the goal (length > 3, not a stop word, deduped). Caller-supplied symbols are preferred; this just keeps the tool usable without them. */
+function deriveSeedTerms(goal: string): string[] {
+  const tokens = goal.toLowerCase().match(/[a-z0-9_]+/gi) || [];
+  const seen = new Set<string>();
+  const terms: string[] = [];
+  for (const t of tokens) {
+    if (t.length <= 3 || STOP_WORDS.has(t) || seen.has(t)) continue;
+    seen.add(t);
+    terms.push(t);
+  }
+  return terms.slice(0, 8);
+}
 
 async function main() {
   const transport = new StdioServerTransport();

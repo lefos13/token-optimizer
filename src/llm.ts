@@ -1,4 +1,5 @@
-import { FailureDetail, LogQueryResponse } from './types';
+import { FailureDetail, LogQueryResponse, ScoutResponse, ScoutPointer } from './types';
+import { FileCandidate } from './runner';
 
 /* Token usage is attached to parsed local-LLM results as non-enumerable metadata so handlers can persist analytics without leaking those fields into MCP JSON responses. */
 export interface LLMUsage {
@@ -335,6 +336,75 @@ ${trimmedLogs}`;
   }
 }
 
+
+/* Rank server-gathered code candidates against a navigation goal so the main model reads only the few regions that matter. The candidates were found deterministically (grep); the model only orders/explains them and must not invent paths. This is a hint, not authority: the main model verifies every pointer. */
+export async function queryScout(goal: string, candidates: FileCandidate[]): Promise<ScoutResponse> {
+  const systemPrompt = `You are a codebase navigation assistant for a larger coding agent.
+You are given a GOAL and a set of CANDIDATE code regions that were already found by a grep over the workspace. Each region is shown with its file path and line-numbered source.
+
+Your job is to point the larger agent at the few regions most relevant to the goal, so it does not have to read everything.
+
+Rules:
+- Only cite files and line ranges that appear in the provided candidates. Never invent a path, symbol, or line number.
+- Rank by how directly each region addresses the goal. Prefer a small number of strong pointers over many weak ones.
+- If the candidates do not look sufficient to satisfy the goal, set needsDeeperLook to true and suggest more search terms.
+
+Return JSON ONLY matching the following schema. Do not write any conversational text or explanation outside the JSON block.
+
+Schema:
+{
+  "pointers": [
+    {
+      "file": "relative/path/from/candidates.ts",
+      "lineRange": "40-72 (must be within a provided region)",
+      "why": "One sentence: why this region is relevant to the goal",
+      "confidence": number (between 0.0 and 1.0)
+    }
+  ],
+  "suggestedNextSearches": ["additional grep terms the agent could try next"],
+  "summary": "One or two sentences orienting the agent: where the relevant code lives",
+  "needsDeeperLook": boolean (true if the candidates seem insufficient for the goal)
+}`;
+
+  let userPrompt = `Goal: ${goal}\n\nCandidates:\n`;
+  for (const c of candidates) {
+    userPrompt += `\n### ${c.file} (${c.hitCount} hits)\n`;
+    for (const r of c.regions) {
+      userPrompt += `[lines ${r.lineRange}]\n${r.snippet}\n`;
+    }
+  }
+
+  try {
+    const completion = await callChatCompletion(systemPrompt, userPrompt);
+    const parsed = JSON.parse(extractJSON(completion.content)) as ScoutResponse;
+    parsed.pointers = Array.isArray(parsed.pointers) ? parsed.pointers.filter(isValidPointer) : [];
+    if (!Array.isArray(parsed.suggestedNextSearches)) {
+      parsed.suggestedNextSearches = [];
+    }
+    if (typeof parsed.summary !== 'string') {
+      parsed.summary = '';
+    }
+    if (typeof parsed.needsDeeperLook !== 'boolean') {
+      parsed.needsDeeperLook = parsed.pointers.length === 0;
+    }
+    parsed.scoutAvailable = true;
+    return attachLLMUsage(parsed, completion.usage);
+  } catch (error: any) {
+    /* Model offline or unparseable: stay conservative. Return no ranked pointers and flag that ranking did not run, so the caller falls back to the deterministic candidate list the server already gathered. */
+    return {
+      pointers: [],
+      suggestedNextSearches: [],
+      summary: 'Candidate ranking did not run.',
+      needsDeeperLook: true,
+      scoutAvailable: false,
+      note: `Failed to rank candidates using local LLM: ${error.message || error}`
+    };
+  }
+}
+
+function isValidPointer(p: any): p is ScoutPointer {
+  return p && typeof p.file === 'string' && typeof p.lineRange === 'string' && typeof p.why === 'string';
+}
 
 /* Answer a targeted question about a stored log so the caller never has to read the whole file. The log is supplied with 1-based line-number prefixes so the model can cite an exact lineRange. */
 export async function queryLogQuestion(question: string, numberedLog: string): Promise<LogQueryResponse> {

@@ -16,6 +16,7 @@ It is designed for coding agents that need to verify changes without pasting raw
 - Can compare current auto-detected validation behavior with a saved baseline.
 - Digests the output of any arbitrary noisy command (installs, builds, migrations, large searches, git history) into a compact, intent-focused summary.
 - Keeps every run addressable by a `runId` so stored logs can be queried (`query_log`) or searched (`grep_log`) later without re-reading the whole file.
+- Acts as a recon subagent (`scout_codebase`): greps the workspace for seed terms deterministically, then has the local LLM rank the matches into a few ranked pointers so the main model knows where to read before exploring broadly.
 - Stores private context-savings analytics under `.codex-local-test-runs/` so users can inspect local LLM token use, returned MCP response size, and estimated main-context savings without sending those analytics back to the main model.
 
 ## Exposed MCP Tools
@@ -131,6 +132,33 @@ Inputs:
 - `maxMatches`: maximum match windows to return. Defaults to `20`.
 
 Returns `matches` (each with `lineRange` and a line-numbered `excerpt`), `totalMatches`, and `rawLogPath`.
+
+### `scout_codebase`
+
+Recon subagent for the main model. Instead of scanning the whole tree yourself, hand off a navigation goal and let the local model point you at the few relevant code regions.
+
+The server first greps the workspace for the seed terms deterministically (using `ripgrep` when available, falling back to a portable Node walk that skips heavy directories like `node_modules`, `.git`, `dist`), groups hits by file, and builds numbered context windows around the densest matches. The local model then ranks those candidates into pointers; it only orders and explains what the grep already found and is instructed never to invent paths or line numbers.
+
+Inputs:
+
+- `workspacePath`: absolute path to the target workspace.
+- `goal`: what you are trying to locate or understand (for example, "where is auth token refresh handled?").
+- `seedTerms`: optional literal terms or symbols to grep for. When omitted, coarse terms are derived from the `goal` by dropping short and stop words. Supplying precise symbols greatly improves results.
+- `roots`: optional workspace-relative directories to scope the search (for example, `["src"]`). Defaults to the whole workspace.
+- `maxCandidates`: optional cap on how many matching files are considered. Defaults to `30`.
+- `contextLines`: optional source lines kept around each grep hit. Defaults to `4`.
+
+Returns:
+
+- `searchedWith`: `ripgrep` or `node-walk`, so you know which backend ran.
+- `seedTerms`: the terms actually used (useful when they were derived from the goal).
+- `filesMatched`: total files with at least one hit, before the `maxCandidates` cap.
+- `candidateFiles`: the grep-derived candidate files, in density order. This is deterministic and present even when the local model is offline.
+- `pointers`: the model-ranked regions, each with `file`, `lineRange`, `why`, and `confidence`. Treat them as hints to verify, not authority.
+- `suggestedNextSearches`: additional grep terms to try if the goal is not yet covered.
+- `summary`: a one or two sentence orientation.
+- `needsDeeperLook`: whether the candidates look insufficient for the goal (the orientation analogue of `needsRawLogs`).
+- `scoutAvailable`: `false` when the local model was unreachable or returned unparseable output. In that case `pointers` is empty but `candidateFiles` still gives you the deterministic leads, and `note` explains why ranking did not run.
 
 ## Run Registry
 
@@ -265,6 +293,7 @@ run_regression_check
 run_command_digest
 query_log
 grep_log
+scout_codebase
 ```
 
 Restart or reload the MCP client after changing the server path, environment variables, or enabled tool list.
@@ -274,9 +303,11 @@ Restart or reload the MCP client after changing the server path, environment var
 To use the `local-tester` plugin and the `local-test-verdict` skill in Antigravity:
 
 1. Generate the plugin directory contents by running the following command from the repository root:
+
    ```bash
    npm run build:plugin
    ```
+
    This will programmatically generate the `plugin/` directory (containing `plugin.json` and the `skills` files) which is ignored by git.
 
 2. Locate the `.gemini/config/plugins` directory in your home directory:
@@ -284,6 +315,7 @@ To use the `local-tester` plugin and the `local-test-verdict` skill in Antigravi
    - **Windows**: `%USERPROFILE%\.gemini\config\plugins\`
 
 3. Copy the generated `plugin` folder contents into a folder named `local-tester` under that directory:
+
    ```bash
    # Create the target directory if it doesn't exist
    mkdir -p ~/.gemini/config/plugins/local-tester
@@ -293,6 +325,7 @@ To use the `local-tester` plugin and the `local-test-verdict` skill in Antigravi
    ```
 
    The final directory structure on your system should look like:
+
    ```text
    ~/.gemini/config/plugins/local-tester/
    ├── plugin.json
@@ -309,6 +342,7 @@ To use the `local-tester` plugin and the `local-test-verdict` skill in Antigravi
 
 1. Identify the target workspace as an absolute path.
 2. Check the target workspace instructions, such as `AGENTS.md` or `agents.md`.
+   - When the relevant code is in an unfamiliar area, call `scout_codebase` first to get ranked pointers to where to read, instead of scanning the whole tree.
 3. Review changed files with `run_changed_files_review` when the files are small enough and a lightweight review is useful.
 4. Run `run_test_verdict` with an explicit `testCommand` when the correct validation command is known.
 5. Omit `testCommand` only when auto-detection is appropriate.

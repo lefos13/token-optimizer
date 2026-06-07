@@ -231,3 +231,191 @@ export async function getGitDiff(workspacePath: string, file: string): Promise<s
   const diff = res.stdout.trim();
   return diff.length > 0 ? res.stdout : null;
 }
+
+export interface CandidateRegion {
+  lineRange: string;
+  snippet: string;
+}
+
+export interface FileCandidate {
+  file: string; // relative to workspacePath
+  hitCount: number;
+  regions: CandidateRegion[];
+}
+
+export interface CandidateGatherResult {
+  candidates: FileCandidate[];
+  filesMatched: number; // total files with at least one hit, before the maxCandidates cap
+  totalHits: number;
+  searchedWith: 'ripgrep' | 'node-walk';
+}
+
+export interface GatherOptions {
+  roots?: string[];
+  maxCandidates?: number;
+  contextLines?: number;
+  maxRegionsPerFile?: number;
+  maxFileBytes?: number;
+}
+
+const IGNORE_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.codex-local-test-runs']);
+const TEXT_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|json|md|py|go|rs|java|rb|php|c|h|cpp|hpp|cs|swift|kt|sh|yml|yaml|toml|html|css|scss|sql)$/i;
+
+function shellEscape(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/* Merge nearby hit lines into context windows and number each kept line so the local model can cite exact ranges back to the caller. Hit lines are 1-based. */
+function buildWindows(lines: string[], hitLines: number[], context: number, maxRegions: number): CandidateRegion[] {
+  const sorted = [...new Set(hitLines)].sort((a, b) => a - b);
+  const ranges: Array<[number, number]> = [];
+  for (const ln of sorted) {
+    const start = Math.max(1, ln - context);
+    const end = Math.min(lines.length, ln + context);
+    const last = ranges[ranges.length - 1];
+    if (last && start <= last[1] + 1) {
+      last[1] = Math.max(last[1], end);
+    } else {
+      ranges.push([start, end]);
+    }
+  }
+
+  const regions: CandidateRegion[] = [];
+  for (const [start, end] of ranges.slice(0, maxRegions)) {
+    const numbered: string[] = [];
+    for (let i = start; i <= end; i++) {
+      numbered.push(`${i}: ${lines[i - 1]}`);
+    }
+    regions.push({ lineRange: `${start}-${end}`, snippet: numbered.join('\n') });
+  }
+  return regions;
+}
+
+function regionsForFile(workspacePath: string, relFile: string, hitLines: number[], opts: Required<Pick<GatherOptions, 'contextLines' | 'maxRegionsPerFile' | 'maxFileBytes'>>): CandidateRegion[] {
+  const abs = path.resolve(workspacePath, relFile);
+  try {
+    if (fs.statSync(abs).size > opts.maxFileBytes) {
+      return [];
+    }
+    const lines = fs.readFileSync(abs, 'utf8').split('\n');
+    return buildWindows(lines, hitLines, opts.contextLines, opts.maxRegionsPerFile);
+  } catch {
+    return [];
+  }
+}
+
+/* Run ripgrep for the seed terms and return file -> 1-based hit line numbers. Returns null when ripgrep is unavailable (exit code 127 / spawn error) so the caller can fall back to a Node walk. An empty map (no matches) is a valid non-null result. */
+async function ripgrepHits(workspacePath: string, terms: string[], roots: string[], maxFileBytes: number): Promise<Map<string, number[]> | null> {
+  const termArgs = terms.map((t) => `-e ${shellEscape(t)}`).join(' ');
+  const rootArgs = roots.map(shellEscape).join(' ');
+  const ignoreArgs = [...IGNORE_DIRS].map((d) => `-g ${shellEscape(`!${d}`)}`).join(' ');
+  const cmd = `rg --line-number --no-heading --color never --fixed-strings --ignore-case --max-filesize ${maxFileBytes} ${ignoreArgs} ${termArgs} -- ${rootArgs}`;
+  const res = await runCommand(cmd, workspacePath, 30000);
+
+  /* rg exits 0 with matches, 1 with no matches (both fine); 127 means it is not installed, anything else is a real error. */
+  if (res.exitCode === 127 || /not found|ENOENT/i.test(res.error || '')) {
+    return null;
+  }
+  if (res.exitCode !== 0 && res.exitCode !== 1) {
+    return null;
+  }
+
+  const hits = new Map<string, number[]>();
+  for (const line of res.stdout.split('\n')) {
+    if (!line) continue;
+    const first = line.indexOf(':');
+    const second = line.indexOf(':', first + 1);
+    if (first === -1 || second === -1) continue;
+    const file = line.slice(0, first);
+    const lineNo = parseInt(line.slice(first + 1, second), 10);
+    if (!Number.isFinite(lineNo)) continue;
+    const arr = hits.get(file) || [];
+    arr.push(lineNo);
+    hits.set(file, arr);
+  }
+  return hits;
+}
+
+/* Portable fallback when ripgrep is missing: bounded recursive walk that regex-matches the seed terms in text files, skipping the usual heavy directories. */
+function nodeWalkHits(workspacePath: string, terms: string[], roots: string[], maxFileBytes: number): Map<string, number[]> {
+  const escaped = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const re = new RegExp(escaped.join('|'), 'i');
+  const hits = new Map<string, number[]>();
+  let filesScanned = 0;
+  const FILE_BUDGET = 5000;
+
+  const walk = (dir: string) => {
+    if (filesScanned >= FILE_BUDGET) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (filesScanned >= FILE_BUDGET) return;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (IGNORE_DIRS.has(entry.name)) continue;
+        walk(full);
+      } else if (entry.isFile() && TEXT_EXT.test(entry.name)) {
+        try {
+          if (fs.statSync(full).size > maxFileBytes) continue;
+          filesScanned++;
+          const lines = fs.readFileSync(full, 'utf8').split('\n');
+          const lineNos: number[] = [];
+          for (let i = 0; i < lines.length; i++) {
+            if (re.test(lines[i])) lineNos.push(i + 1);
+          }
+          if (lineNos.length > 0) {
+            hits.set(path.relative(workspacePath, full), lineNos);
+          }
+        } catch {
+          /* unreadable/binary file: skip */
+        }
+      }
+    }
+  };
+
+  for (const root of roots) {
+    walk(path.resolve(workspacePath, root));
+  }
+  return hits;
+}
+
+/* Deterministic breadth for the scout flow: find files matching the seed terms, then build numbered context windows around the densest hits. No LLM is involved here; this is the candidate set the local model later ranks. Prefers ripgrep (respects .gitignore, fast) and falls back to a Node walk when rg is absent. */
+export async function gatherCandidates(workspacePath: string, terms: string[], options: GatherOptions = {}): Promise<CandidateGatherResult> {
+  const roots = options.roots && options.roots.length > 0 ? options.roots : ['.'];
+  const maxCandidates = options.maxCandidates && options.maxCandidates > 0 ? options.maxCandidates : 30;
+  const resolved = {
+    contextLines: options.contextLines && options.contextLines > 0 ? options.contextLines : 4,
+    maxRegionsPerFile: options.maxRegionsPerFile && options.maxRegionsPerFile > 0 ? options.maxRegionsPerFile : 4,
+    maxFileBytes: options.maxFileBytes && options.maxFileBytes > 0 ? options.maxFileBytes : 500 * 1024
+  };
+
+  let searchedWith: 'ripgrep' | 'node-walk' = 'ripgrep';
+  let hits = await ripgrepHits(workspacePath, terms, roots, resolved.maxFileBytes);
+  if (hits === null) {
+    searchedWith = 'node-walk';
+    hits = nodeWalkHits(workspacePath, terms, roots, resolved.maxFileBytes);
+  }
+
+  let totalHits = 0;
+  for (const arr of hits.values()) {
+    totalHits += arr.length;
+  }
+  const filesMatched = hits.size;
+
+  /* Densest files first: the file with the most term hits is the strongest lead. */
+  const ranked = [...hits.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, maxCandidates);
+
+  const candidates: FileCandidate[] = [];
+  for (const [file, lineNos] of ranked) {
+    const regions = regionsForFile(workspacePath, file, lineNos, resolved);
+    if (regions.length > 0) {
+      candidates.push({ file, hitCount: lineNos.length, regions });
+    }
+  }
+
+  return { candidates, filesMatched, totalHits, searchedWith };
+}
