@@ -316,30 +316,41 @@ scout_codebase
 
 Restart or reload the MCP client after changing the server path, environment variables, or enabled tool list.
 
-## Plugin Installation for Antigravity
+## Plugins
 
-To use the `local-tester` plugin and the `local-test-verdict` skill in Antigravity:
+This repository can generate the `local-tester` plugin for **two different clients**, each with its own generator and output directory. Both ship the same skill content (from `skill/skill-example.md`), but package it differently — including a different skill folder/invocation name per client (see the table).
 
-1. Generate the plugin directory contents by running the following command from the repository root:
+| Client      | npm script                     | Output             | Tracked in git | Packaging                                                                 |
+| ----------- | ------------------------------ | ------------------ | -------------- | ------------------------------------------------------------------------ |
+| Antigravity | `npm run build:plugin:antigravity` | `plugin/antigravity/` | No (gitignored) | Root `plugin.json` + `skills/`. MCP server configured separately by you. |
+| Claude Code | `npm run build:plugin:claude`      | `plugin/claude/`      | Yes            | `.claude-plugin/` manifest, bundled portable MCP server, local marketplace. |
+
+Run both at once with `npm run build:plugin`.
+
+> Do not edit files under `plugin/` by hand; they are generated. The Antigravity output is gitignored, while the Claude Code output is committed so the git-based marketplace install can copy it.
+
+### Antigravity
+
+1. Generate the Antigravity plugin from the repository root:
 
    ```bash
-   npm run build:plugin
+   npm run build:plugin:antigravity
    ```
 
-   This will programmatically generate the `plugin/` directory (containing `plugin.json` and the `skills` files) which is ignored by git.
+   This generates `plugin/antigravity/` (containing `plugin.json` and the `skills` files), which is ignored by git.
 
 2. Locate the `.gemini/config/plugins` directory in your home directory:
    - **macOS/Linux**: `~/.gemini/config/plugins/`
    - **Windows**: `%USERPROFILE%\.gemini\config\plugins\`
 
-3. Copy the generated `plugin` folder contents into a folder named `local-tester` under that directory:
+3. Copy the generated contents into a folder named `local-tester` under that directory:
 
    ```bash
    # Create the target directory if it doesn't exist
    mkdir -p ~/.gemini/config/plugins/local-tester
 
    # Copy the generated plugin metadata and skills
-   cp -r plugin/* ~/.gemini/config/plugins/local-tester/
+   cp -r plugin/antigravity/* ~/.gemini/config/plugins/local-tester/
    ```
 
    The final directory structure on your system should look like:
@@ -355,6 +366,36 @@ To use the `local-tester` plugin and the `local-test-verdict` skill in Antigravi
 4. Configure the `local_tester` MCP server in your `~/.gemini/antigravity/mcp_config.json` file as described in [MCP Client Setup](#mcp-client-setup).
 
 5. Restart your Antigravity client to load the new plugin and its skills.
+
+### Claude Code
+
+The Claude Code plugin is self-contained and portable: it bundles the compiled MCP server under `plugin/claude/server/` and launches it via `${CLAUDE_PLUGIN_ROOT}/server/start.sh`, so no absolute repo paths are baked in. On first run the launcher installs the single runtime dependency (`@modelcontextprotocol/sdk`) into the persistent `${CLAUDE_PLUGIN_DATA}` directory, then starts the server.
+
+1. Build the server and generate the plugin:
+
+   ```bash
+   npm run build
+   npm run build:plugin:claude
+   ```
+
+2. Install it via the bundled local marketplace:
+
+   ```bash
+   claude plugin marketplace add "$(pwd)/plugin/claude"
+   claude plugin install local-tester@local-tester-marketplace
+   ```
+
+3. Restart Claude Code (or run `/reload-plugins`) so the MCP server and skill load.
+
+The skill is invoked as `/local-tester:local-llm-subagent` and is also model-invoked automatically based on its description. The MCP tools are exposed as `mcp__local_tester__*`.
+
+**Requirements on the target machine:** `node` and `npm` on `PATH`, plus network access the first time (to install the dependency). After that the server runs offline. Override the LLM endpoint with the same environment variables described in [MCP Client Setup](#mcp-client-setup) (`LOCAL_LLM_API_URL`, `LOCAL_LLM_MODEL`, and the per-task `LOCAL_LLM_*_MODEL` overrides).
+
+For local development you can skip the marketplace entirely and load the plugin directly:
+
+```bash
+claude --plugin-dir ./plugin/claude
+```
 
 ## Typical Agent Workflow
 

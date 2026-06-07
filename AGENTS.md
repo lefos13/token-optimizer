@@ -9,8 +9,22 @@ This repository contains the `local-tester-mcp` server used by the `local-test-v
 - Run `npm run build` after TypeScript changes.
 - Do not run `npm install` in the sandbox. Any dependency installation must be requested with network privileges.
 - If you change server behavior, tool names, input schemas, output shapes, environment variables, validation logic, command detection, log paths, setup requirements, or guardrails, update `README.md` and `skill/skill-example.md` in the same change.
-- Run `npm run build:plugin` after TypeScript or skill documentation changes to regenerate the files in the `plugin/` directory. Do not modify files under `plugin/` manually as they are generated.
+- Run `npm run build:plugin` after TypeScript or skill documentation changes to regenerate the plugin assets. Do not modify files under `plugin/` manually as they are generated.
 - Do not modify generated test-run logs or baseline files unless the task explicitly requires it.
+
+## Plugin Generators
+
+Two generators package the same `local-test-verdict` skill for different clients. `npm run build:plugin` runs both; each also has a dedicated script.
+
+- `scripts/generate-plugin-antigravity.js` (`npm run build:plugin:antigravity`) → `plugin/antigravity/`. Original minimal layout: root `plugin.json` + `skills/`. This output is gitignored.
+- `scripts/generate-plugin-claude.js` (`npm run build:plugin:claude`) → `plugin/claude/`. Claude Code layout: `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `.mcp.json`, a bundled compiled server under `server/`, and the skill under `skills/local-llm-subagent/`. This output is committed (un-ignored in `.gitignore`) so the git-based marketplace install can copy it.
+
+Notes for the Claude Code generator:
+
+- It copies the compiled server from `dist/` into `plugin/claude/server/`, so run `npm run build` before `npm run build:plugin:claude`.
+- The server is launched via `${CLAUDE_PLUGIN_ROOT}/server/start.sh`; the launcher installs the runtime dependency into `${CLAUDE_PLUGIN_DATA}` on first run. Do not hardcode absolute repo paths in `.mcp.json`.
+- `node_modules` is not committed. The committed `plugin/claude/server/` carries only the compiled JS plus a minimal `package.json`.
+- Because `plugin/claude/` is committed, regenerate and commit it whenever server behavior or the skill changes.
 
 ## Repository Shape
 
