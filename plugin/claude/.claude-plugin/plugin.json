@@ -12,5 +12,7 @@
     "verdict",
     "triage",
     "validation"
-  ]
+  ],
+  "skills": "./skills",
+  "mcpServers": "./.mcp.json"
 }

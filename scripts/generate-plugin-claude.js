@@ -36,6 +36,10 @@ try {
     author: { name: "Lefos13" },
     license: "Apache-2.0",
     keywords: ["local-test", "mcp", "verdict", "triage", "validation"],
+    /* Declare component paths explicitly. Auto-discovery is unreliable, so
+       point the loader at the skills dir and the MCP server definition. */
+    skills: "./skills",
+    mcpServers: "./.mcp.json",
   };
   fs.writeFileSync(
     path.join(metaDir, "plugin.json"),
