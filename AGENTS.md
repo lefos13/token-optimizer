@@ -17,7 +17,7 @@ This repository contains the `local-tester-mcp` server used by the `local-test-v
 Two generators package the same `local-test-verdict` skill for different clients. `npm run build:plugin` runs both; each also has a dedicated script.
 
 - `scripts/generate-plugin-antigravity.js` (`npm run build:plugin:antigravity`) → `plugin/antigravity/`. Original minimal layout: root `plugin.json` + `skills/`. This output is gitignored.
-- `scripts/generate-plugin-claude.js` (`npm run build:plugin:claude`) → `plugin/claude/`. Claude Code layout: `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `.mcp.json`, a bundled compiled server under `server/`, and the skill under `skills/local-llm-subagent/`. This output is committed (un-ignored in `.gitignore`) so the git-based marketplace install can copy it.
+- `scripts/generate-plugin-claude.js` (`npm run build:plugin:claude`) → `plugin/claude/` plus a repo-root `.claude-plugin/marketplace.json`. Claude Code layout: `plugin/claude/.claude-plugin/plugin.json`, `plugin/claude/.mcp.json`, a bundled compiled server under `plugin/claude/server/`, and the skill under `plugin/claude/skills/local-llm-subagent/`. The marketplace catalog is written at the **repo root** (not inside the plugin) so `claude plugin marketplace add <repo>` finds it; it lists the plugin via the relative source `./plugin/claude`. Both the repo-root catalog and `plugin/claude/` are committed (un-ignored in `.gitignore`) so the git-based marketplace install can copy them.
 
 Notes for the Claude Code generator:
 

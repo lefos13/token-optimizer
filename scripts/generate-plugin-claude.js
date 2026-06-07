@@ -15,19 +15,26 @@ const path = require("path");
    documented plugin pattern and keeps the committed plugin small and portable.
 
    Output layout:
+     .claude-plugin/marketplace.json               (REPO-ROOT marketplace catalog)
      plugin/claude/.claude-plugin/plugin.json      (plugin manifest)
-     plugin/claude/.claude-plugin/marketplace.json (single-plugin local marketplace)
      plugin/claude/.mcp.json                       (registers the local_tester server)
      plugin/claude/server/*.js                     (compiled server, copied from dist/)
      plugin/claude/server/package.json             (single runtime dep to install)
      plugin/claude/server/start.sh                 (installs deps + execs server)
      plugin/claude/skills/local-llm-subagent/SKILL.md
      plugin/claude/README.md
-   Do not edit files under plugin/ by hand; run `npm run build:plugin:claude`. */
+   The marketplace catalog lives at the repo root so the repository is itself a
+   valid marketplace (`claude plugin marketplace add <repo>`). Do not edit
+   generated files by hand; run `npm run build:plugin:claude`. */
 
 const rootDir = path.resolve(__dirname, "..");
 const pluginDir = path.join(rootDir, "plugin", "claude");
 const metaDir = path.join(pluginDir, ".claude-plugin");
+/* The marketplace catalog lives at the REPO ROOT (.claude-plugin/marketplace.json)
+   so `claude plugin marketplace add <repo>` can find it. The plugin entry uses a
+   relative source path resolved from the repo root. */
+const repoMetaDir = path.join(rootDir, ".claude-plugin");
+const PLUGIN_SOURCE_PATH = "./plugin/claude";
 const SKILL_NAME = "local-llm-subagent";
 const skillsDir = path.join(pluginDir, "skills", SKILL_NAME);
 const serverDir = path.join(pluginDir, "server");
@@ -49,6 +56,7 @@ console.log("Generating Claude Code plugin structure...");
 
 try {
   fs.mkdirSync(metaDir, { recursive: true });
+  fs.mkdirSync(repoMetaDir, { recursive: true });
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
@@ -76,22 +84,25 @@ try {
     JSON.stringify(pluginJson, null, 2) + "\n",
   );
 
-  /* Local single-plugin marketplace so the plugin can be installed with
-     `claude plugin marketplace add ./plugin/claude` then `claude plugin install`. */
+  /* Repo-root marketplace catalog. Written to <repo>/.claude-plugin/marketplace.json
+     so the repository itself is a valid marketplace: users run
+     `claude plugin marketplace add <repo>` then `claude plugin install`.
+     The plugin source is a relative path (must start with "./") resolved from
+     the repo root; relative paths resolve when the marketplace is added via git. */
   const marketplaceJson = {
     name: "local-tester-marketplace",
-    metadata: { description: "Local marketplace for the local-tester plugin" },
+    metadata: { description: "Marketplace for the local-tester plugin" },
     owner: { name: "Lefos13" },
     plugins: [
       {
         name: "local-tester",
-        source: "./",
+        source: PLUGIN_SOURCE_PATH,
         description: pluginJson.description,
       },
     ],
   };
   fs.writeFileSync(
-    path.join(metaDir, "marketplace.json"),
+    path.join(repoMetaDir, "marketplace.json"),
     JSON.stringify(marketplaceJson, null, 2) + "\n",
   );
 
@@ -188,7 +199,6 @@ regressions, and scout code without flooding chat context with raw logs.
 ## Contents
 
 - \`.claude-plugin/plugin.json\` — plugin manifest (\`local-tester\` v${VERSION}).
-- \`.claude-plugin/marketplace.json\` — local single-plugin marketplace.
 - \`.mcp.json\` — registers the \`local_tester\` stdio server (tools exposed as \`mcp__local_tester__*\`).
 - \`server/\` — the compiled MCP server plus a launcher (\`start.sh\`) and a minimal \`package.json\`.
 - \`skills/${SKILL_NAME}/SKILL.md\` — usage guidance, copied from \`skill/skill-example.md\`.
@@ -217,9 +227,25 @@ Optional per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MOD
 
 ## Install
 
+The marketplace catalog lives at the **repository root** (\`.claude-plugin/marketplace.json\`),
+so add the repo as a marketplace, then install the plugin:
+
 \`\`\`bash
-claude plugin marketplace add ${pluginDir}
+# From a local clone:
+claude plugin marketplace add /path/to/local-tester-mcp
+# Or from a git host (push first):
+# claude plugin marketplace add <github-owner>/<repo>
+
 claude plugin install local-tester@local-tester-marketplace
+\`\`\`
+
+Relative plugin sources resolve only when the marketplace is added via git, so
+the local path must be a git repository (this one is).
+
+For local development without a marketplace:
+
+\`\`\`bash
+claude --plugin-dir ${pluginDir}
 \`\`\`
 
 Then restart Claude Code (or run \`/reload-plugins\`) so the server and skill load.

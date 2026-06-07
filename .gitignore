@@ -5,3 +5,4 @@ dist/
 plugin/antigravity/
 # Claude Code plugin is committed so the marketplace install (git-based) can copy it.
 
+.DS_Store

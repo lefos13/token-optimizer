@@ -371,17 +371,23 @@ Run both at once with `npm run build:plugin`.
 
 The Claude Code plugin is self-contained and portable: it bundles the compiled MCP server under `plugin/claude/server/` and launches it via `${CLAUDE_PLUGIN_ROOT}/server/start.sh`, so no absolute repo paths are baked in. On first run the launcher installs the single runtime dependency (`@modelcontextprotocol/sdk`) into the persistent `${CLAUDE_PLUGIN_DATA}` directory, then starts the server.
 
-1. Build the server and generate the plugin:
+The **repository itself is the marketplace**: the catalog lives at the repo root (`.claude-plugin/marketplace.json`) and lists the plugin via the relative source `./plugin/claude`. Both the catalog and the generated plugin under `plugin/claude/` are committed so the git-based install can copy them.
+
+1. Build the server and generate the plugin (also regenerates the repo-root marketplace catalog):
 
    ```bash
    npm run build
    npm run build:plugin:claude
    ```
 
-2. Install it via the bundled local marketplace:
+2. Add the repository as a marketplace and install the plugin:
 
    ```bash
-   claude plugin marketplace add "$(pwd)/plugin/claude"
+   # From a local clone (must be a git repo — relative plugin sources need git):
+   claude plugin marketplace add "$(pwd)"
+   # Or from a git host once pushed:
+   # claude plugin marketplace add <github-owner>/<repo>
+
    claude plugin install local-tester@local-tester-marketplace
    ```
 

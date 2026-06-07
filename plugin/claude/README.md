@@ -9,7 +9,6 @@ regressions, and scout code without flooding chat context with raw logs.
 ## Contents
 
 - `.claude-plugin/plugin.json` — plugin manifest (`local-tester` v1.0.0).
-- `.claude-plugin/marketplace.json` — local single-plugin marketplace.
 - `.mcp.json` — registers the `local_tester` stdio server (tools exposed as `mcp__local_tester__*`).
 - `server/` — the compiled MCP server plus a launcher (`start.sh`) and a minimal `package.json`.
 - `skills/local-llm-subagent/SKILL.md` — usage guidance, copied from `skill/skill-example.md`.
@@ -38,9 +37,25 @@ Optional per-task overrides: `LOCAL_LLM_VERDICT_MODEL`, `LOCAL_LLM_TRIAGE_MODEL`
 
 ## Install
 
+The marketplace catalog lives at the **repository root** (`.claude-plugin/marketplace.json`),
+so add the repo as a marketplace, then install the plugin:
+
 ```bash
-claude plugin marketplace add /Users/eevangelinos/.gemini/antigravity/scratch/local-tester-mcp/plugin/claude
+# From a local clone:
+claude plugin marketplace add /path/to/local-tester-mcp
+# Or from a git host (push first):
+# claude plugin marketplace add <github-owner>/<repo>
+
 claude plugin install local-tester@local-tester-marketplace
+```
+
+Relative plugin sources resolve only when the marketplace is added via git, so
+the local path must be a git repository (this one is).
+
+For local development without a marketplace:
+
+```bash
+claude --plugin-dir /Users/eevangelinos/.gemini/antigravity/scratch/local-tester-mcp/plugin/claude
 ```
 
 Then restart Claude Code (or run `/reload-plugins`) so the server and skill load.
