@@ -25,6 +25,7 @@ Notes for the Claude Code generator:
 - The server is launched via `${CLAUDE_PLUGIN_ROOT}/server/start.sh`; the launcher installs the runtime dependency into `${CLAUDE_PLUGIN_DATA}` on first run. Do not hardcode absolute repo paths in `.mcp.json`.
 - `node_modules` is not committed. The committed `plugin/claude/server/` carries only the compiled JS plus a minimal `package.json`.
 - Because `plugin/claude/` is committed, regenerate and commit it whenever server behavior or the skill changes.
+- **Bump `VERSION` in `scripts/generate-plugin-claude.js` for every change that touches `plugin/claude/` output — including changes that only edit `skill/skill-example.md`.** Claude Code only pulls plugin updates when the manifest `version` changes (otherwise it relies on the git commit SHA the plugin was first installed from); a static version silently pins installed copies to stale content and the user's "Update" action becomes a no-op. Treat even a wording-only change to the skill as "meaningful" for this purpose, since it changes what gets shipped in `plugin/claude/skills/local-llm-subagent/SKILL.md`. After bumping, run `npm run build:plugin:claude` (or `npm run build:plugin`) and commit the regenerated `plugin/claude/` output together with the source change.
 
 ## Repository Shape
 
@@ -32,6 +33,9 @@ Notes for the Claude Code generator:
 - `src/runner.ts`: command execution, timeout handling, raw log persistence, and log trimming.
 - `src/detector.ts`: automatic validation command detection for supported project types.
 - `src/llm.ts`: local LLM prompts, OpenAI-compatible API calls, JSON extraction, and fallback behavior.
+- `src/registry.ts`: run registry persistence and log-path resolution backing `query_log` and `grep_log`.
+- `src/analytics.ts`: builds and persists compact, privacy-preserving per-tool-call context-savings analytics into each target workspace.
+- `src/analytics-ui.ts`: standalone multi-workspace analytics dashboard server (`npm run analytics:ui`); reads analytics files directly and never calls back into the MCP server.
 - `src/types.ts`: shared TypeScript contracts for tool arguments and verdict payloads.
 - `README.md`: user-facing setup, tool descriptions, configuration, and troubleshooting instructions. This must stay aligned with server behavior.
 - `skill/skill-example.md`: skill-facing usage instructions. This must stay aligned with server behavior.
@@ -68,6 +72,14 @@ When changing a tool:
 - Log trimming should preserve enough beginning and ending context for LLM triage.
 - Timeouts, buffer limits, and shell execution behavior are part of the server safety model. Change them deliberately and document the impact.
 - Be careful with command detection. Auto-detected commands should be deterministic validation commands such as build, typecheck, lint, and tests.
+
+## Analytics
+
+- Every successful tool path records compact, privacy-preserving context-savings analytics via `src/analytics.ts` (token counts, savings percentage, provider/model/latency metadata, commands and exit codes — never raw logs, prompts, file contents, or full model responses).
+- Analytics are written to `<workspacePath>/.codex-local-test-runs/analytics.json` and `analytics-summary.json`, **inside the target workspace**, alongside its raw run logs, registry, and baseline. Do not write analytics relative to the MCP server's own project directory: that breaks portability (especially when the server runs from inside a bundled, ephemeral plugin install dir) and scatters a user's analytics away from the project they describe.
+- `src/analytics-ui.ts` (`npm run analytics:ui`) is a standalone dashboard, independent of the MCP server process, that can register multiple workspaces (persisted at `~/.local-tester-analytics/workspaces.json`), show an aggregated cross-workspace view, and paginate the event feed. It only reads the analytics files written by `recordAnalytics`.
+- Analytics writes are best-effort: a failed write must never fail the underlying tool call.
+- If you change the analytics record shape, the storage location, or the dashboard's behavior, update `README.md` (`Context Analytics` / `Multi-Workspace Analytics Dashboard` sections) and `skill/skill-example.md` in the same change, then run `npm run build:plugin`.
 
 ## Code Style
 
