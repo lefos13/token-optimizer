@@ -5,7 +5,7 @@ const path = require("path");
    Generates a complete, installable, portable Codex plugin under plugin/codex/.
    The repo-root marketplace catalog lets Codex discover the generated plugin
    from this repository, while the plugin itself bundles the compiled MCP server
-   and launches it through Codex's PLUGIN_ROOT/PLUGIN_DATA environment variables.
+   and launches a self-locating script from the plugin root.
 
    Output layout:
      .agents/plugins/marketplace.json              (REPO-ROOT marketplace catalog)
@@ -46,7 +46,7 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "1.0.2";
+  const VERSION = "1.0.3";
 
   const sdkVersion = require(
     path.join(
@@ -118,8 +118,7 @@ try {
   const mcpJson = {
     mcp_servers: {
       local_tester: {
-        command: "bash",
-        args: ["${PLUGIN_ROOT}/server/start.sh"],
+        command: "./server/start.sh",
         env: {
           LOCAL_LLM_API_URL: "http://localhost:8080/v1",
           LOCAL_LLM_MODEL: "local-model",
@@ -206,10 +205,11 @@ with raw logs.
 ## How the server runs
 
 \`.mcp.json\` uses the documented top-level \`mcp_servers\` object and launches
-\`\${PLUGIN_ROOT}/server/start.sh\`. On first run the
-launcher installs \`@modelcontextprotocol/sdk\` into the persistent
-\`\${PLUGIN_DATA}\` directory, then starts the server. No absolute repo paths are
-baked in, so the plugin remains portable after Codex installs it into its cache.
+\`./server/start.sh\` from the plugin root. On first run the launcher installs
+\`@modelcontextprotocol/sdk\` into the plugin data directory when Codex provides
+one, or into a local \`.data/\` fallback beside the plugin. No absolute repo paths
+are baked in, so the plugin remains portable after Codex installs it into its
+cache.
 
 Requirements on the target machine: \`node\` and \`npm\` on \`PATH\`, plus network
 access the first time so npm can install the runtime dependency. After that it

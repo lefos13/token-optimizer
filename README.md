@@ -449,7 +449,7 @@ claude --plugin-dir ./plugin/claude
 
 ### Codex
 
-The Codex plugin is self-contained and portable: it bundles the compiled MCP server under `plugin/codex/server/` and launches it via `${PLUGIN_ROOT}/server/start.sh`, so no absolute repo paths are baked in. On first run the launcher installs the single runtime dependency (`@modelcontextprotocol/sdk`) into the persistent `${PLUGIN_DATA}` directory, then starts the server.
+The Codex plugin is self-contained and portable: it bundles the compiled MCP server under `plugin/codex/server/` and launches `./server/start.sh` from the plugin root, so no absolute repo paths or argv-level environment substitution are required. On first run the launcher installs the single runtime dependency (`@modelcontextprotocol/sdk`) into Codex's plugin data directory when available, or into the plugin-local `.data/` fallback, then starts the server.
 
 The repository exposes a Codex marketplace at `.agents/plugins/marketplace.json`, which lists the plugin via the relative source `./plugin/codex`. Both the catalog and generated plugin are committed so Codex can install the plugin from the repository marketplace.
 

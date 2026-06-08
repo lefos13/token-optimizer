@@ -1,10 +1,7 @@
 {
   "mcp_servers": {
     "local_tester": {
-      "command": "bash",
-      "args": [
-        "${PLUGIN_ROOT}/server/start.sh"
-      ],
+      "command": "./server/start.sh",
       "env": {
         "LOCAL_LLM_API_URL": "http://localhost:8080/v1",
         "LOCAL_LLM_MODEL": "local-model"

@@ -32,7 +32,7 @@ Notes for the Claude Code generator:
 Notes for the Codex generator:
 
 - It copies the compiled server from `dist/` into `plugin/codex/server/`, so run `npm run build` before `npm run build:plugin:codex`.
-- The server is launched via `${PLUGIN_ROOT}/server/start.sh`; the launcher installs the runtime dependency into `${PLUGIN_DATA}` on first run. Do not hardcode absolute repo paths in `.mcp.json`.
+- The server is launched via `./server/start.sh` from the plugin root; the launcher self-locates and installs the runtime dependency into `${PLUGIN_DATA}` when Codex provides it, or into the plugin-local `.data/` fallback. Do not rely on argv-level environment variable expansion in `.mcp.json`.
 - `node_modules` is not committed. The committed `plugin/codex/server/` carries only the compiled JS plus a minimal `package.json`.
 - Because `plugin/codex/` is committed, regenerate and commit it whenever server behavior or the skill changes.
 - **Bump `VERSION` in `scripts/generate-plugin-codex.js` for every change that touches `plugin/codex/` output — including changes that only edit `skill/skill-example.md`.** Codex installs plugins from cached marketplace copies and shows the manifest version, so a static version makes updates hard to verify and can leave users on stale cached content. After bumping, run `npm run build:plugin:codex` (or `npm run build:plugin`) and commit the regenerated `plugin/codex/` output together with the source change.

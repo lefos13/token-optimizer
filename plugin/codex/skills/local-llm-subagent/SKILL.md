@@ -182,7 +182,7 @@ Use `run_regression_check` for baseline-aware checks only when baseline churn is
 - Detect whether a newly failing auto-detected suite regressed from a previously successful baseline.
 - Avoid it when you need a read-only check, a custom command, or stable historical baselines.
 
-If a tool exists in the server but is not exposed in the current Codex session, check `~/.codex/config.toml` `mcp_servers.local_tester.enabled_tools`, then restart or reload Codex so the tool surface refreshes.
+If a tool exists in the server but is not exposed in the current Codex session, check plugin-provided MCP policy in `~/.codex/config.toml`, such as `[plugins."local-tester@local-tester-marketplace".mcp_servers.local_tester]` and its `enabled_tools` / `disabled_tools` settings, then start a new thread or restart Codex so the tool surface refreshes.
 
 ## Guardrails
 
