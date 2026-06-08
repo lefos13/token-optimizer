@@ -46,7 +46,7 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "1.0.4";
+  const VERSION = "1.0.5";
 
   const sdkVersion = require(
     path.join(
@@ -115,18 +115,26 @@ try {
     JSON.stringify(marketplaceJson, null, 2) + "\n",
   );
 
-  /* Launch the bundled launcher through bash with the path resolved from
-     ${PLUGIN_ROOT}. Codex spawns MCP servers from the project working
-     directory, not the plugin root, so a bare relative command like
-     "./server/start.sh" is never found and the server fails to start (its
-     tools then never appear in a thread). Codex exposes ${PLUGIN_ROOT} (and
-     sets CLAUDE_PLUGIN_ROOT for backward compatibility), and start.sh honors
-     either, so this stays portable across installs. */
+  /* Launch the bundled launcher through `bash -c` so the SHELL expands the
+     plugin-root variable at runtime. Codex spawns MCP servers from the
+     project working directory, not the plugin root, so a bare relative
+     command ("./server/start.sh") is never found and the server fails to
+     start (its tools then never appear in a thread). Passing a plain
+     "${PLUGIN_ROOT}/server/start.sh" arg is also fragile: Codex only
+     documents ${...} substitution for hook commands, and bash does not expand
+     env vars inside a literal argument. `bash -c` sidesteps both problems and
+     lets us probe every plugin-root variable name seen in the wild
+     (PLUGIN_ROOT and CLAUDE_PLUGIN_ROOT per OpenAI's docs; CODEX_PLUGIN_ROOT
+     in published community plugins). Once any of them resolves, start.sh
+     re-derives its own root from BASH_SOURCE, so passing the correct path is
+     all that matters. */
+  const launcher =
+    'exec bash "${PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}}/server/start.sh"';
   const mcpJson = {
     mcp_servers: {
       local_tester: {
         command: "bash",
-        args: ["${PLUGIN_ROOT}/server/start.sh"],
+        args: ["-c", launcher],
         env: {
           LOCAL_LLM_API_URL: "http://localhost:8080/v1",
           LOCAL_LLM_MODEL: "local-model",
@@ -168,7 +176,7 @@ try {
   const startSh = `#!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="\${PLUGIN_ROOT:-\${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)}}"
+ROOT="\${PLUGIN_ROOT:-\${CODEX_PLUGIN_ROOT:-\${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)}}}"
 DATA="\${PLUGIN_DATA:-\${CLAUDE_PLUGIN_DATA:-$ROOT/.data}}"
 mkdir -p "$DATA"
 
@@ -206,17 +214,18 @@ with raw logs.
 ## Contents
 
 - \`.codex-plugin/plugin.json\` - plugin manifest (\`local-tester\` v${VERSION}).
-- \`.mcp.json\` - registers the \`local_tester\` stdio server via Codex's documented \`mcp_servers\` wrapper, launched as \`bash \${PLUGIN_ROOT}/server/start.sh\`.
+- \`.mcp.json\` - registers the \`local_tester\` stdio server via Codex's documented \`mcp_servers\` wrapper, launched via \`bash -c\` so the shell resolves the plugin root at runtime.
 - \`server/\` - the compiled MCP server plus a launcher (\`start.sh\`) and a minimal \`package.json\`.
 - \`skills/${SKILL_NAME}/SKILL.md\` - usage guidance, copied from \`skill/skill-example.md\`.
 
 ## How the server runs
 
 \`.mcp.json\` uses the documented top-level \`mcp_servers\` object and launches
-\`bash \${PLUGIN_ROOT}/server/start.sh\`. Codex spawns MCP servers from the
-project working directory, so the launcher path is resolved from
-\`\${PLUGIN_ROOT}\` (Codex also sets \`CLAUDE_PLUGIN_ROOT\` for backward
-compatibility) rather than a fragile relative path. On first run the launcher installs
+the bundled \`server/start.sh\` through \`bash -c\`, so the shell expands the
+plugin-root variable at runtime. Codex spawns MCP servers from the project
+working directory, not the plugin root, so the launcher resolves the path from
+whichever plugin-root variable is set (\`PLUGIN_ROOT\`, \`CODEX_PLUGIN_ROOT\`, or
+\`CLAUDE_PLUGIN_ROOT\`) rather than a fragile relative path. On first run the launcher installs
 \`@modelcontextprotocol/sdk\` into the plugin data directory when Codex provides
 one, or into a local \`.data/\` fallback beside the plugin. No absolute repo paths
 are baked in, so the plugin remains portable after Codex installs it into its
