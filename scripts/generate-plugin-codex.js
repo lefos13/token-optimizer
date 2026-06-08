@@ -46,7 +46,7 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "1.0.6";
+  const VERSION = "1.0.7";
 
   const sdkVersion = require(
     path.join(
@@ -129,10 +129,15 @@ try {
      in published community plugins). Once any of them resolves, start.sh
      re-derives its own root from BASH_SOURCE, so passing the correct path is
      all that matters. */
+  /* Use the camelCase `mcpServers` wrapper key. OpenAI's runtime docs list a
+     snake_case `mcp_servers` form too, but the Codex app's marketplace parser
+     only recognizes `mcpServers` — with snake_case the plugin page shows zero
+     MCP servers and the server is never launched. This matches the working
+     community plugins (e.g. session-orchestrator). */
   const launcher =
     'exec bash "${PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}}/server/start.sh"';
   const mcpJson = {
-    mcp_servers: {
+    mcpServers: {
       local_tester: {
         command: "bash",
         args: ["-c", launcher],
@@ -215,13 +220,14 @@ with raw logs.
 ## Contents
 
 - \`.codex-plugin/plugin.json\` - plugin manifest (\`local-tester\` v${VERSION}).
-- \`.mcp.json\` - registers the \`local_tester\` stdio server via Codex's documented \`mcp_servers\` wrapper, launched via \`bash -c\` so the shell resolves the plugin root at runtime.
+- \`.mcp.json\` - registers the \`local_tester\` stdio server via the \`mcpServers\` wrapper, launched via \`bash -c\` so the shell resolves the plugin root at runtime.
 - \`server/\` - the compiled MCP server plus a launcher (\`start.sh\`) and a minimal \`package.json\`.
 - \`skills/${SKILL_NAME}/SKILL.md\` - usage guidance, copied from \`skill/skill-example.md\`.
 
 ## How the server runs
 
-\`.mcp.json\` uses the documented top-level \`mcp_servers\` object and launches
+\`.mcp.json\` uses the top-level \`mcpServers\` object (the camelCase key the
+Codex app recognizes) and launches
 the bundled \`server/start.sh\` through \`bash -c\`, so the shell expands the
 plugin-root variable at runtime. Codex spawns MCP servers from the project
 working directory, not the plugin root, so the launcher resolves the path from

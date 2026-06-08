@@ -1,5 +1,5 @@
 {
-  "mcp_servers": {
+  "mcpServers": {
     "local_tester": {
       "command": "bash",
       "args": [

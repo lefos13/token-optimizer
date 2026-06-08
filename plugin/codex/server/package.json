@@ -1,6 +1,6 @@
 {
   "name": "local-tester-server",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": true,
   "description": "Bundled local_tester MCP server (compiled).",
   "main": "index.js",

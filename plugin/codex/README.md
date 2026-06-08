@@ -9,14 +9,15 @@ with raw logs.
 
 ## Contents
 
-- `.codex-plugin/plugin.json` - plugin manifest (`local-tester` v1.0.6).
-- `.mcp.json` - registers the `local_tester` stdio server via Codex's documented `mcp_servers` wrapper, launched via `bash -c` so the shell resolves the plugin root at runtime.
+- `.codex-plugin/plugin.json` - plugin manifest (`local-tester` v1.0.7).
+- `.mcp.json` - registers the `local_tester` stdio server via the `mcpServers` wrapper, launched via `bash -c` so the shell resolves the plugin root at runtime.
 - `server/` - the compiled MCP server plus a launcher (`start.sh`) and a minimal `package.json`.
 - `skills/local-llm-subagent/SKILL.md` - usage guidance, copied from `skill/skill-example.md`.
 
 ## How the server runs
 
-`.mcp.json` uses the documented top-level `mcp_servers` object and launches
+`.mcp.json` uses the top-level `mcpServers` object (the camelCase key the
+Codex app recognizes) and launches
 the bundled `server/start.sh` through `bash -c`, so the shell expands the
 plugin-root variable at runtime. Codex spawns MCP servers from the project
 working directory, not the plugin root, so the launcher resolves the path from
