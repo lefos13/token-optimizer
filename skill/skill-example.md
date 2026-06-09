@@ -11,7 +11,7 @@ Use the `mcp__local_tester` tools as the first validation path after code change
 
 Currently implemented server tools:
 
-- `check_local_llm_health`: verifies the configured local OpenAI-compatible endpoint/model with a tiny JSON-only request and returns availability metadata.
+- `check_local_llm_health`: verifies the configured LLM provider. When `OPENROUTER_API_KEY` is set, returns `skipped: true` immediately (no network call — the key is assumed valid). Otherwise pings the local OpenAI-compatible endpoint and returns availability metadata.
 - `run_test_verdict`: runs build/lint/test/smoke commands in a workspace and returns a compact local-LLM verdict.
 - `run_failure_triage`: analyzes an existing log file and returns compact root-cause/fix guidance.
 - `run_changed_files_review`: reads changed files under 500 KB and asks the local LLM for likely issues before expensive validation.
@@ -185,6 +185,13 @@ Use `run_regression_check` for baseline-aware checks only when baseline churn is
 If a tool exists in the server but is not exposed in the current Codex session, check plugin-provided MCP policy in `~/.codex/config.toml`, such as `[plugins."local-tester@local-tester-marketplace".mcp_servers.local_tester]` and its `enabled_tools` / `disabled_tools` settings, then start a new thread or restart Codex so the tool surface refreshes.
 
 ## Guardrails
+
+**LLM provider:** Set `OPENROUTER_API_KEY` in the MCP server's `env` block to use OpenRouter as the primary provider. When absent, the server falls back to a local OpenAI-compatible endpoint (`LOCAL_LLM_API_URL`). If an OpenRouter call fails, the server automatically retries with the local endpoint and surfaces `fallbackReason` in the response. The chosen OpenRouter model must support `response_format: { type: "json_object" }` (JSON mode); models that do not support it will error and trigger the local fallback. Compatible models include `openai/gpt-4o`, `openai/gpt-4o-mini`, `anthropic/claude-3-5-sonnet`, `anthropic/claude-3-haiku`, and `google/gemini-flash-1.5`.
+
+**OpenRouter env vars:**
+- `OPENROUTER_API_KEY` — enables OpenRouter mode
+- `OPENROUTER_MODEL` — default model for all tasks (falls back to `openai/gpt-4o-mini`)
+- Per-task: `OPENROUTER_VERDICT_MODEL`, `OPENROUTER_TRIAGE_MODEL`, `OPENROUTER_REVIEW_MODEL`, `OPENROUTER_DIGEST_MODEL`, `OPENROUTER_SCOUT_MODEL`, `OPENROUTER_QUERY_MODEL`
 
 - Do not paste raw logs into the conversation when the verdict or triage is actionable.
 - Do not let the LLM override command truth: non-zero exits are failures unless the tool explicitly reports uncertainty.
