@@ -285,20 +285,43 @@ Check the [OpenRouter models page](https://openrouter.ai/models) and filter by J
 
 ### Setting the key in a plugin install
 
-The `env` block in each generated plugin config is pre-populated with empty-string placeholders for all OpenRouter variables. Edit the config at your install location and fill in `OPENROUTER_API_KEY` (and optionally `OPENROUTER_MODEL`):
+The `env` block in each generated plugin config is pre-populated with empty-string placeholders for all OpenRouter variables. Edit the config at your install location and fill in `OPENROUTER_API_KEY` (and optionally `OPENROUTER_MODEL`).
 
-| Client | Config location |
-|---|---|
-| Claude Code | `~/.claude/plugins/cache/<plugin-name>/.mcp.json` |
-| Codex | Codex plugin installation directory, `.mcp.json` |
-| Antigravity | `~/.gemini/config/plugins/local-tester/mcp_config.json` |
+#### Claude Code
+
+The plugin is cached at a versioned path under `~/.claude/plugins/cache/`. Find the exact file with:
+
+```sh
+find ~/.claude/plugins/cache/local-tester-marketplace -name ".mcp.json"
+```
+
+This prints something like:
+
+```
+~/.claude/plugins/cache/local-tester-marketplace/local-tester/1.2.2/.mcp.json
+```
+
+Open that file and fill in the `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` values inside the `env` block:
 
 ```json
 "env": {
   "OPENROUTER_API_KEY": "sk-or-v1-...",
-  "OPENROUTER_MODEL": "openai/gpt-4o-mini"
+  "OPENROUTER_MODEL": "deepseek/deepseek-v3",
+  "OPENROUTER_VERDICT_MODEL": "",
+  "OPENROUTER_TRIAGE_MODEL": "",
+  ...
 }
 ```
+
+> **After a plugin update:** Claude Code installs the new version into a fresh versioned directory, so the old config is not carried over. After updating, re-run the `find` command above to get the new path and add your key again. Alternatively, set `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` as shell environment variables before launching Claude Code so they are inherited by the MCP server process and you never need to re-edit the file.
+
+#### Codex
+
+Edit `.mcp.json` (or the equivalent MCP config file) inside the Codex plugin installation directory. The env block shape is the same as above.
+
+#### Antigravity
+
+Edit `~/.gemini/config/plugins/local-tester/mcp_config.json` and fill in the `env` block under `mcpServers.local_tester`.
 
 ### `check_local_llm_health` when OpenRouter is configured
 
