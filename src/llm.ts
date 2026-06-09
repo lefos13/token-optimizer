@@ -20,20 +20,25 @@ const LLM_METADATA = Symbol('llmMetadata');
 
 export type LLMTaskType = 'verdict' | 'triage' | 'review' | 'digest' | 'scout' | 'query' | 'health';
 
-interface LocalLLMProvider {
+interface LLMProvider {
   taskType: LLMTaskType;
-  provider: string;
+  providerName: string;
   apiUrl: string;
   model: string;
+  authHeaders: Record<string, string>;
 }
 
 export interface LLMHealthResponse extends LLMResponseMetadata {
   apiBase: string;
   available: boolean;
   error?: string;
+  skipped?: boolean;
 }
 
-const PROVIDER_NAME = 'local-openai-compatible';
+const LOCAL_PROVIDER_NAME = 'local-openai-compatible';
+const OPENROUTER_PROVIDER_NAME = 'openrouter';
+const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1';
+const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4o-mini';
 const DEFAULT_API_URL = 'http://localhost:8080/v1';
 const DEFAULT_MODEL = 'local-model';
 const TASK_MODEL_ENV: Record<LLMTaskType, string | undefined> = {
@@ -43,6 +48,16 @@ const TASK_MODEL_ENV: Record<LLMTaskType, string | undefined> = {
   digest: 'LOCAL_LLM_DIGEST_MODEL',
   scout: 'LOCAL_LLM_SCOUT_MODEL',
   query: 'LOCAL_LLM_QUERY_MODEL',
+  health: undefined
+};
+
+const TASK_OPENROUTER_MODEL_ENV: Record<LLMTaskType, string | undefined> = {
+  verdict: 'OPENROUTER_VERDICT_MODEL',
+  triage: 'OPENROUTER_TRIAGE_MODEL',
+  review: 'OPENROUTER_REVIEW_MODEL',
+  digest: 'OPENROUTER_DIGEST_MODEL',
+  scout: 'OPENROUTER_SCOUT_MODEL',
+  query: 'OPENROUTER_QUERY_MODEL',
   health: undefined
 };
 
@@ -89,10 +104,10 @@ function attachLLMMetadata<T extends object>(value: T, metadata: LLMResponseMeta
   return value;
 }
 
-function metadataFromProvider(provider: LocalLLMProvider, latencyMs: number, fallbackReason?: string): LLMResponseMetadata {
+function metadataFromProvider(provider: LLMProvider, latencyMs: number, fallbackReason?: string): LLMResponseMetadata {
   return {
     llmAvailable: !fallbackReason,
-    llmProvider: provider.provider,
+    llmProvider: provider.providerName,
     llmModel: provider.model,
     llmLatencyMs: latencyMs,
     llmTaskType: provider.taskType,
@@ -105,19 +120,35 @@ function attachLLMResultMetadata<T extends object>(value: T, completion: ChatCom
   return attachLLMMetadata(value, completion.metadata);
 }
 
-function fallbackMetadata(provider: LocalLLMProvider, error: unknown, latencyMs: number): LLMResponseMetadata {
+function fallbackMetadata(provider: LLMProvider, error: unknown, latencyMs: number): LLMResponseMetadata {
   const message = error instanceof Error ? error.message : String(error);
   return metadataFromProvider(provider, latencyMs, message);
 }
 
-function resolveProvider(taskType: LLMTaskType): LocalLLMProvider {
+function resolveLocalProvider(taskType: LLMTaskType): LLMProvider {
   const modelEnvName = TASK_MODEL_ENV[taskType];
   return {
     taskType,
-    provider: PROVIDER_NAME,
+    providerName: LOCAL_PROVIDER_NAME,
     apiUrl: process.env.LOCAL_LLM_API_URL || DEFAULT_API_URL,
-    model: (modelEnvName && process.env[modelEnvName]) || process.env.LOCAL_LLM_MODEL || DEFAULT_MODEL
+    model: (modelEnvName && process.env[modelEnvName]) || process.env.LOCAL_LLM_MODEL || DEFAULT_MODEL,
+    authHeaders: {}
   };
+}
+
+function resolveProvider(taskType: LLMTaskType): LLMProvider {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (apiKey) {
+    const modelEnvName = TASK_OPENROUTER_MODEL_ENV[taskType];
+    return {
+      taskType,
+      providerName: OPENROUTER_PROVIDER_NAME,
+      apiUrl: OPENROUTER_API_URL,
+      model: (modelEnvName && process.env[modelEnvName]) || process.env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL,
+      authHeaders: { Authorization: `Bearer ${apiKey}` }
+    };
+  }
+  return resolveLocalProvider(taskType);
 }
 
 export function combineLLMUsage(usage1?: LLMUsage, usage2?: LLMUsage): LLMUsage | undefined {
@@ -187,15 +218,15 @@ function normalizeUsage(data: any, systemPrompt: string, userPrompt: string, raw
   };
 }
 
-/* Shared transport for every local-LLM call: resolves the task-specific local model, builds the OpenAI-compatible request, and returns raw message content plus token/provider accounting. */
-async function callChatCompletion(taskType: LLMTaskType, systemPrompt: string, userPrompt: string): Promise<ChatCompletionResult> {
-  const provider = resolveProvider(taskType);
+/* Shared transport for every LLM call: accepts an already-resolved provider, builds the OpenAI-compatible request, and returns raw message content plus token/provider accounting. */
+async function callChatCompletion(provider: LLMProvider, systemPrompt: string, userPrompt: string): Promise<ChatCompletionResult> {
   const start = Date.now();
 
   const response = await fetch(`${provider.apiUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...provider.authHeaders,
     },
     body: JSON.stringify({
       model: provider.model,
@@ -209,19 +240,38 @@ async function callChatCompletion(taskType: LLMTaskType, systemPrompt: string, u
   });
 
   if (!response.ok) {
-    throw new Error(`Local LLM API error: ${response.status} ${response.statusText}`);
+    throw new Error(`LLM API error: ${response.status} ${response.statusText}`);
   }
 
   const data = (await response.json()) as any;
   const rawContent = data.choices?.[0]?.message?.content || '';
   if (!rawContent) {
-    throw new Error('Empty response from local LLM');
+    throw new Error('Empty response from LLM');
   }
   return {
     content: rawContent,
     usage: normalizeUsage(data, systemPrompt, userPrompt, rawContent),
     metadata: metadataFromProvider(provider, Date.now() - start)
   };
+}
+
+/* Resolve provider, attempt the call. If the primary provider is OpenRouter and the call fails, retry once with the local provider and surface the fallback reason in metadata. */
+async function callWithFallback(taskType: LLMTaskType, systemPrompt: string, userPrompt: string): Promise<ChatCompletionResult> {
+  const provider = resolveProvider(taskType);
+  try {
+    return await callChatCompletion(provider, systemPrompt, userPrompt);
+  } catch (error) {
+    if (provider.providerName !== OPENROUTER_PROVIDER_NAME) {
+      throw error;
+    }
+    const localProvider = resolveLocalProvider(taskType);
+    const result = await callChatCompletion(localProvider, systemPrompt, userPrompt);
+    result.metadata = {
+      ...result.metadata,
+      fallbackReason: `OpenRouter call failed: ${error instanceof Error ? error.message : String(error)}`
+    };
+    return result;
+  }
 }
 
 function redactApiBase(apiUrl: string): string {
@@ -235,13 +285,29 @@ function redactApiBase(apiUrl: string): string {
 }
 
 export async function checkLocalLLMHealth(): Promise<LLMHealthResponse> {
-  const provider = resolveProvider('health');
+  /* When OpenRouter is the configured primary, skip the local ping. The API key
+     is assumed valid; any live failure surfaces via fallbackReason on real calls. */
+  if (process.env.OPENROUTER_API_KEY) {
+    const model = process.env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL;
+    return {
+      llmAvailable: true,
+      llmProvider: OPENROUTER_PROVIDER_NAME,
+      llmModel: model,
+      llmLatencyMs: 0,
+      llmTaskType: 'health',
+      apiBase: OPENROUTER_API_URL,
+      available: true,
+      skipped: true
+    };
+  }
+
+  const provider = resolveLocalProvider('health');
   const systemPrompt = 'Return JSON only.';
   const userPrompt = 'Return {"ok":true}.';
   const start = Date.now();
 
   try {
-    const completion = await callChatCompletion('health', systemPrompt, userPrompt);
+    const completion = await callChatCompletion(provider, systemPrompt, userPrompt);
     JSON.parse(extractJSON(completion.content));
     return {
       ...completion.metadata,
@@ -303,7 +369,7 @@ ${trimmedLogs}`;
 
   const start = Date.now();
   try {
-    const completion = await callChatCompletion(taskType, systemPrompt, userPrompt);
+    const completion = await callWithFallback(taskType, systemPrompt, userPrompt);
     const jsonString = extractJSON(completion.content);
     const parsed = JSON.parse(jsonString) as Partial<LLMVerdictResponse>;
     const result: LLMVerdictResponse = {
@@ -398,7 +464,7 @@ Schema:
 
   const start = Date.now();
   try {
-    const completion = await callChatCompletion('review', systemPrompt, userPrompt);
+    const completion = await callWithFallback('review', systemPrompt, userPrompt);
     const jsonString = extractJSON(completion.content);
     const parsed = JSON.parse(jsonString) as Partial<CodeReviewResponse>;
     const result: CodeReviewResponse = {
@@ -459,7 +525,7 @@ ${trimmedLogs}`;
 
   const start = Date.now();
   try {
-    const completion = await callChatCompletion('digest', systemPrompt, userPrompt);
+    const completion = await callWithFallback('digest', systemPrompt, userPrompt);
     const parsed = JSON.parse(extractJSON(completion.content)) as CommandDigestResponse;
     const result: CommandDigestResponse = {
       summary: typeof parsed.summary === 'string' ? parsed.summary : '',
@@ -520,7 +586,7 @@ Schema:
 
   const start = Date.now();
   try {
-    const completion = await callChatCompletion('scout', systemPrompt, userPrompt);
+    const completion = await callWithFallback('scout', systemPrompt, userPrompt);
     const parsed = JSON.parse(extractJSON(completion.content)) as ScoutResponse;
     const result: ScoutResponse = {
       pointers: Array.isArray(parsed.pointers) ? parsed.pointers.filter(isValidPointer) : [],
@@ -578,7 +644,7 @@ ${numberedLog}`;
 
   const start = Date.now();
   try {
-    const completion = await callChatCompletion('query', systemPrompt, userPrompt);
+    const completion = await callWithFallback('query', systemPrompt, userPrompt);
     const parsed = JSON.parse(extractJSON(completion.content)) as LogQueryResponse;
     const result: LogQueryResponse = {
       answer: typeof parsed.answer === 'string' ? parsed.answer : '',
