@@ -71,6 +71,7 @@ function summarize(records) {
         updatedAt: new Date().toISOString(),
         totalCalls: records.length,
         callsByTool: {},
+        callsByProvider: {},
         totalRawSourceTokens: 0,
         totalLocalLlmTokens: 0,
         totalReturnedToMainTokens: 0,
@@ -80,6 +81,8 @@ function summarize(records) {
     let savingsTotal = 0;
     for (const record of records) {
         summary.callsByTool[record.toolName] = (summary.callsByTool[record.toolName] || 0) + 1;
+        const provider = record.llmProvider || 'none';
+        summary.callsByProvider[provider] = (summary.callsByProvider[provider] || 0) + 1;
         summary.totalRawSourceTokens += record.rawSourceTokens;
         summary.totalLocalLlmTokens += record.localLlmTotalTokens;
         summary.totalReturnedToMainTokens += record.returnedToMainTokens;

@@ -38,6 +38,7 @@ interface AnalyticsSummary {
   updatedAt: string;
   totalCalls: number;
   callsByTool: Record<string, number>;
+  callsByProvider: Record<string, number>;
   totalRawSourceTokens: number;
   totalLocalLlmTokens: number;
   totalReturnedToMainTokens: number;
@@ -79,6 +80,7 @@ function summarize(records: AnalyticsRecord[]): AnalyticsSummary {
     updatedAt: new Date().toISOString(),
     totalCalls: records.length,
     callsByTool: {},
+    callsByProvider: {},
     totalRawSourceTokens: 0,
     totalLocalLlmTokens: 0,
     totalReturnedToMainTokens: 0,
@@ -89,6 +91,8 @@ function summarize(records: AnalyticsRecord[]): AnalyticsSummary {
   let savingsTotal = 0;
   for (const record of records) {
     summary.callsByTool[record.toolName] = (summary.callsByTool[record.toolName] || 0) + 1;
+    const provider = record.llmProvider || 'none';
+    summary.callsByProvider[provider] = (summary.callsByProvider[provider] || 0) + 1;
     summary.totalRawSourceTokens += record.rawSourceTokens;
     summary.totalLocalLlmTokens += record.localLlmTotalTokens;
     summary.totalReturnedToMainTokens += record.returnedToMainTokens;

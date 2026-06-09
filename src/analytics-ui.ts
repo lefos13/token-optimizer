@@ -21,6 +21,12 @@ interface AnalyticsRecord {
   estimatedTokensSaved: number;
   savingsPercentage: number;
   measurementSource: string;
+  llmAvailable?: boolean;
+  llmProvider?: string;
+  llmModel?: string;
+  llmLatencyMs?: number;
+  llmTaskType?: string;
+  fallbackReason?: string;
   /* Stamped by the UI (not persisted) when records from several workspaces are merged into one feed. */
   sourceWorkspace?: string;
 }
@@ -29,6 +35,7 @@ interface AnalyticsSummary {
   updatedAt: string;
   totalCalls: number;
   callsByTool: Record<string, number>;
+  callsByProvider?: Record<string, number>;
   totalRawSourceTokens: number;
   totalLocalLlmTokens: number;
   totalReturnedToMainTokens: number;
@@ -100,6 +107,7 @@ function emptySummary(): AnalyticsSummary {
     updatedAt: '',
     totalCalls: 0,
     callsByTool: {},
+    callsByProvider: {},
     totalRawSourceTokens: 0,
     totalLocalLlmTokens: 0,
     totalReturnedToMainTokens: 0,
@@ -197,6 +205,10 @@ function combineSummaries(loaded: WorkspaceLoadResult[]): AnalyticsSummary {
     savingsWeighted += summary.averageSavingsPercentage * summary.totalCalls;
     for (const [tool, count] of Object.entries(summary.callsByTool || {})) {
       combined.callsByTool[tool] = (combined.callsByTool[tool] || 0) + count;
+    }
+    for (const [prov, count] of Object.entries(summary.callsByProvider || {})) {
+      if (!combined.callsByProvider) combined.callsByProvider = {};
+      combined.callsByProvider[prov] = (combined.callsByProvider[prov] || 0) + count;
     }
     if (summary.updatedAt && summary.updatedAt > latestUpdatedAt) {
       latestUpdatedAt = summary.updatedAt;
@@ -479,6 +491,37 @@ function renderHtml(): string {
       color: var(--danger);
       border: 1px solid #f3c7c1;
     }
+    .provider-local { background: #ecfdf5; color: var(--accent); }
+    .provider-openrouter { background: #eff6ff; color: var(--accent-2); }
+    .model-tag {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 11px;
+      padding: 2px 8px;
+      color: var(--muted);
+      max-width: 260px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    .fallback-tag {
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-radius: 6px;
+      font-size: 11px;
+      padding: 2px 8px;
+      color: #92400e;
+      max-width: 300px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: inline-block;
+      vertical-align: middle;
+    }
     .scope-row {
       display: flex;
       align-items: center;
@@ -730,6 +773,10 @@ function renderHtml(): string {
       <div class="tool-list" id="toolList"></div>
     </section>
     <section class="section">
+      <h2>Calls by LLM Provider</h2>
+      <div class="tool-list" id="providerList"></div>
+    </section>
+    <section class="section">
       <h2>Recent Events</h2>
       <div class="events" id="events"></div>
       <div class="pagination" id="pagination">
@@ -767,6 +814,7 @@ function renderHtml(): string {
       avgSavings: document.getElementById('avgSavings'),
       updatedAt: document.getElementById('updatedAt'),
       toolList: document.getElementById('toolList'),
+      providerList: document.getElementById('providerList'),
       events: document.getElementById('events'),
       pageInfo: document.getElementById('pageInfo'),
       pageSizeSelect: document.getElementById('pageSizeSelect'),
@@ -813,6 +861,45 @@ function renderHtml(): string {
         value.textContent = num(count);
         row.append(name, value);
         ids.toolList.appendChild(row);
+      }
+    }
+
+    function providerLabel(key) {
+      if (key === 'local-openai-compatible') return 'Local LLM';
+      if (key === 'openrouter') return 'OpenRouter';
+      if (key === 'none') return 'No LLM (fallback)';
+      return key;
+    }
+
+    function providerClass(key) {
+      if (key === 'local-openai-compatible') return 'provider-local';
+      if (key === 'openrouter') return 'provider-openrouter';
+      return '';
+    }
+
+    function renderProviders(callsByProvider) {
+      ids.providerList.textContent = '';
+      const entries = Object.entries(callsByProvider || {}).sort((a, b) => b[1] - a[1]);
+      if (entries.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'No provider data recorded yet.';
+        ids.providerList.appendChild(empty);
+        return;
+      }
+      for (const [key, count] of entries) {
+        const row = document.createElement('div');
+        row.className = 'tool-row';
+        const name = document.createElement('span');
+        const badge = document.createElement('span');
+        const cls = providerClass(key);
+        badge.className = 'source' + (cls ? ' ' + cls : '');
+        badge.textContent = providerLabel(key);
+        name.appendChild(badge);
+        const value = document.createElement('strong');
+        value.textContent = num(count);
+        row.append(name, value);
+        ids.providerList.appendChild(row);
       }
     }
 
@@ -900,6 +987,27 @@ function renderHtml(): string {
         savings.className = 'event-savings';
         savings.textContent = percent(record.savingsPercentage) + ' saved';
         head.append(tool, time, source);
+        if (record.llmProvider) {
+          const provBadge = document.createElement('span');
+          const cls = providerClass(record.llmProvider);
+          provBadge.className = 'source' + (cls ? ' ' + cls : '');
+          provBadge.textContent = providerLabel(record.llmProvider);
+          head.appendChild(provBadge);
+        }
+        if (record.llmModel) {
+          const modelTag = document.createElement('span');
+          modelTag.className = 'model-tag';
+          modelTag.textContent = record.llmModel;
+          modelTag.title = record.llmModel;
+          head.appendChild(modelTag);
+        }
+        if (record.fallbackReason) {
+          const fallbackTag = document.createElement('span');
+          fallbackTag.className = 'fallback-tag';
+          fallbackTag.textContent = 'fallback: ' + record.fallbackReason;
+          fallbackTag.title = record.fallbackReason;
+          head.appendChild(fallbackTag);
+        }
         if (record.sourceWorkspace) {
           const ws = document.createElement('span');
           ws.className = 'source';
@@ -1090,6 +1198,7 @@ function renderHtml(): string {
       renderWorkspaceList(payload.workspaces || []);
       renderScopeOptions(payload.workspaces || [], payload.totalRecords || 0);
       renderTools(summary.callsByTool);
+      renderProviders(summary.callsByProvider);
       renderEvents(records);
       renderPagination(payload);
     }
