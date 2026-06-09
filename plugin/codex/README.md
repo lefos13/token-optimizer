@@ -9,7 +9,7 @@ with raw logs.
 
 ## Contents
 
-- `.codex-plugin/plugin.json` - plugin manifest (`local-tester` v1.0.12).
+- `.codex-plugin/plugin.json` - plugin manifest (`local-tester` v1.0.13).
 - `.mcp.json` - registers the `local_tester` stdio server via the `mcpServers` wrapper, launched via `bash -c` so the shell resolves the plugin root at runtime.
 - `server/` - the compiled MCP server plus a launcher (`start.sh`) and a minimal `package.json`.
 - `skills/local-llm-subagent/SKILL.md` - usage guidance, copied from `skill/skill-example.md`.
@@ -40,7 +40,10 @@ runs offline.
 
 **Local LLM (fallback):** When `OPENROUTER_API_KEY` is absent, the server uses a local OpenAI-compatible endpoint. Defaults: `LOCAL_LLM_API_URL=http://localhost:8080/v1`, `LOCAL_LLM_MODEL=local-model`. Per-task overrides: `LOCAL_LLM_VERDICT_MODEL`, `LOCAL_LLM_TRIAGE_MODEL`, `LOCAL_LLM_REVIEW_MODEL`, `LOCAL_LLM_DIGEST_MODEL`, `LOCAL_LLM_SCOUT_MODEL`, `LOCAL_LLM_QUERY_MODEL`.
 
-Edit `.mcp.json`'s `env` block in your Codex plugin installation to set your values.
+Codex ships this plugin with only the local fallback keys in `.mcp.json`.
+To enable OpenRouter, add the `OPENROUTER_*` keys yourself in the installed
+plugin copy's `mcpServers.local_tester.env` block so the secret only exists
+where Codex actually runs the plugin.
 
 ## Install
 

@@ -46,7 +46,7 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "1.0.12";
+  const VERSION = "1.0.13";
 
   const sdkVersion = require(
     path.join(
@@ -137,6 +137,10 @@ try {
      MCP servers. */
   const launcher =
     'exec bash "${PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$PWD}}}/server/start.sh"';
+  /* Keep Codex's generated env block limited to local fallback defaults.
+     Empty OpenRouter placeholders override inherited values with blank
+     strings, so Codex users must add those keys manually in the installed
+     plugin copy when they actually want OpenRouter enabled. */
   const mcpJson = {
     mcpServers: {
       local_tester: {
@@ -144,14 +148,6 @@ try {
         args: ["-c", launcher],
         cwd: ".",
         env: {
-          OPENROUTER_API_KEY: "",
-          OPENROUTER_MODEL: "",
-          OPENROUTER_VERDICT_MODEL: "",
-          OPENROUTER_TRIAGE_MODEL: "",
-          OPENROUTER_REVIEW_MODEL: "",
-          OPENROUTER_DIGEST_MODEL: "",
-          OPENROUTER_SCOUT_MODEL: "",
-          OPENROUTER_QUERY_MODEL: "",
           LOCAL_LLM_API_URL: "http://localhost:8080/v1",
           LOCAL_LLM_MODEL: "local-model",
         },
@@ -305,7 +301,10 @@ runs offline.
 
 **Local LLM (fallback):** When \`OPENROUTER_API_KEY\` is absent, the server uses a local OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`.
 
-Edit \`.mcp.json\`'s \`env\` block in your Codex plugin installation to set your values.
+Codex ships this plugin with only the local fallback keys in \`.mcp.json\`.
+To enable OpenRouter, add the \`OPENROUTER_*\` keys yourself in the installed
+plugin copy's \`mcpServers.local_tester.env\` block so the secret only exists
+where Codex actually runs the plugin.
 
 ## Install
 

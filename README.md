@@ -317,7 +317,30 @@ Open that file and fill in the `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` value
 
 #### Codex
 
-Edit `.mcp.json` (or the equivalent MCP config file) inside the Codex plugin installation directory. The env block shape is the same as above.
+Find the installed Codex plugin config, then edit its `.mcp.json` under `mcpServers.local_tester.env`.
+
+```bash
+find ~/.codex/plugins -path '*local-tester*' -name '.mcp.json'
+```
+
+Add your OpenRouter values there:
+
+```json
+"env": {
+  "LOCAL_LLM_API_URL": "http://localhost:8080/v1",
+  "LOCAL_LLM_MODEL": "local-model",
+  "OPENROUTER_API_KEY": "sk-or-v1-...",
+  "OPENROUTER_MODEL": "deepseek/deepseek-v3",
+  "OPENROUTER_VERDICT_MODEL": "",
+  "OPENROUTER_TRIAGE_MODEL": "",
+  "OPENROUTER_REVIEW_MODEL": "",
+  "OPENROUTER_DIGEST_MODEL": "",
+  "OPENROUTER_SCOUT_MODEL": "",
+  "OPENROUTER_QUERY_MODEL": ""
+}
+```
+
+After editing the installed plugin config, restart Codex or start a new thread so the MCP server is reloaded with the new environment.
 
 #### Antigravity
 
