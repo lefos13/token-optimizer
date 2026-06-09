@@ -79,7 +79,7 @@ try {
      install (Antigravity does not document version-gated update pulls the way
      Claude Code's marketplace install does, but keeping this accurate still
      matters for users diffing or re-staging the plugin folder). */
-  const VERSION = "1.1.2";
+  const VERSION = "1.1.3";
 
   const sdkVersion = require(
     path.join(
@@ -122,6 +122,14 @@ try {
         command: "bash",
         args: [path.join(os.homedir(), ".gemini", "config", "plugins", PLUGIN_NAME, "server", "start.sh")],
         env: {
+          OPENROUTER_API_KEY: "",
+          OPENROUTER_MODEL: "",
+          OPENROUTER_VERDICT_MODEL: "",
+          OPENROUTER_TRIAGE_MODEL: "",
+          OPENROUTER_REVIEW_MODEL: "",
+          OPENROUTER_DIGEST_MODEL: "",
+          OPENROUTER_SCOUT_MODEL: "",
+          OPENROUTER_QUERY_MODEL: "",
           LOCAL_LLM_API_URL: "http://localhost:8080/v1",
           LOCAL_LLM_MODEL: "local-model",
         },
@@ -236,13 +244,13 @@ is also model-invoked automatically based on its description.
 
 ## LLM configuration
 
-A local OpenAI-compatible LLM endpoint is expected. Defaults:
-\`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`.
-Optional per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`,
-\`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`,
-\`LOCAL_LLM_QUERY_MODEL\`. Edit \`mcp_config.json\`'s \`env\` block (or the
-equivalent in your global \`mcp_config.json\` if you merge the entry there) to
-point at a different endpoint or model.
+**OpenRouter (primary):** Set \`OPENROUTER_API_KEY\` in \`mcp_config.json\`'s \`env\` block to route all LLM calls through [OpenRouter](https://openrouter.ai). \`OPENROUTER_MODEL\` sets the default model (falls back to \`openai/gpt-4o-mini\`). Per-task overrides: \`OPENROUTER_VERDICT_MODEL\`, \`OPENROUTER_TRIAGE_MODEL\`, \`OPENROUTER_REVIEW_MODEL\`, \`OPENROUTER_DIGEST_MODEL\`, \`OPENROUTER_SCOUT_MODEL\`, \`OPENROUTER_QUERY_MODEL\`.
+
+> **JSON mode requirement:** All requests send \`response_format: { type: "json_object" }\`. The chosen model must support JSON mode. Compatible models include \`openai/gpt-4o\`, \`openai/gpt-4o-mini\`, \`anthropic/claude-3-5-sonnet\`, \`anthropic/claude-3-haiku\`, and \`google/gemini-flash-1.5\`. Check the [OpenRouter models page](https://openrouter.ai/models) and filter by JSON mode support.
+
+**Local LLM (fallback):** When \`OPENROUTER_API_KEY\` is absent, the server uses a local OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`.
+
+Edit \`mcp_config.json\`'s \`env\` block in your installed plugin folder to set your values. The installed plugin lives at \`~/.gemini/config/plugins/local-tester/mcp_config.json\` (or your Antigravity plugin staging path).
 
 ## Install
 
