@@ -7,7 +7,7 @@ for automatic HTTPS.
 
 ## Request contract
 
-- `GET /health` → `{"ok":true}` (no auth; used by the MCP client's health check).
+- `GET /health` → `{"ok":true}`. Unauthenticated for plain liveness (uptime pings), but if an `Authorization: Bearer <proxy-token>` header is presented — as the MCP client's health check does — the token is validated and an invalid one is rejected with `401`, so misconfigured tokens are caught at health-check time.
 - `POST /v1/chat/completions` → OpenAI-compatible. Requires `Authorization: Bearer <proxy-token>`.
   The `X-Task-Type` header (`verdict|triage|review|digest|scout|query`) selects the
   pinned model. The client's `model` field is always ignored.

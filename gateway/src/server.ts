@@ -87,6 +87,19 @@ async function handleChat(
   }
 }
 
+/* Liveness plus optional token verification. A bare /health (no Authorization
+   header) is pure loopback/uptime liveness and always returns ok. When a bearer
+   token IS presented — as the client's check_local_llm_health does — it is
+   validated so a misconfigured token is caught at health-check time (401) rather
+   than only surfacing later as a fallback on the first real call. */
+function handleHealth(req: IncomingMessage, res: ServerResponse, config: GatewayConfig): void {
+  const auth = req.headers['authorization'] as string | undefined;
+  if (auth && !isAuthorized(auth, config.tokens)) {
+    return sendJson(res, 401, { error: 'unauthorized' });
+  }
+  return sendJson(res, 200, { ok: true });
+}
+
 /* HTTP gateway: /health for liveness, /v1/chat/completions for the OpenAI-compatible
    proxy path. Request bodies are never logged (they carry user code and log snippets). */
 export function createGatewayServer(config: GatewayConfig, deps: ServerDeps = {}): Server {
@@ -96,7 +109,7 @@ export function createGatewayServer(config: GatewayConfig, deps: ServerDeps = {}
   return httpCreateServer(async (req, res) => {
     try {
       if (req.method === 'GET' && req.url === '/health') {
-        return sendJson(res, 200, { ok: true });
+        return handleHealth(req, res, config);
       }
       if (req.method === 'POST' && req.url === '/v1/chat/completions') {
         return await handleChat(req, res, config, doFetch, limiter);

@@ -9,3 +9,4 @@ plugin/antigravity/
 # Codex plugin is committed so the repo marketplace install can copy it.
 
 .DS_Store
+graphify-out/

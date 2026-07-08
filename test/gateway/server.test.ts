@@ -39,6 +39,21 @@ test('GET /health returns ok without auth', async () => {
   });
 });
 
+test('GET /health validates a presented token and accepts a valid one', async () => {
+  await withServer(okUpstream, async (base) => {
+    const res = await fetch(`${base}/health`, { headers: { Authorization: 'Bearer good-token' } });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true });
+  });
+});
+
+test('GET /health rejects a presented invalid token with 401', async () => {
+  await withServer(okUpstream, async (base) => {
+    const res = await fetch(`${base}/health`, { headers: { Authorization: 'Bearer wrong' } });
+    assert.equal(res.status, 401);
+  });
+});
+
 test('POST /v1/chat/completions rejects a missing/invalid token with 401', async () => {
   await withServer(okUpstream, async (base) => {
     const res = await fetch(`${base}/v1/chat/completions`, {
