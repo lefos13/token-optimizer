@@ -12,7 +12,7 @@
     "build:plugin:antigravity": "node scripts/generate-plugin-antigravity.js",
     "build:plugin:claude": "node scripts/generate-plugin-claude.js",
     "build:plugin:codex": "node scripts/generate-plugin-codex.js",
-    "openrouter:config": "node scripts/manage-openrouter-config.js",
+    "gateway:config": "node scripts/manage-gateway-config.js",
     "start": "node dist/index.js",
     "dev": "tsc -w",
     "analytics:ui": "npm run build && node dist/analytics-ui.js"

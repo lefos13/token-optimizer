@@ -6,117 +6,83 @@ const path = require("path");
 const readline = require("readline");
 const { execFileSync } = require("child_process");
 
-const OPENROUTER_ENV_KEYS = [
-  "OPENROUTER_API_KEY",
-  "OPENROUTER_MODEL",
-  "OPENROUTER_VERDICT_MODEL",
-  "OPENROUTER_TRIAGE_MODEL",
-  "OPENROUTER_REVIEW_MODEL",
-  "OPENROUTER_DIGEST_MODEL",
-  "OPENROUTER_SCOUT_MODEL",
-  "OPENROUTER_QUERY_MODEL",
-];
-
-const TASK_MODEL_PROMPTS = [
-  ["OPENROUTER_VERDICT_MODEL", "Verdict model override"],
-  ["OPENROUTER_TRIAGE_MODEL", "Triage model override"],
-  ["OPENROUTER_REVIEW_MODEL", "Review model override"],
-  ["OPENROUTER_DIGEST_MODEL", "Digest model override"],
-  ["OPENROUTER_SCOUT_MODEL", "Scout model override"],
-  ["OPENROUTER_QUERY_MODEL", "Query model override"],
-];
-
-const homeDir = path.resolve(process.env.HOME || os.homedir());
-const claudeSettingsPath = path.join(homeDir, ".claude", "settings.json");
-const geminiConfigPath = path.join(homeDir, ".gemini", "config", "mcp_config.json");
-const antigravityPluginConfigPath = path.join(
-  homeDir,
-  ".gemini",
-  "config",
-  "plugins",
-  "local-tester",
-  "mcp_config.json",
-);
-const backupRoot = path.join(homeDir, ".local-tester-mcp", "backups");
-const localTesterServerArgs = [
-  path.join(homeDir, ".gemini", "config", "plugins", "local-tester", "server", "start.sh"),
-];
+const GATEWAY_ENV_KEYS = ["LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN"];
+const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
 
 /* Centralize the file mutation targets so setup, update, delete, and status
    all operate on the same stable user-owned surfaces instead of ad hoc
-   path-specific logic spread across the command handlers. */
-const managedTargets = [
-  {
-    label: "Claude Code settings",
-    filePath: claudeSettingsPath,
-    readConfig: readJsonFile,
-    writeConfig: writeJsonFile,
-    getValues(config) {
-      return sanitizeEnvObject(config.env || {});
+   path-specific logic spread across the command handlers. Derived from a
+   passed-in home dir (rather than a module-level constant) so tests can
+   point the whole target set at a temp directory. */
+function getManagedTargets(home) {
+  const homeDir = path.resolve(home || process.env.HOME || os.homedir());
+  const claudeSettingsPath = path.join(homeDir, ".claude", "settings.json");
+  const geminiConfigPath = path.join(homeDir, ".gemini", "config", "mcp_config.json");
+  const antigravityPluginConfigPath = path.join(
+    homeDir, ".gemini", "config", "plugins", "local-tester", "mcp_config.json"
+  );
+  const localTesterServerArgs = [
+    path.join(homeDir, ".gemini", "config", "plugins", "local-tester", "server", "start.sh"),
+  ];
+
+  return [
+    {
+      label: "Claude Code settings",
+      filePath: claudeSettingsPath,
+      readConfig: readJsonFile,
+      writeConfig: writeJsonFile,
+      getValues(config) { return sanitizeEnvObject(config.env || {}); },
+      applyValues(config, values) {
+        const next = config;
+        next.env = mergeManagedEnvValues(next.env || {}, values);
+        return next;
+      },
     },
-    applyValues(config, values) {
-      const next = config;
-      next.env = mergeManagedEnvValues(next.env || {}, values);
-      return next;
+    {
+      label: "Gemini CLI MCP config",
+      filePath: geminiConfigPath,
+      readConfig: readJsonFile,
+      writeConfig: writeJsonFile,
+      getValues(config) { return sanitizeEnvObject(config?.mcpServers?.local_tester?.env || {}); },
+      applyValues(config, values) {
+        const next = config;
+        next.mcpServers = next.mcpServers || {};
+        next.mcpServers.local_tester = next.mcpServers.local_tester || {
+          command: "bash", args: localTesterServerArgs,
+        };
+        next.mcpServers.local_tester.command = next.mcpServers.local_tester.command || "bash";
+        next.mcpServers.local_tester.args =
+          Array.isArray(next.mcpServers.local_tester.args) && next.mcpServers.local_tester.args.length > 0
+            ? next.mcpServers.local_tester.args : localTesterServerArgs;
+        next.mcpServers.local_tester.env = mergeManagedEnvValues(
+          next.mcpServers.local_tester.env || {}, values
+        );
+        return next;
+      },
     },
-  },
-  {
-    label: "Gemini CLI MCP config",
-    filePath: geminiConfigPath,
-    readConfig: readJsonFile,
-    writeConfig: writeJsonFile,
-    getValues(config) {
-      return sanitizeEnvObject(
-        config?.mcpServers?.local_tester?.env || {},
-      );
+    {
+      label: "Antigravity staged plugin config",
+      filePath: antigravityPluginConfigPath,
+      optional: true,
+      readConfig: readJsonFile,
+      writeConfig: writeJsonFile,
+      getValues(config) { return sanitizeEnvObject(config?.mcpServers?.local_tester?.env || {}); },
+      applyValues(config, values) {
+        const next = config;
+        next.mcpServers = next.mcpServers || {};
+        next.mcpServers.local_tester = next.mcpServers.local_tester || {
+          command: "bash", args: localTesterServerArgs,
+        };
+        next.mcpServers.local_tester.env = mergeManagedEnvValues(
+          next.mcpServers.local_tester.env || {}, values
+        );
+        return next;
+      },
     },
-    applyValues(config, values) {
-      const next = config;
-      next.mcpServers = next.mcpServers || {};
-      next.mcpServers.local_tester = next.mcpServers.local_tester || {
-        command: "bash",
-        args: localTesterServerArgs,
-      };
-      next.mcpServers.local_tester.command =
-        next.mcpServers.local_tester.command || "bash";
-      next.mcpServers.local_tester.args =
-        Array.isArray(next.mcpServers.local_tester.args) &&
-        next.mcpServers.local_tester.args.length > 0
-          ? next.mcpServers.local_tester.args
-          : localTesterServerArgs;
-      next.mcpServers.local_tester.env = mergeManagedEnvValues(
-        next.mcpServers.local_tester.env || {},
-        values,
-      );
-      return next;
-    },
-  },
-  {
-    label: "Antigravity staged plugin config",
-    filePath: antigravityPluginConfigPath,
-    optional: true,
-    readConfig: readJsonFile,
-    writeConfig: writeJsonFile,
-    getValues(config) {
-      return sanitizeEnvObject(
-        config?.mcpServers?.local_tester?.env || {},
-      );
-    },
-    applyValues(config, values) {
-      const next = config;
-      next.mcpServers = next.mcpServers || {};
-      next.mcpServers.local_tester = next.mcpServers.local_tester || {
-        command: "bash",
-        args: localTesterServerArgs,
-      };
-      next.mcpServers.local_tester.env = mergeManagedEnvValues(
-        next.mcpServers.local_tester.env || {},
-        values,
-      );
-      return next;
-    },
-  },
-];
+  ];
+}
+
+const backupRoot = path.join(path.resolve(process.env.HOME || os.homedir()), ".local-tester-mcp", "backups");
 
 async function main() {
   const command = normalizeCommand(process.argv[2]);
@@ -136,7 +102,7 @@ async function main() {
       command || (await promptForCommand(rl));
 
     if (resolvedCommand === "status") {
-      printStatus();
+      printStatus(undefined);
       return;
     }
 
@@ -169,13 +135,13 @@ function normalizeCommand(value) {
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/manage-openrouter-config.js [setup|update|delete|status]
+  console.log(`Usage: node scripts/manage-gateway-config.js [setup|update|delete|status]
 
 Commands:
-  setup   Prompt for OpenRouter values and write them to all managed clients
-  update  Prompt again and replace the managed OpenRouter values
-  delete  Remove managed OpenRouter values from all managed clients
-  status  Show current managed OpenRouter values and GUI-session state
+  setup   Prompt for your gateway proxy token and write it to all managed clients
+  update  Prompt again and replace the managed gateway values
+  delete  Remove managed gateway values from all managed clients
+  status  Show current managed gateway values and GUI-session state
 
 When no command is provided, the script prompts for one interactively.`);
 }
@@ -205,44 +171,21 @@ async function promptForCommand(rl) {
   }
 }
 
-/* Keep the user flow simple: collect one canonical set of OpenRouter values,
-   then fan it out to every managed client surface plus the macOS GUI-session
-   environment. This avoids asking the same question separately for each app. */
+/* Collect the one per-person proxy token (required) and an optional gateway URL
+   (defaults to the shared gateway), then fan them out to every managed client
+   surface plus the macOS GUI session. */
 async function upsertConfiguration(rl, mode) {
   const existing = collectCurrentValues();
   const values = {};
 
-  values.OPENROUTER_API_KEY = await askRequired(
+  values.LLM_GATEWAY_TOKEN = await askRequired(
     rl,
-    `OpenRouter API key${existing.OPENROUTER_API_KEY ? " [press Enter to keep current]" : ""}: `,
-    existing.OPENROUTER_API_KEY,
+    `Gateway proxy token${existing.LLM_GATEWAY_TOKEN ? " [press Enter to keep current]" : ""}: `,
+    existing.LLM_GATEWAY_TOKEN,
   );
-  values.OPENROUTER_MODEL = await askOptional(
-    rl,
-    `Default model${existing.OPENROUTER_MODEL ? ` [${existing.OPENROUTER_MODEL}]` : ""} [- to clear]: `,
-    existing.OPENROUTER_MODEL,
-  );
-
-  const advancedAnswer = (
-    await ask(
-      rl,
-      `Configure per-task model overrides? [y/N]: `,
-    )
-  ).trim().toLowerCase();
-
-  if (advancedAnswer === "y" || advancedAnswer === "yes") {
-    for (const [envKey, label] of TASK_MODEL_PROMPTS) {
-      values[envKey] = await askOptional(
-        rl,
-        `${label}${existing[envKey] ? ` [${existing[envKey]}]` : ""} [- to clear]: `,
-        existing[envKey],
-      );
-    }
-  } else {
-    for (const [envKey] of TASK_MODEL_PROMPTS) {
-      values[envKey] = existing[envKey] || "";
-    }
-  }
+  const currentUrl = existing.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL;
+  const urlAnswer = (await ask(rl, `Gateway URL [${currentUrl}]: `)).trim();
+  values.LLM_GATEWAY_URL = urlAnswer || currentUrl;
 
   applyToTargets(values);
   applyLaunchctlValues(values);
@@ -250,21 +193,16 @@ async function upsertConfiguration(rl, mode) {
   console.log("");
   console.log(
     mode === "setup"
-      ? "OpenRouter configuration saved for all managed clients."
-      : "OpenRouter configuration updated for all managed clients.",
+      ? "Gateway configuration saved for all managed clients."
+      : "Gateway configuration updated for all managed clients.",
   );
   printStatus();
 }
 
 async function deleteConfiguration(rl) {
   const confirmation = (
-    await ask(
-      rl,
-      "Remove managed OpenRouter values from all clients and unset the GUI-session environment? [y/N]: ",
-    )
-  )
-    .trim()
-    .toLowerCase();
+    await ask(rl, "Remove managed gateway values from all clients and unset the GUI-session environment? [y/N]: ")
+  ).trim().toLowerCase();
 
   if (confirmation !== "y" && confirmation !== "yes") {
     console.log("Delete cancelled.");
@@ -275,57 +213,43 @@ async function deleteConfiguration(rl) {
   clearLaunchctlValues();
 
   console.log("");
-  console.log("Managed OpenRouter values removed.");
+  console.log("Managed gateway values removed.");
   printStatus();
 }
 
-function collectCurrentValues() {
-  for (const target of managedTargets) {
+function collectCurrentValues(home) {
+  for (const target of getManagedTargets(home)) {
     const config = safeReadTargetConfig(target);
     const values = target.getValues(config);
-    if (values.OPENROUTER_API_KEY || values.OPENROUTER_MODEL) {
+    if (values.LLM_GATEWAY_TOKEN || values.LLM_GATEWAY_URL) {
       return values;
     }
   }
-
   return readLaunchctlValues();
 }
 
-function printStatus() {
+function printStatus(home) {
   console.log("");
   console.log("Current managed status:");
-
-  for (const target of managedTargets) {
+  for (const target of getManagedTargets(home)) {
     const config = safeReadTargetConfig(target);
     const values = target.getValues(config);
     console.log(`- ${target.label}: ${summarizeValues(values)}`);
   }
-
-  console.log(
-    `- macOS GUI session (launchctl): ${summarizeValues(readLaunchctlValues())}`,
-  );
+  console.log(`- macOS GUI session (launchctl): ${summarizeValues(readLaunchctlValues())}`);
 }
 
 function summarizeValues(values) {
-  if (!values.OPENROUTER_API_KEY && !values.OPENROUTER_MODEL) {
+  if (!values.LLM_GATEWAY_TOKEN && !values.LLM_GATEWAY_URL) {
     return "not configured";
   }
-
   const parts = [];
-  if (values.OPENROUTER_API_KEY) {
-    parts.push(`key=${redactSecret(values.OPENROUTER_API_KEY)}`);
+  if (values.LLM_GATEWAY_URL) {
+    parts.push(`url=${values.LLM_GATEWAY_URL}`);
   }
-  if (values.OPENROUTER_MODEL) {
-    parts.push(`model=${values.OPENROUTER_MODEL}`);
+  if (values.LLM_GATEWAY_TOKEN) {
+    parts.push(`token=${redactSecret(values.LLM_GATEWAY_TOKEN)}`);
   }
-
-  const overrides = TASK_MODEL_PROMPTS.filter(([envKey]) => values[envKey]).map(
-    ([envKey]) => `${envKey}=${values[envKey]}`,
-  );
-  if (overrides.length > 0) {
-    parts.push(`overrides=${overrides.join(",")}`);
-  }
-
   return parts.join(" ");
 }
 
@@ -339,8 +263,8 @@ function redactSecret(value) {
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
-function applyToTargets(values) {
-  for (const target of managedTargets) {
+function applyToTargets(values, home) {
+  for (const target of getManagedTargets(home)) {
     const config = safeReadTargetConfig(target);
     const nextConfig = target.applyValues(config, values);
     writeTargetConfig(target, nextConfig);
@@ -374,7 +298,7 @@ function writeJsonFile(filePath, config) {
 function mergeManagedEnvValues(existingEnv, incomingValues) {
   const next = { ...existingEnv };
 
-  for (const envKey of OPENROUTER_ENV_KEYS) {
+  for (const envKey of GATEWAY_ENV_KEYS) {
     const value = incomingValues[envKey];
     if (value) {
       next[envKey] = value;
@@ -388,7 +312,7 @@ function mergeManagedEnvValues(existingEnv, incomingValues) {
 
 function sanitizeEnvObject(envObject) {
   const next = {};
-  for (const envKey of OPENROUTER_ENV_KEYS) {
+  for (const envKey of GATEWAY_ENV_KEYS) {
     if (typeof envObject[envKey] === "string" && envObject[envKey].trim() !== "") {
       next[envKey] = envObject[envKey];
     }
@@ -416,11 +340,11 @@ function ensureDirectory(dirPath) {
 }
 
 /* GUI-launched macOS apps do not inherit shell rc files, so persist the
-   OpenRouter variables into the user's launchd session. That lets Codex,
+   gateway variables into the user's launchd session. That lets Codex,
    Claude, and Antigravity read the same values when started normally from the
    Dock, Finder, Spotlight, or their own launchers. */
 function applyLaunchctlValues(values) {
-  for (const envKey of OPENROUTER_ENV_KEYS) {
+  for (const envKey of GATEWAY_ENV_KEYS) {
     const value = values[envKey];
     if (value) {
       runLaunchctl(["setenv", envKey, value]);
@@ -431,14 +355,14 @@ function applyLaunchctlValues(values) {
 }
 
 function clearLaunchctlValues() {
-  for (const envKey of OPENROUTER_ENV_KEYS) {
+  for (const envKey of GATEWAY_ENV_KEYS) {
     runLaunchctl(["unsetenv", envKey], { allowFailure: true });
   }
 }
 
 function readLaunchctlValues() {
   const values = {};
-  for (const envKey of OPENROUTER_ENV_KEYS) {
+  for (const envKey of GATEWAY_ENV_KEYS) {
     const value = runLaunchctl(["printenv", envKey], {
       allowFailure: true,
       captureOutput: true,
@@ -537,7 +461,22 @@ async function askOptional(rl, prompt, fallbackValue) {
   return answer || fallbackValue || "";
 }
 
-main().catch((error) => {
-  console.error(`OpenRouter config manager failed: ${error.message}`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`Gateway config manager failed: ${error.message}`);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  GATEWAY_ENV_KEYS,
+  DEFAULT_GATEWAY_URL,
+  sanitizeEnvObject,
+  mergeManagedEnvValues,
+  getManagedTargets,
+  applyToTargets,
+  collectCurrentValues,
+  applyLaunchctlValues,
+  readLaunchctlValues,
+  clearLaunchctlValues,
+};
