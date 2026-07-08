@@ -2,6 +2,8 @@ node_modules/
 dist/
 .test-build/
 gateway/dist/
+# Real gateway secrets staged for deploy-pm2.sh — never commit actual keys/tokens.
+gateway/deploy/gateway.env
 .codex-local-test-runs/
 # Antigravity plugin output is generated; not tracked.
 plugin/antigravity/

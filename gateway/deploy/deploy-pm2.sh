@@ -11,6 +11,13 @@ set -euo pipefail
 #   ./deploy-pm2.sh [/path/to/gateway]   # defaults to the script's own gateway/ dir
 #
 # Idempotent: safe to re-run after editing the env file or redeploying dist/.
+#
+# To manage secrets/model config from your own machine instead of SSH-editing
+# the droplet: copy gateway/deploy/gateway.env.example to gateway/deploy/gateway.env
+# (gitignored — never commit it), fill in real values, then scp/rsync the whole
+# gateway/ directory up and re-run this script. A staged gateway.env always wins
+# and overwrites /etc/local-tester-gateway.env; without one, an existing droplet
+# env file is left untouched.
 
 APP_DIR="/opt/local-tester-gateway"
 ENV_FILE="/etc/local-tester-gateway.env"
@@ -53,13 +60,20 @@ echo "==> Syncing dist/ and ecosystem.config.js into $APP_DIR"
 sudo rsync -a --delete "$SOURCE_GATEWAY_DIR/dist/" "$APP_DIR/dist/"
 sudo cp "$SOURCE_GATEWAY_DIR/deploy/ecosystem.config.js" "$APP_DIR/ecosystem.config.js"
 
-if [ ! -f "$ENV_FILE" ]; then
+if [ -f "$SOURCE_GATEWAY_DIR/deploy/gateway.env" ]; then
+  # A real, filled-in env file was staged locally (gateway/deploy/gateway.env,
+  # gitignored) and shipped up with this deploy — it's the intended source of
+  # truth, so it always wins, overwriting whatever's on the droplet.
+  echo "==> Deploying staged gateway.env from $SOURCE_GATEWAY_DIR/deploy/gateway.env (overwriting $ENV_FILE)"
+  sudo cp "$SOURCE_GATEWAY_DIR/deploy/gateway.env" "$ENV_FILE"
+  sudo chmod 600 "$ENV_FILE"
+elif [ ! -f "$ENV_FILE" ]; then
   echo "==> No env file found; seeding $ENV_FILE from gateway.env.example"
   echo "    EDIT IT before real use: real OPENROUTER_API_KEY + a generated PROXY_TOKENS value."
   sudo cp "$SOURCE_GATEWAY_DIR/deploy/gateway.env.example" "$ENV_FILE"
   sudo chmod 600 "$ENV_FILE"
 else
-  echo "==> Env file already exists at $ENV_FILE (not touching it)"
+  echo "==> Env file already exists at $ENV_FILE and no staged gateway.env was provided (not touching it)"
 fi
 
 echo "==> Ensuring log dir $LOG_DIR exists"

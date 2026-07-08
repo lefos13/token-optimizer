@@ -69,7 +69,28 @@ you copy/run once so pm2 itself resurrects the gateway after a droplet reboot. S
 — only the process supervisor differs.
 
 Re-running `./deploy-pm2.sh` after a new build or an env-file edit picks up the changes
-and reloads the process; it never touches an existing `/etc/local-tester-gateway.env`.
+and reloads the process; it never touches an existing `/etc/local-tester-gateway.env`
+**unless** you stage one locally (see below).
+
+### Managing secrets/model config from your own machine
+
+Instead of `nano`-editing the env file over SSH every time you want to change the
+OpenRouter key or model, you can prepare it locally and ship it with the deploy:
+
+```bash
+cp gateway/deploy/gateway.env.example gateway/deploy/gateway.env   # gitignored, never commit it
+# edit gateway/deploy/gateway.env with your real OPENROUTER_API_KEY, PROXY_TOKENS, DEFAULT_MODEL, ...
+npm run build:gateway
+scp -r gateway droplet:/tmp/gateway
+ssh droplet 'cd /tmp/gateway/deploy && ./deploy-pm2.sh'
+```
+
+When `gateway/deploy/gateway.env` is present in the directory you ship up, `deploy-pm2.sh`
+always copies it to `/etc/local-tester-gateway.env` (overwriting) before reloading — so
+editing that one local file and re-running the two commands above is the whole workflow
+for rotating the key, the token, or the model. Without a staged `gateway.env`, an existing
+droplet env file is left alone, so you can still edit it directly on the droplet if you
+prefer.
 
 ## Changing the model centrally
 
