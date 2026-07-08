@@ -137,9 +137,11 @@ try {
      MCP servers. */
   const launcher =
     'exec bash "${PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$PWD}}}/server/start.sh"';
-  /* Forward LLM_GATEWAY_TOKEN from the session while baking the gateway URL
-     default. Codex merges `env` defaults with `env_vars` passthrough; a
-     session-provided `LLM_GATEWAY_URL` still overrides the baked default. */
+  /* Codex passes `LLM_GATEWAY_TOKEN` through from the session via `env_vars`
+     (the value that varies per person); `LLM_GATEWAY_URL` is baked as the
+     default gateway address. If a session also provides `LLM_GATEWAY_URL`,
+     precedence between the baked default and the passthrough depends on
+     Codex's env-merge behavior — not verified here. */
   const mcpJson = {
     mcpServers: {
       local_tester: {
@@ -301,7 +303,7 @@ runs offline.
 
 **Centralized gateway (primary):** The plugin is preconfigured with the gateway URL (\`https://llm-proxy.lnf.gr/v1\`). Provide your per-person proxy token: from a repo clone run \`npm run gateway:config -- setup\` and paste the token (it is written to every client on your machine), or set \`LLM_GATEWAY_TOKEN\` manually in this client's config. Models are chosen centrally on the gateway; no client-side model configuration is needed.
 
-> **JSON mode requirement:** All requests send \`response_format: { type: "json_object" }\`. The chosen model must support JSON mode. Compatible models include \`openai/gpt-4o\`, \`openai/gpt-4o-mini\`, \`anthropic/claude-3-5-sonnet\`, \`anthropic/claude-3-haiku\`, and \`google/gemini-flash-1.5\`. Check the [OpenRouter models page](https://openrouter.ai/models) and filter by JSON mode support.
+> **JSON mode requirement:** All requests send \`response_format: { type: "json_object" }\`. The gateway (or local fallback model, if configured) is responsible for returning JSON-mode-compatible responses; end users do not choose or configure a model.
 
 **Local LLM (fallback):** The server uses a local OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`.
 

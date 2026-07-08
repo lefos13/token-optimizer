@@ -16,6 +16,7 @@ const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
    point the whole target set at a temp directory. */
 function getManagedTargets(home) {
   const homeDir = path.resolve(home || process.env.HOME || os.homedir());
+  const backupRoot = path.join(homeDir, ".local-tester-mcp", "backups");
   const claudeSettingsPath = path.join(homeDir, ".claude", "settings.json");
   const geminiConfigPath = path.join(homeDir, ".gemini", "config", "mcp_config.json");
   const antigravityPluginConfigPath = path.join(
@@ -29,6 +30,7 @@ function getManagedTargets(home) {
     {
       label: "Claude Code settings",
       filePath: claudeSettingsPath,
+      backupRoot,
       readConfig: readJsonFile,
       writeConfig: writeJsonFile,
       getValues(config) { return sanitizeEnvObject(config.env || {}); },
@@ -41,6 +43,7 @@ function getManagedTargets(home) {
     {
       label: "Gemini CLI MCP config",
       filePath: geminiConfigPath,
+      backupRoot,
       readConfig: readJsonFile,
       writeConfig: writeJsonFile,
       getValues(config) { return sanitizeEnvObject(config?.mcpServers?.local_tester?.env || {}); },
@@ -63,6 +66,7 @@ function getManagedTargets(home) {
     {
       label: "Antigravity staged plugin config",
       filePath: antigravityPluginConfigPath,
+      backupRoot,
       optional: true,
       readConfig: readJsonFile,
       writeConfig: writeJsonFile,
@@ -81,8 +85,6 @@ function getManagedTargets(home) {
     },
   ];
 }
-
-const backupRoot = path.join(path.resolve(process.env.HOME || os.homedir()), ".local-tester-mcp", "backups");
 
 async function main() {
   const command = normalizeCommand(process.argv[2]);
@@ -283,7 +285,7 @@ function safeReadTargetConfig(target) {
 
 function writeTargetConfig(target, config) {
   ensureDirectory(path.dirname(target.filePath));
-  backupFileIfPresent(target.filePath);
+  backupFileIfPresent(target.filePath, target.backupRoot);
   target.writeConfig(target.filePath, config);
 }
 
@@ -320,7 +322,7 @@ function sanitizeEnvObject(envObject) {
   return next;
 }
 
-function backupFileIfPresent(filePath) {
+function backupFileIfPresent(filePath, backupRoot) {
   if (!fs.existsSync(filePath)) {
     return;
   }
