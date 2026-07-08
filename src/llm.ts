@@ -317,6 +317,40 @@ function redactApiBase(apiUrl: string): string {
 }
 
 export async function checkLocalLLMHealth(): Promise<LLMHealthResponse> {
+  /* Gateway is the configured primary: ping its /health (served at the root, not
+     under /v1) to confirm reachability before real calls spend tokens. */
+  if (process.env.LLM_GATEWAY_TOKEN && process.env.LLM_GATEWAY_URL) {
+    const base = process.env.LLM_GATEWAY_URL.replace(/\/+$/, '');
+    const healthUrl = `${base.replace(/\/v1$/, '')}/health`;
+    const start = Date.now();
+    try {
+      const response = await fetch(healthUrl, { headers: { Authorization: `Bearer ${process.env.LLM_GATEWAY_TOKEN}` } });
+      if (!response.ok) {
+        throw new Error(`Gateway health ${response.status} ${response.statusText}`);
+      }
+      return {
+        llmAvailable: true,
+        llmProvider: GATEWAY_PROVIDER_NAME,
+        llmModel: 'gateway-managed',
+        llmLatencyMs: Date.now() - start,
+        llmTaskType: 'health',
+        apiBase: redactApiBase(base),
+        available: true
+      };
+    } catch (error: any) {
+      return {
+        llmAvailable: false,
+        llmProvider: GATEWAY_PROVIDER_NAME,
+        llmModel: 'gateway-managed',
+        llmLatencyMs: Date.now() - start,
+        llmTaskType: 'health',
+        apiBase: redactApiBase(base),
+        available: false,
+        error: error.message || String(error)
+      };
+    }
+  }
+
   /* When OpenRouter is the configured primary, skip the local ping. The API key
      is assumed valid; any live failure surfaces via fallbackReason on real calls. */
   if (process.env.OPENROUTER_API_KEY) {
