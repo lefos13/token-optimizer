@@ -243,6 +243,25 @@ For development, run the TypeScript compiler in watch mode:
 npm run dev
 ```
 
+### Centralized gateway (recommended)
+
+Point the server at a shared gateway so users never hold the real OpenRouter key
+and the model is chosen centrally. Set two variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `LLM_GATEWAY_URL` | Gateway base URL, e.g. `https://llm-proxy.lnf.gr/v1`. |
+| `LLM_GATEWAY_TOKEN` | Shared proxy token issued by the gateway operator (revocable; not your OpenRouter key). |
+
+When both are set, the gateway is the primary LLM provider. Each call sends an
+`X-Task-Type` header so the gateway pins the model; the client's model choice is
+ignored and the actually-used model is reported back in analytics. If the gateway
+is unreachable, the server falls back to a local model when `LOCAL_LLM_*` is
+configured, otherwise it returns a conservative `uncertain` result.
+
+Precedence: `LLM_GATEWAY_TOKEN` → `OPENROUTER_API_KEY` (direct, for local dev) →
+local model. To host the gateway, see [`gateway/README.md`](gateway/README.md).
+
 ## OpenRouter Configuration
 
 Set `OPENROUTER_API_KEY` to route all LLM calls through [OpenRouter](https://openrouter.ai) instead of a local endpoint. When the key is set it takes priority; the local LLM path is used only when the key is absent or when an OpenRouter call fails.

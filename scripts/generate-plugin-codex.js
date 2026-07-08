@@ -46,7 +46,7 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "1.2.6";
+  const VERSION = "1.3.0";
 
   const sdkVersion = require(
     path.join(

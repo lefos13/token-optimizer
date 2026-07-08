@@ -9,7 +9,7 @@ with raw logs.
 
 ## Contents
 
-- `.codex-plugin/plugin.json` - plugin manifest (`local-tester` v1.2.6).
+- `.codex-plugin/plugin.json` - plugin manifest (`local-tester` v1.3.0).
 - `.mcp.json` - registers the `local_tester` stdio server via the `mcpServers` wrapper, launched via `bash -c` so the shell resolves the plugin root at runtime.
 - `server/` - the compiled MCP server plus a launcher (`start.sh`) and a minimal `package.json`.
 - `skills/local-llm-subagent/SKILL.md` - usage guidance, copied from `skill/skill-example.md`.

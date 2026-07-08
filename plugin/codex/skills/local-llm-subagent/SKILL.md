@@ -188,6 +188,8 @@ If a tool exists in the server but is not exposed in the current Codex session, 
 
 **LLM provider:** Prefer the repo-shipped config manager (`npm run openrouter:config -- setup`) to install `OPENROUTER_*` into the stable client-owned config surfaces and the macOS GUI-session environment. Generated plugins intentionally omit blank `OPENROUTER_*` placeholders so inherited host values keep working after plugin reinstalls. When the key is absent, the server falls back to a local OpenAI-compatible endpoint (`LOCAL_LLM_API_URL`). If an OpenRouter call fails, the server automatically retries with the local endpoint and surfaces `fallbackReason` in the response. The chosen OpenRouter model must support `response_format: { type: "json_object" }` (JSON mode); models that do not support it will error and trigger the local fallback. Compatible models include `openai/gpt-4o`, `openai/gpt-4o-mini`, `anthropic/claude-3-5-sonnet`, `anthropic/claude-3-haiku`, and `google/gemini-flash-1.5`.
 
+**Centralized gateway:** When `LLM_GATEWAY_URL` and `LLM_GATEWAY_TOKEN` are both set, the skill behaves identically — the gateway just centralizes the OpenRouter key and pins the model per task, so no individual user needs to hold a real key. `check_local_llm_health` verifies gateway reachability the same way it verifies a direct OpenRouter or local-endpoint configuration.
+
 **OpenRouter env vars:**
 - `OPENROUTER_API_KEY` — enables OpenRouter mode
 - `OPENROUTER_MODEL` — default model for all tasks (falls back to `openai/gpt-4o-mini`)

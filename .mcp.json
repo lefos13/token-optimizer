@@ -4,14 +4,8 @@
       "command": "node",
       "args": ["dist/index.js"],
       "env": {
-        "OPENROUTER_API_KEY": "sk-or-...",
-        "OPENROUTER_MODEL": "deepseek/deepseek-v4-flash",
-        "OPENROUTER_VERDICT_MODEL": "",
-        "OPENROUTER_TRIAGE_MODEL": "",
-        "OPENROUTER_REVIEW_MODEL": "",
-        "OPENROUTER_DIGEST_MODEL": "",
-        "OPENROUTER_SCOUT_MODEL": "",
-        "OPENROUTER_QUERY_MODEL": "",
+        "LLM_GATEWAY_URL": "https://llm-proxy.lnf.gr/v1",
+        "LLM_GATEWAY_TOKEN": "your-shared-proxy-token",
         "LOCAL_LLM_API_URL": "http://127.0.0.1:8080/v1",
         "LOCAL_LLM_MODEL": "unsloth/GLM-4.7-Flash-REAP-23B-A3B-GGUF:Q4_K_XL"
       }
