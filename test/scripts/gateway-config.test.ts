@@ -66,3 +66,76 @@ test('launchctl values round-trip through the state-file seam', () => {
     delete process.env.LOCAL_TESTER_LAUNCHCTL_STATE_PATH;
   }
 });
+
+test('applyDirectiveToTargets inserts the block into existing global instruction files, idempotent on re-run', () => {
+  const home = tmpHome();
+  const claudeMd = path.join(home, '.claude', 'CLAUDE.md');
+  fs.mkdirSync(path.dirname(claudeMd), { recursive: true });
+  fs.writeFileSync(claudeMd, '# My existing instructions\n');
+
+  cli.applyDirectiveToTargets(home);
+  const first = fs.readFileSync(claudeMd, 'utf8');
+  assert.ok(first.includes('# My existing instructions'));
+  assert.ok(cli.hasDirectiveBlock(first));
+
+  cli.applyDirectiveToTargets(home); // re-run must not duplicate
+  const second = fs.readFileSync(claudeMd, 'utf8');
+  const occurrences = second.split(cli.DIRECTIVE_MARKER_START).length - 1;
+  assert.equal(occurrences, 1);
+});
+
+test('applyDirectiveToTargets skips files that do not exist', () => {
+  const home = tmpHome(); // no .codex/AGENTS.md created
+  cli.applyDirectiveToTargets(home); // must not throw or create the file
+  assert.ok(!fs.existsSync(path.join(home, '.codex', 'AGENTS.md')));
+});
+
+test('removeDirectiveFromTargets removes a previously-inserted block and is a no-op when absent', () => {
+  const home = tmpHome();
+  const agentsMd = path.join(home, '.codex', 'AGENTS.md');
+  fs.mkdirSync(path.dirname(agentsMd), { recursive: true });
+  fs.writeFileSync(agentsMd, '# Codex rules\n');
+
+  cli.applyDirectiveToTargets(home);
+  assert.ok(cli.hasDirectiveBlock(fs.readFileSync(agentsMd, 'utf8')));
+
+  cli.removeDirectiveFromTargets(home);
+  const cleaned = fs.readFileSync(agentsMd, 'utf8');
+  assert.ok(!cli.hasDirectiveBlock(cleaned));
+  assert.ok(cleaned.includes('# Codex rules'));
+
+  cli.removeDirectiveFromTargets(home); // no-op, must not throw
+  assert.ok(!cli.hasDirectiveBlock(fs.readFileSync(agentsMd, 'utf8')));
+});
+
+test('hasDirectiveBlock returns true if both markers are present, false otherwise', () => {
+  assert.equal(cli.hasDirectiveBlock('Some content <!-- LOCAL_TESTER_START --> foo <!-- LOCAL_TESTER_END -->'), true);
+  assert.equal(cli.hasDirectiveBlock('Some content <!-- LOCAL_TESTER_START --> foo'), false);
+  assert.equal(cli.hasDirectiveBlock('foo <!-- LOCAL_TESTER_END -->'), false);
+  assert.equal(cli.hasDirectiveBlock('just some content'), false);
+});
+
+test('applyDirectiveBlock appends the block correctly to content, or replaces it if already present', () => {
+  const block = cli.DIRECTIVE_BLOCK;
+  assert.equal(cli.applyDirectiveBlock(''), block);
+  assert.equal(cli.applyDirectiveBlock('Hello\n'), `Hello\n\n${block}`);
+  assert.equal(cli.applyDirectiveBlock('Hello'), `Hello\n\n${block}`);
+
+  const initial = `Hello\n\n${block}`;
+  const applied = cli.applyDirectiveBlock(initial);
+  assert.equal(applied, `Hello\n\n${block}\n`);
+});
+
+test('removeDirectiveBlock removes the block, and collapses multiple newlines (supporting both \\n and \\r\\n line endings)', () => {
+  const block = cli.DIRECTIVE_BLOCK;
+  assert.equal(cli.removeDirectiveBlock('Hello World'), 'Hello World');
+
+  const contentLf = `Hello\n\n\n${block}\n\n\nWorld`;
+  assert.equal(cli.removeDirectiveBlock(contentLf), 'Hello\n\nWorld');
+
+  const blockCrlf = block.replace(/\n/g, '\r\n');
+  const contentCrlf = `Hello\r\n\r\n\r\n${blockCrlf}\r\n\r\n\r\nWorld`;
+  assert.equal(cli.removeDirectiveBlock(contentCrlf), 'Hello\n\nWorld');
+});
+
+

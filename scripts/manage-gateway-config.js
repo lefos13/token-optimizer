@@ -9,6 +9,108 @@ const { execFileSync } = require("child_process");
 const GATEWAY_ENV_KEYS = ["LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN"];
 const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
 
+const DIRECTIVE_MARKER_START = "<!-- LOCAL_TESTER_START -->";
+const DIRECTIVE_MARKER_END = "<!-- LOCAL_TESTER_END -->";
+/* Mirrors the shipped skill's existing triggers (scout / verdict / triage /
+   regression / changed-files-review) as a standing default-on rule instead of
+   a heuristic description, so the model reaches for these tools without
+   needing to be asked each time. */
+const DIRECTIVE_BLOCK = `${DIRECTIVE_MARKER_START}
+## Local Tester (default-on)
+
+Always use the \`local_tester\` MCP tools by default:
+
+- \`scout_codebase\` before broad exploration of an unfamiliar area.
+- \`run_test_verdict\` before claiming a change works.
+- \`run_failure_triage\` on test/build/lint failures instead of reading raw logs.
+- \`run_regression_check\` before merging.
+- \`run_changed_files_review\` for small diffs before running expensive validation.
+
+Skip only when the user explicitly says not to use it.
+${DIRECTIVE_MARKER_END}
+`;
+
+/* Global instruction files each client reads on its own (not MCP config), so
+   this is a separate target list from getManagedTargets — different files,
+   different mutation shape (raw text, not JSON). */
+function getDirectiveTargets(home) {
+  const homeDir = path.resolve(home || process.env.HOME || os.homedir());
+  return [
+    { label: "Claude Code global instructions", filePath: path.join(homeDir, ".claude", "CLAUDE.md") },
+    { label: "Codex global instructions", filePath: path.join(homeDir, ".codex", "AGENTS.md") },
+    { label: "Antigravity/Gemini global instructions", filePath: path.join(homeDir, ".gemini", "GEMINI.md") },
+  ];
+}
+
+function hasDirectiveBlock(content) {
+  return content.includes(DIRECTIVE_MARKER_START) && content.includes(DIRECTIVE_MARKER_END);
+}
+
+function applyDirectiveBlock(content) {
+  const startIdx = content.indexOf(DIRECTIVE_MARKER_START);
+  const endIdx = content.indexOf(DIRECTIVE_MARKER_END);
+  if (startIdx !== -1 && endIdx !== -1) {
+    const before = content.slice(0, startIdx);
+    const after = content.slice(endIdx + DIRECTIVE_MARKER_END.length);
+    return `${before}${DIRECTIVE_BLOCK}${after}`;
+  }
+  const separator = content.length === 0 ? "" : content.endsWith("\n") ? "\n" : "\n\n";
+  return `${content}${separator}${DIRECTIVE_BLOCK}`;
+}
+
+function removeDirectiveBlock(content) {
+  const startIdx = content.indexOf(DIRECTIVE_MARKER_START);
+  const endIdx = content.indexOf(DIRECTIVE_MARKER_END);
+  if (startIdx === -1 || endIdx === -1) {
+    return content;
+  }
+  const before = content.slice(0, startIdx);
+  const after = content.slice(endIdx + DIRECTIVE_MARKER_END.length);
+  return `${before}${after}`.replace(/(?:\r?\n){3,}/g, "\n\n");
+}
+
+function directiveBackupRoot(home) {
+  return path.join(path.resolve(home || process.env.HOME || os.homedir()), ".local-tester-mcp", "backups");
+}
+
+function applyDirectiveToTargets(home) {
+  const backupRoot = directiveBackupRoot(home);
+  for (const target of getDirectiveTargets(home)) {
+    if (!fs.existsSync(target.filePath)) {
+      continue;
+    }
+    backupFileIfPresent(target.filePath, backupRoot);
+    const content = fs.readFileSync(target.filePath, "utf8");
+    fs.writeFileSync(target.filePath, applyDirectiveBlock(content));
+  }
+}
+
+function removeDirectiveFromTargets(home) {
+  const backupRoot = directiveBackupRoot(home);
+  for (const target of getDirectiveTargets(home)) {
+    if (!fs.existsSync(target.filePath)) {
+      continue;
+    }
+    const content = fs.readFileSync(target.filePath, "utf8");
+    if (!hasDirectiveBlock(content)) {
+      continue;
+    }
+    backupFileIfPresent(target.filePath, backupRoot);
+    fs.writeFileSync(target.filePath, removeDirectiveBlock(content));
+  }
+}
+
+function printDirectiveStatus(home) {
+  for (const target of getDirectiveTargets(home)) {
+    if (!fs.existsSync(target.filePath)) {
+      console.log(`- ${target.label} (default-on directive): file not found`);
+      continue;
+    }
+    const content = fs.readFileSync(target.filePath, "utf8");
+    console.log(`- ${target.label} (default-on directive): ${hasDirectiveBlock(content) ? "configured" : "not configured"}`);
+  }
+}
+
 /* Centralize the file mutation targets so setup, update, delete, and status
    all operate on the same stable user-owned surfaces instead of ad hoc
    path-specific logic spread across the command handlers. Derived from a
@@ -108,6 +210,22 @@ async function main() {
       return;
     }
 
+    if (resolvedCommand === "enable-defaults") {
+      applyDirectiveToTargets();
+      console.log("");
+      console.log("Default-on usage directive written to all managed global instructions files.");
+      printDirectiveStatus();
+      return;
+    }
+
+    if (resolvedCommand === "disable-defaults") {
+      removeDirectiveFromTargets();
+      console.log("");
+      console.log("Default-on usage directive removed from all managed global instructions files.");
+      printDirectiveStatus();
+      return;
+    }
+
     if (resolvedCommand === "delete") {
       await deleteConfiguration(rl);
       return;
@@ -130,20 +248,22 @@ function normalizeCommand(value) {
   }
 
   const lowered = value.toLowerCase();
-  if (["setup", "update", "delete", "status", "help"].includes(lowered)) {
+  if (["setup", "update", "delete", "status", "help", "enable-defaults", "disable-defaults"].includes(lowered)) {
     return lowered;
   }
   return "";
 }
 
 function printHelp() {
-  console.log(`Usage: node scripts/manage-gateway-config.js [setup|update|delete|status]
+  console.log(`Usage: node scripts/manage-gateway-config.js [setup|update|delete|status|enable-defaults|disable-defaults]
 
 Commands:
-  setup   Prompt for your gateway proxy token and write it to all managed clients
-  update  Prompt again and replace the managed gateway values
-  delete  Remove managed gateway values from all managed clients
-  status  Show current managed gateway values and GUI-session state
+  setup            Prompt for your gateway proxy token and write it to all managed clients
+  update           Prompt again and replace the managed gateway values
+  delete           Remove managed gateway values from all managed clients
+  status           Show current managed gateway values, GUI-session state, and directive status
+  enable-defaults  Write a default-on usage directive into Claude/Codex/Antigravity global instructions
+  disable-defaults Remove the default-on usage directive from those files
 
 When no command is provided, the script prompts for one interactively.`);
 }
@@ -154,9 +274,11 @@ async function promptForCommand(rl) {
   console.log("  2. update");
   console.log("  3. delete");
   console.log("  4. status");
+  console.log("  5. enable-defaults");
+  console.log("  6. disable-defaults");
 
   while (true) {
-    const answer = (await ask(rl, "Action [1-4]: ")).trim();
+    const answer = (await ask(rl, "Action [1-6]: ")).trim();
     if (answer === "1") {
       return "setup";
     }
@@ -169,7 +291,13 @@ async function promptForCommand(rl) {
     if (answer === "4") {
       return "status";
     }
-    console.log("Enter 1, 2, 3, or 4.");
+    if (answer === "5") {
+      return "enable-defaults";
+    }
+    if (answer === "6") {
+      return "disable-defaults";
+    }
+    console.log("Enter 1, 2, 3, 4, 5, or 6.");
   }
 }
 
@@ -239,6 +367,7 @@ function printStatus(home) {
     console.log(`- ${target.label}: ${summarizeValues(values)}`);
   }
   console.log(`- macOS GUI session (launchctl): ${summarizeValues(readLaunchctlValues())}`);
+  printDirectiveStatus(home);
 }
 
 function summarizeValues(values) {
@@ -473,6 +602,9 @@ if (require.main === module) {
 module.exports = {
   GATEWAY_ENV_KEYS,
   DEFAULT_GATEWAY_URL,
+  DIRECTIVE_MARKER_START,
+  DIRECTIVE_MARKER_END,
+  DIRECTIVE_BLOCK,
   sanitizeEnvObject,
   mergeManagedEnvValues,
   getManagedTargets,
@@ -481,4 +613,10 @@ module.exports = {
   applyLaunchctlValues,
   readLaunchctlValues,
   clearLaunchctlValues,
+  getDirectiveTargets,
+  hasDirectiveBlock,
+  applyDirectiveBlock,
+  removeDirectiveBlock,
+  applyDirectiveToTargets,
+  removeDirectiveFromTargets,
 };

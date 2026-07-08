@@ -31,6 +31,14 @@ The gateway URL is baked in; the only value you supply is your token.
   - Codex → your shell/launch environment (it is passed through)
   - Antigravity → its `mcp_config.json` under the `local_tester` `env`
 
+To make the tools default-on (used automatically unless you say otherwise) in Claude Code, Codex, and Antigravity, also run:
+
+```bash
+npm run gateway:config -- enable-defaults
+```
+
+This writes a standing directive into each client's global instructions file (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`). Run `npm run gateway:config -- disable-defaults` to remove it, or `npm run gateway:config -- status` to check whether it's set.
+
 ### 3. Verify
 
 Restart the client. The tools (`run_test_verdict`, `run_failure_triage`,
@@ -569,6 +577,29 @@ The plugin bundles the compiled MCP server and launches `./server/start.sh` from
 The skill is available as `local-llm-subagent` and is also model-invoked automatically based on its description. The bundled MCP server is named `local_tester`.
 
 **Requirements on the target machine:** `node` and `npm` on `PATH`, plus network access the first time (to install the dependency). After that the server runs offline. Override the LLM endpoint with the same environment variables described in [MCP Client Setup](#mcp-client-setup) (`LOCAL_LLM_API_URL`, `LOCAL_LLM_MODEL`, and the per-task `LOCAL_LLM_*_MODEL` overrides).
+
+### opencode
+
+opencode has no plugin/marketplace mechanism for MCP servers or skills, so install is a manual copy + merge:
+
+1. `npm run build && npm run build:plugin:opencode`
+2. Copy `plugin/opencode/server/` to `~/.config/opencode/local-tester-server/` and `plugin/opencode/skills/local-llm-subagent/` to `~/.config/opencode/skills/local-llm-subagent/`.
+3. Merge `plugin/opencode/mcp-snippet.jsonc` into your `~/.config/opencode/opencode.jsonc`'s `"mcp"` object.
+4. Provide your token (`npm run gateway:config -- setup`) and restart opencode.
+
+Full instructions: [`plugin/opencode/README.md`](plugin/opencode/README.md) (generated).
+
+### Cursor
+
+Cursor also has no plugin/marketplace mechanism:
+
+1. `npm run build && npm run build:plugin:cursor`
+2. Copy `plugin/cursor/server/` to `~/.cursor/local-tester-server/`.
+3. Merge `plugin/cursor/mcp-snippet.json` into `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project).
+4. Copy `plugin/cursor/rules/local-tester.mdc` into each project's `.cursor/rules/` — Cursor has no filesystem-writable global rule, so this only applies per-project unless you also add an equivalent rule via Cursor Settings.
+5. Provide your token (`npm run gateway:config -- setup`) and restart Cursor.
+
+Full instructions: [`plugin/cursor/README.md`](plugin/cursor/README.md) (generated).
 
 ## Typical Agent Workflow
 

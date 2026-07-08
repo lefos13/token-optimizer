@@ -15,18 +15,20 @@ This repository contains the `local-tester-mcp` server used by the `local-test-v
 
 ## Plugin Generators
 
-Three generators package the same `local-test-verdict` skill for different clients. `npm run build:plugin` runs all of them; each also has a dedicated script.
+Five generators package the same `local-test-verdict` skill for different clients. `npm run build:plugin` runs all of them; each also has a dedicated script.
 
 - `scripts/generate-plugin-antigravity.js` (`npm run build:plugin:antigravity`) → `plugin/antigravity/`. Gitignored — Antigravity loads plugins from a local folder; copy/symlink the generated folder into Antigravity's plugin directory.
 - `scripts/generate-plugin-claude.js` (`npm run build:plugin:claude`) → `plugin/claude/` plus repo-root `.claude-plugin/marketplace.json`. Both committed for git-based marketplace installs.
 - `scripts/generate-plugin-codex.js` (`npm run build:plugin:codex`) → `plugin/codex/` plus repo-root `.agents/plugins/marketplace.json`. Both committed for marketplace installs.
+- `scripts/generate-plugin-opencode.js` (`npm run build:plugin:opencode`) → `plugin/opencode/`. Gitignored — opencode has no plugin/marketplace mechanism; copy the server + skill and merge the MCP snippet by hand (see the generated README).
+- `scripts/generate-plugin-cursor.js` (`npm run build:plugin:cursor`) → `plugin/cursor/`. Gitignored — Cursor has no plugin/marketplace mechanism; copy the server, merge the MCP snippet, and copy the `.mdc` rule per project by hand (see the generated README).
 
 **All generators:**
 
 - Run `npm run build` first — each generator copies `dist/` into its `plugin/<client>/server/`.
 - Launchers (`server/start.sh`) self-locate at runtime. Do not hardcode absolute paths in config files.
 - `node_modules` is not committed. The bundled `server/` carries only compiled JS plus a minimal `package.json`; `start.sh` installs the single runtime dependency on first run.
-- **Bump `VERSION` in the generator script for every change that touches that plugin's output — including wording-only edits to `skill/skill-example.md`.** Run `npm run build:plugin` and commit the regenerated output (Claude and Codex only; Antigravity is gitignored).
+- **Bump `VERSION` in the generator script for every change that touches that plugin's output — including wording-only edits to `skill/skill-example.md`.** Run `npm run build:plugin` and commit the regenerated output (Claude and Codex only; Antigravity, opencode, and Cursor are gitignored).
 
 **Per-generator differences:**
 
@@ -46,6 +48,7 @@ Three generators package the same `local-test-verdict` skill for different clien
 - `src/types.ts`: shared TypeScript contracts for tool arguments and verdict payloads.
 - `README.md`: user-facing setup, tool descriptions, configuration, and troubleshooting instructions.
 - `skill/skill-example.md`: skill-facing usage instructions.
+- `scripts/manage-gateway-config.js`: CLI to configure the LLM gateway token; `enable-defaults` / `disable-defaults` write or remove a standing default-on usage directive in Claude/Codex/Antigravity's global instructions files.
 
 ## MCP Tool Contract
 

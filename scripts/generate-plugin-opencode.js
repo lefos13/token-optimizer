@@ -1,0 +1,199 @@
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+
+/* opencode plugin flow.
+   Generates a portable local_tester bundle under plugin/opencode/ for opencode
+   (https://opencode.ai). opencode has no plugin/marketplace mechanism for MCP
+   servers or skills — plugins are JS lifecycle-hook packages only. MCP servers
+   are registered via a static "mcp" block in opencode.jsonc, and skills are
+   discovered from SKILL.md files under fixed paths (project .opencode/skills/,
+   global ~/.config/opencode/skills/, among others; see opencode.ai/docs/skills
+   and opencode.ai/docs/rules). So this generator produces a bundle plus the
+   exact snippet to merge by hand, rather than something opencode can import
+   directly the way Claude Code's marketplace install works.
+
+   Output layout:
+     plugin/opencode/server/*.js                 (compiled server, copied from dist/)
+     plugin/opencode/server/package.json         (single runtime dep to install)
+     plugin/opencode/server/start.sh             (self-locating launcher)
+     plugin/opencode/skills/local-llm-subagent/SKILL.md
+     plugin/opencode/mcp-snippet.jsonc           (block to merge into opencode.jsonc's "mcp")
+     plugin/opencode/README.md
+   This output is gitignored (see plugin/opencode/ in .gitignore) — like
+   Antigravity, there is no marketplace to fetch it from, so nothing needs to
+   be committed for install.
+   Do not edit generated files by hand; run `npm run build:plugin:opencode`. */
+
+const rootDir = path.resolve(__dirname, "..");
+const pluginDir = path.join(rootDir, "plugin", "opencode");
+const SKILL_NAME = "local-llm-subagent";
+const skillsDir = path.join(pluginDir, "skills", SKILL_NAME);
+const serverDir = path.join(pluginDir, "server");
+const distDir = path.join(rootDir, "dist");
+
+const SERVER_FILES = [
+  "index.js",
+  "analytics.js",
+  "detector.js",
+  "llm.js",
+  "registry.js",
+  "runner.js",
+  "types.js",
+];
+
+/* Conventional install location the README tells the user to copy the server
+   to, so the path baked into mcp-snippet.jsonc matches what actually exists
+   on disk once they follow the instructions. */
+const installedServerDir = path.join(os.homedir(), ".config", "opencode", "local-tester-server");
+
+console.log("Generating opencode plugin structure...");
+
+try {
+  fs.rmSync(pluginDir, { recursive: true, force: true });
+  fs.mkdirSync(skillsDir, { recursive: true });
+  fs.mkdirSync(serverDir, { recursive: true });
+
+  const VERSION = "1.5.0";
+
+  const sdkVersion = require(
+    path.join(rootDir, "node_modules", "@modelcontextprotocol", "sdk", "package.json"),
+  ).version;
+
+  for (const file of SERVER_FILES) {
+    const src = path.join(distDir, file);
+    if (!fs.existsSync(src)) {
+      console.error(`Error: compiled server file missing: ${src}. Run \`npm run build\` first.`);
+      process.exit(1);
+    }
+    fs.copyFileSync(src, path.join(serverDir, file));
+  }
+
+  const serverPackageJson = {
+    name: "local-tester-server",
+    version: VERSION,
+    private: true,
+    description: "Bundled local_tester MCP server (compiled).",
+    main: "index.js",
+    dependencies: {
+      "@modelcontextprotocol/sdk": `^${sdkVersion}`,
+    },
+  };
+  fs.writeFileSync(
+    path.join(serverDir, "package.json"),
+    JSON.stringify(serverPackageJson, null, 2) + "\n",
+  );
+
+  /* Same self-locating idiom as the Antigravity launcher: no plugin-root env
+     var is applicable here (opencode has none for statically-registered MCP
+     commands), so the launcher finds its own directory directly. */
+  const startSh = `#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+DATA="$ROOT/.data"
+mkdir -p "$DATA"
+
+if ! diff -q "$ROOT/package.json" "$DATA/package.json" >/dev/null 2>&1; then
+  cp "$ROOT/package.json" "$DATA/package.json"
+  ( cd "$DATA" && npm install --omit=dev --no-audit --no-fund ) 1>&2
+fi
+
+export NODE_PATH="$DATA/node_modules"
+exec node "$ROOT/index.js"
+`;
+  const startShPath = path.join(serverDir, "start.sh");
+  fs.writeFileSync(startShPath, startSh);
+  fs.chmodSync(startShPath, 0o755);
+
+  const sourceSkill = path.join(rootDir, "skill", "skill-example.md");
+  const destSkill = path.join(skillsDir, "SKILL.md");
+  if (!fs.existsSync(sourceSkill)) {
+    console.error(`Error: Source skill file not found at ${sourceSkill}`);
+    process.exit(1);
+  }
+  fs.copyFileSync(sourceSkill, destSkill);
+
+  /* opencode's config docs (opencode.ai/docs/config) show "{env:VAR}" style
+     interpolation for pulling values from the process environment at
+     runtime, so the token never has to be hardcoded here. */
+  const mcpSnippet = {
+    local_tester: {
+      type: "local",
+      command: ["bash", path.join(installedServerDir, "start.sh")],
+      environment: {
+        LLM_GATEWAY_URL: "{env:LLM_GATEWAY_URL}",
+        LLM_GATEWAY_TOKEN: "{env:LLM_GATEWAY_TOKEN}",
+      },
+      enabled: true,
+    },
+  };
+  fs.writeFileSync(
+    path.join(pluginDir, "mcp-snippet.jsonc"),
+    JSON.stringify(mcpSnippet, null, 2) + "\n",
+  );
+
+  const readme = `# local-tester bundle (opencode)
+
+Bundles the \`local_tester\` MCP server and the \`${SKILL_NAME}\` skill for
+[opencode](https://opencode.ai). opencode has no plugin/marketplace mechanism
+for MCP servers or skills, so this bundle is installed by copying files and
+merging one JSON snippet by hand.
+
+> Generated by \`npm run build:plugin:opencode\`. Do not edit files under
+> \`plugin/\` by hand. This output is gitignored — there is no marketplace to
+> fetch it from, so nothing needs to be committed.
+
+## Contents
+
+- \`server/\` — the compiled MCP server plus a self-locating launcher
+  (\`start.sh\`) and a minimal \`package.json\`.
+- \`skills/${SKILL_NAME}/SKILL.md\` — usage guidance, copied from
+  \`skill/skill-example.md\`. opencode discovers skills from \`SKILL.md\` files
+  under fixed paths — see Install below.
+- \`mcp-snippet.jsonc\` — the exact block to merge into your \`opencode.jsonc\`'s
+  \`"mcp"\`.
+
+## Install
+
+1. Copy the server bundle to a stable location:
+
+   \`\`\`bash
+   mkdir -p ~/.config/opencode/local-tester-server
+   cp -R plugin/opencode/server/* ~/.config/opencode/local-tester-server/
+   \`\`\`
+
+2. Copy the skill so opencode discovers it globally:
+
+   \`\`\`bash
+   mkdir -p ~/.config/opencode/skills/${SKILL_NAME}
+   cp -R plugin/opencode/skills/${SKILL_NAME}/* ~/.config/opencode/skills/${SKILL_NAME}/
+   \`\`\`
+
+3. Merge the contents of \`mcp-snippet.jsonc\` into your
+   \`~/.config/opencode/opencode.jsonc\`'s top-level \`"mcp"\` object (create the
+   \`"mcp"\` key if it does not exist yet).
+
+4. Provide your gateway token: from a repo clone run
+   \`npm run gateway:config -- setup\` and paste your token (it is written to
+   the macOS GUI session via \`launchctl\`, which opencode inherits), or set
+   \`LLM_GATEWAY_TOKEN\` / \`LLM_GATEWAY_URL\` in your own shell/session
+   environment before launching opencode.
+
+5. Restart opencode so it picks up the new MCP server and skill.
+
+**Requirements:** \`node\`, \`npm\`, and \`bash\` on \`PATH\`; network access on
+first run only (to install the bundled server's single runtime dependency into
+a \`.data/\` directory next to itself).
+
+To pick up changes, re-run \`npm run build:plugin:opencode\`, re-copy the
+\`server/\` and \`skills/\` contents, and re-merge \`mcp-snippet.jsonc\` if it
+changed.
+`;
+  fs.writeFileSync(path.join(pluginDir, "README.md"), readme);
+
+  console.log("opencode plugin generated successfully under plugin/opencode/");
+} catch (error) {
+  console.error("Failed to generate opencode plugin:", error);
+  process.exit(1);
+}

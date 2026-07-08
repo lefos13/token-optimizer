@@ -7,6 +7,12 @@ gateway/deploy/gateway.env
 .codex-local-test-runs/
 # Antigravity plugin output is generated; not tracked.
 plugin/antigravity/
+
+# opencode plugin output is generated; not tracked (no marketplace to fetch it from).
+plugin/opencode/
+
+# Cursor plugin output is generated; not tracked (no marketplace to fetch it from).
+plugin/cursor/
 # Claude Code plugin is committed so the marketplace install (git-based) can copy it.
 # Codex plugin is committed so the repo marketplace install can copy it.
 

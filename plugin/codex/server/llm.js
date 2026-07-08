@@ -93,7 +93,7 @@ function resolveLocalProvider(taskType) {
     };
 }
 /* Gateway is the centralized proxy: the client holds a revocable proxy token (not
-   the real OpenRouter key) and sends X-Task-Type so the gateway can pin the model.
+   the real upstream key) and sends X-Task-Type so the gateway can pin the model.
    The model here is nominal; the gateway overrides it and reports the real one. */
 function resolveGatewayProvider(taskType) {
     const token = process.env.LLM_GATEWAY_TOKEN;
@@ -198,7 +198,7 @@ async function callChatCompletion(provider, systemPrompt, userPrompt) {
     if (!rawContent) {
         throw new Error('Empty response from LLM');
     }
-    /* The gateway (and OpenRouter) echo the model that actually ran; prefer it so
+    /* The gateway (and upstream provider) echo the model that actually ran; prefer it so
        analytics/metadata reflect central config without any client update. */
     const responseModel = typeof data.model === 'string' && data.model ? data.model : provider.model;
     const metadata = metadataFromProvider(provider, Date.now() - start);
