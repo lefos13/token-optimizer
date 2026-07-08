@@ -1,0 +1,4 @@
+# /etc/caddy/Caddyfile — automatic HTTPS via Let's Encrypt once the A record resolves.
+llm-proxy.lnf.gr {
+	reverse_proxy 127.0.0.1:8787
+}
