@@ -5,6 +5,9 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
+    "build:gateway": "tsc -p tsconfig.gateway.json",
+    "start:gateway": "node gateway/dist/index.js",
+    "test": "tsc -p tsconfig.test.json && node --test \"./.test-build/test/**/*.test.js\"",
     "build:plugin": "npm run build:plugin:antigravity && npm run build:plugin:claude && npm run build:plugin:codex",
     "build:plugin:antigravity": "node scripts/generate-plugin-antigravity.js",
     "build:plugin:claude": "node scripts/generate-plugin-claude.js",

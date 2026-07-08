@@ -1,5 +1,7 @@
 node_modules/
 dist/
+.test-build/
+gateway/dist/
 .codex-local-test-runs/
 # Antigravity plugin output is generated; not tracked.
 plugin/antigravity/
