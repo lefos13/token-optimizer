@@ -259,8 +259,9 @@ ignored and the actually-used model is reported back in analytics. If the gatewa
 is unreachable, the server falls back to a local model when `LOCAL_LLM_*` is
 configured, otherwise it returns a conservative `uncertain` result.
 
-Precedence: `LLM_GATEWAY_TOKEN` → `OPENROUTER_API_KEY` (direct, for local dev) →
-local model. To host the gateway, see [`gateway/README.md`](gateway/README.md).
+Precedence: `LLM_GATEWAY_URL` + `LLM_GATEWAY_TOKEN` (both must be set together to
+engage the gateway) → `OPENROUTER_API_KEY` (direct, for local dev) → local
+model. To host the gateway, see [`gateway/README.md`](gateway/README.md).
 
 ## OpenRouter Configuration
 
