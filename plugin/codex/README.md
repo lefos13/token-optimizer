@@ -9,7 +9,7 @@ with raw logs.
 
 ## Contents
 
-- `.codex-plugin/plugin.json` - plugin manifest (`local-tester` v1.3.0).
+- `.codex-plugin/plugin.json` - plugin manifest (`local-tester` v1.4.0).
 - `.mcp.json` - registers the `local_tester` stdio server via the `mcpServers` wrapper, launched via `bash -c` so the shell resolves the plugin root at runtime.
 - `server/` - the compiled MCP server plus a launcher (`start.sh`) and a minimal `package.json`.
 - `skills/local-llm-subagent/SKILL.md` - usage guidance, copied from `skill/skill-example.md`.
@@ -34,18 +34,16 @@ runs offline.
 
 ## LLM configuration
 
-**OpenRouter (primary):** Run `npm run openrouter:config -- setup` from the repository. The config manager stores `OPENROUTER_*` in the macOS GUI session with `launchctl`, and the generated `env_vars` pass-through forwards those values into the bundled MCP server when Codex launches normally. `OPENROUTER_MODEL` sets the default model (falls back to `openai/gpt-4o-mini`). Per-task overrides: `OPENROUTER_VERDICT_MODEL`, `OPENROUTER_TRIAGE_MODEL`, `OPENROUTER_REVIEW_MODEL`, `OPENROUTER_DIGEST_MODEL`, `OPENROUTER_SCOUT_MODEL`, `OPENROUTER_QUERY_MODEL`.
+**Centralized gateway (primary):** The plugin is preconfigured with the gateway URL (`https://llm-proxy.lnf.gr/v1`). Provide your per-person proxy token: from a repo clone run `npm run gateway:config -- setup` and paste the token (it is written to every client on your machine), or set `LLM_GATEWAY_TOKEN` manually in this client's config. Models are chosen centrally on the gateway; no client-side model configuration is needed.
 
 > **JSON mode requirement:** All requests send `response_format: { type: "json_object" }`. The chosen model must support JSON mode. Compatible models include `openai/gpt-4o`, `openai/gpt-4o-mini`, `anthropic/claude-3-5-sonnet`, `anthropic/claude-3-haiku`, and `google/gemini-flash-1.5`. Check the [OpenRouter models page](https://openrouter.ai/models) and filter by JSON mode support.
 
-**Local LLM (fallback):** When `OPENROUTER_API_KEY` is absent, the server uses a local OpenAI-compatible endpoint. Defaults: `LOCAL_LLM_API_URL=http://localhost:8080/v1`, `LOCAL_LLM_MODEL=local-model`. Per-task overrides: `LOCAL_LLM_VERDICT_MODEL`, `LOCAL_LLM_TRIAGE_MODEL`, `LOCAL_LLM_REVIEW_MODEL`, `LOCAL_LLM_DIGEST_MODEL`, `LOCAL_LLM_SCOUT_MODEL`, `LOCAL_LLM_QUERY_MODEL`.
+**Local LLM (fallback):** The server uses a local OpenAI-compatible endpoint. Defaults: `LOCAL_LLM_API_URL=http://localhost:8080/v1`, `LOCAL_LLM_MODEL=local-model`. Per-task overrides: `LOCAL_LLM_VERDICT_MODEL`, `LOCAL_LLM_TRIAGE_MODEL`, `LOCAL_LLM_REVIEW_MODEL`, `LOCAL_LLM_DIGEST_MODEL`, `LOCAL_LLM_SCOUT_MODEL`, `LOCAL_LLM_QUERY_MODEL`.
 
-Codex ships this plugin with only the local fallback keys in `env`, plus an
-`env_vars` allowlist that forwards host `OPENROUTER_*` variables at runtime.
-Use `npm run openrouter:config -- update` to change those values later,
-`npm run openrouter:config -- status` to inspect them, and
-`npm run openrouter:config -- delete` to remove them from the GUI-session
-environment. That keeps secrets out of cached plugin files.
+The plugin ships with the gateway URL baked in (`https://llm-proxy.lnf.gr/v1`).
+Your per-person gateway token is passed through via `env_vars`, allowing a session
+to override `LLM_GATEWAY_TOKEN` or `LLM_GATEWAY_URL` at runtime.
+Use `npm run gateway:config` to manage your gateway token across all clients on your machine.
 
 ## Install
 

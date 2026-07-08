@@ -79,7 +79,7 @@ try {
      install (Antigravity does not document version-gated update pulls the way
      Claude Code's marketplace install does, but keeping this accurate still
      matters for users diffing or re-staging the plugin folder). */
-  const VERSION = "1.3.0";
+  const VERSION = "1.4.0";
 
   const sdkVersion = require(
     path.join(
@@ -117,16 +117,15 @@ try {
      directory; self-contained plugin bundles only make sense if the host
      resolves bundled paths relative to the staged plugin root.
 
-     Leave OpenRouter variables out of the generated env block. Empty plugin-
-     scoped placeholders override real values from the user's stable Gemini or
-     Antigravity MCP config, which forces manual secret edits inside the staged
-     plugin folder after every reinstall. */
+     The gateway URL is baked as the default. The per-person LLM_GATEWAY_TOKEN
+     is written into the staged/global mcp_config.json by `npm run gateway:config`. */
   const mcpConfigJson = {
     mcpServers: {
       local_tester: {
         command: "bash",
         args: [path.join(os.homedir(), ".gemini", "config", "plugins", PLUGIN_NAME, "server", "start.sh")],
         env: {
+          LLM_GATEWAY_URL: "https://llm-proxy.lnf.gr/v1",
           LOCAL_LLM_API_URL: "http://localhost:8080/v1",
           LOCAL_LLM_MODEL: "local-model",
         },
@@ -241,13 +240,13 @@ is also model-invoked automatically based on its description.
 
 ## LLM configuration
 
-**OpenRouter (primary):** Run \`npm run openrouter:config -- setup\` from the repository to write \`OPENROUTER_*\` into the stable Gemini config and the staged Antigravity plugin config automatically. \`OPENROUTER_MODEL\` sets the default model (falls back to \`openai/gpt-4o-mini\`). Per-task overrides: \`OPENROUTER_VERDICT_MODEL\`, \`OPENROUTER_TRIAGE_MODEL\`, \`OPENROUTER_REVIEW_MODEL\`, \`OPENROUTER_DIGEST_MODEL\`, \`OPENROUTER_SCOUT_MODEL\`, \`OPENROUTER_QUERY_MODEL\`.
+**Centralized gateway (primary):** The plugin is preconfigured with the gateway URL (\`https://llm-proxy.lnf.gr/v1\`). Provide your per-person proxy token: from a repo clone run \`npm run gateway:config -- setup\` and paste the token (it is written to every client on your machine), or set \`LLM_GATEWAY_TOKEN\` manually in this client's config. Models are chosen centrally on the gateway; no client-side model configuration is needed.
 
 > **JSON mode requirement:** All requests send \`response_format: { type: "json_object" }\`. The chosen model must support JSON mode. Compatible models include \`openai/gpt-4o\`, \`openai/gpt-4o-mini\`, \`anthropic/claude-3-5-sonnet\`, \`anthropic/claude-3-haiku\`, and \`google/gemini-flash-1.5\`. Check the [OpenRouter models page](https://openrouter.ai/models) and filter by JSON mode support.
 
-**Local LLM (fallback):** When \`OPENROUTER_API_KEY\` is absent, the server uses a local OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`.
+**Local LLM (fallback):** The server uses a local OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`.
 
-Use \`npm run openrouter:config -- update\` to change those values later, \`npm run openrouter:config -- status\` to inspect them, and \`npm run openrouter:config -- delete\` to remove them from the managed config files.
+Use \`npm run gateway:config\` to manage your gateway token across all clients on your machine.
 
 ## Install
 

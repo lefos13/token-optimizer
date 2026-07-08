@@ -15,10 +15,7 @@ exports.queryLogQuestion = queryLogQuestion;
 const LLM_USAGE = Symbol('llmUsage');
 const LLM_METADATA = Symbol('llmMetadata');
 const LOCAL_PROVIDER_NAME = 'local-openai-compatible';
-const OPENROUTER_PROVIDER_NAME = 'openrouter';
 exports.GATEWAY_PROVIDER_NAME = 'gateway';
-const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1';
-const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4o-mini';
 const DEFAULT_API_URL = 'http://localhost:8080/v1';
 const DEFAULT_MODEL = 'local-model';
 const TASK_MODEL_ENV = {
@@ -28,15 +25,6 @@ const TASK_MODEL_ENV = {
     digest: 'LOCAL_LLM_DIGEST_MODEL',
     scout: 'LOCAL_LLM_SCOUT_MODEL',
     query: 'LOCAL_LLM_QUERY_MODEL',
-    health: undefined
-};
-const TASK_OPENROUTER_MODEL_ENV = {
-    verdict: 'OPENROUTER_VERDICT_MODEL',
-    triage: 'OPENROUTER_TRIAGE_MODEL',
-    review: 'OPENROUTER_REVIEW_MODEL',
-    digest: 'OPENROUTER_DIGEST_MODEL',
-    scout: 'OPENROUTER_SCOUT_MODEL',
-    query: 'OPENROUTER_QUERY_MODEL',
     health: undefined
 };
 const VERDICT_CONFIDENCE_FLOOR = 0.4;
@@ -128,17 +116,6 @@ function resolveProvider(taskType) {
     const gateway = resolveGatewayProvider(taskType);
     if (gateway) {
         return gateway;
-    }
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (apiKey) {
-        const modelEnvName = TASK_OPENROUTER_MODEL_ENV[taskType];
-        return {
-            taskType,
-            providerName: OPENROUTER_PROVIDER_NAME,
-            apiUrl: OPENROUTER_API_URL,
-            model: (modelEnvName && process.env[modelEnvName]) || process.env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL,
-            authHeaders: { Authorization: `Bearer ${apiKey}` }
-        };
     }
     return resolveLocalProvider(taskType);
 }
@@ -232,10 +209,11 @@ async function callChatCompletion(provider, systemPrompt, userPrompt) {
         metadata
     };
 }
-/* Resolve provider, attempt the call. If the primary provider is OpenRouter and the call fails, retry once with the local provider and surface the fallback reason in metadata. */
+/* Resolve provider, attempt the call. If the primary provider is the gateway and the call
+   fails, retry once with the local provider and surface the fallback reason in metadata. */
 async function callWithFallback(taskType, systemPrompt, userPrompt) {
     const provider = resolveProvider(taskType);
-    const isRemote = provider.providerName === OPENROUTER_PROVIDER_NAME || provider.providerName === exports.GATEWAY_PROVIDER_NAME;
+    const isRemote = provider.providerName === exports.GATEWAY_PROVIDER_NAME;
     try {
         return await callChatCompletion(provider, systemPrompt, userPrompt);
     }
@@ -296,21 +274,6 @@ async function checkLocalLLMHealth() {
                 error: error.message || String(error)
             };
         }
-    }
-    /* When OpenRouter is the configured primary, skip the local ping. The API key
-       is assumed valid; any live failure surfaces via fallbackReason on real calls. */
-    if (process.env.OPENROUTER_API_KEY) {
-        const model = process.env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL;
-        return {
-            llmAvailable: true,
-            llmProvider: OPENROUTER_PROVIDER_NAME,
-            llmModel: model,
-            llmLatencyMs: 0,
-            llmTaskType: 'health',
-            apiBase: OPENROUTER_API_URL,
-            available: true,
-            skipped: true
-        };
     }
     const provider = resolveLocalProvider('health');
     const systemPrompt = 'Return JSON only.';

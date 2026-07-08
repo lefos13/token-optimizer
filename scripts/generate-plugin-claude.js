@@ -63,7 +63,7 @@ try {
   /* Bump this on every meaningful change. Claude only pulls plugin updates
      when the version changes; keeping it static pins installs to the commit
      they were first installed from and updates become silent no-ops. */
-  const VERSION = "1.3.0";
+  const VERSION = "1.4.0";
 
   /* Pin the runtime dep to the version this repo was built and tested against. */
   const sdkVersion = require(
@@ -122,24 +122,17 @@ try {
      portable: it carries its own compiled server and resolves deps relative to
      the install dir rather than an absolute repo path.
 
-     Resolve OpenRouter variables from the host-managed environment instead of
-     hardcoding plugin-scoped values. Claude Code expands ${VAR} placeholders
-     from its settings or launch environment, so the secret stays in the
-     stable user config while fresh plugin caches keep the same behavior. */
+     Resolve the gateway token from the host-managed environment (Claude Code
+     expands ${VAR} placeholders from settings or launch environment), while the
+     gateway URL is defaulted to the primary endpoint. */
   const mcpJson = {
     mcpServers: {
       local_tester: {
         command: "bash",
         args: ["${CLAUDE_PLUGIN_ROOT}/server/start.sh"],
         env: {
-          OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}",
-          OPENROUTER_MODEL: "${OPENROUTER_MODEL:-}",
-          OPENROUTER_VERDICT_MODEL: "${OPENROUTER_VERDICT_MODEL:-}",
-          OPENROUTER_TRIAGE_MODEL: "${OPENROUTER_TRIAGE_MODEL:-}",
-          OPENROUTER_REVIEW_MODEL: "${OPENROUTER_REVIEW_MODEL:-}",
-          OPENROUTER_DIGEST_MODEL: "${OPENROUTER_DIGEST_MODEL:-}",
-          OPENROUTER_SCOUT_MODEL: "${OPENROUTER_SCOUT_MODEL:-}",
-          OPENROUTER_QUERY_MODEL: "${OPENROUTER_QUERY_MODEL:-}",
+          LLM_GATEWAY_URL: "${LLM_GATEWAY_URL:-https://llm-proxy.lnf.gr/v1}",
+          LLM_GATEWAY_TOKEN: "${LLM_GATEWAY_TOKEN:-}",
           LOCAL_LLM_API_URL: "http://localhost:8080/v1",
           LOCAL_LLM_MODEL: "local-model",
         },
@@ -244,13 +237,13 @@ automatically based on its description.
 
 ## LLM configuration
 
-**OpenRouter (primary):** Run \`npm run openrouter:config -- setup\` from the repository to write \`OPENROUTER_*\` into \`~/.claude/settings.json\`. The generated \`.mcp.json\` reads those values through Claude's variable expansion, so plugin cache updates do not require secret edits. \`OPENROUTER_MODEL\` sets the default model (falls back to \`openai/gpt-4o-mini\`). Per-task overrides: \`OPENROUTER_VERDICT_MODEL\`, \`OPENROUTER_TRIAGE_MODEL\`, \`OPENROUTER_REVIEW_MODEL\`, \`OPENROUTER_DIGEST_MODEL\`, \`OPENROUTER_SCOUT_MODEL\`, \`OPENROUTER_QUERY_MODEL\`.
+**Centralized gateway (primary):** The plugin is preconfigured with the gateway URL (\`https://llm-proxy.lnf.gr/v1\`). Provide your per-person proxy token: from a repo clone run \`npm run gateway:config -- setup\` and paste the token (it is written to every client on your machine), or set \`LLM_GATEWAY_TOKEN\` manually in this client's config. Models are chosen centrally on the gateway; no client-side model configuration is needed.
 
 > **JSON mode requirement:** All requests send \`response_format: { type: "json_object" }\`. The chosen model must support JSON mode. Compatible models include \`openai/gpt-4o\`, \`openai/gpt-4o-mini\`, \`anthropic/claude-3-5-sonnet\`, \`anthropic/claude-3-haiku\`, and \`google/gemini-flash-1.5\`. Check the [OpenRouter models page](https://openrouter.ai/models) and filter by JSON mode support.
 
-**Local LLM (fallback):** When \`OPENROUTER_API_KEY\` is absent, the server uses a local OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`.
+**Local LLM (fallback):** The server uses a local OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`.
 
-Use \`npm run openrouter:config -- update\` to change those values later, \`npm run openrouter:config -- status\` to inspect them, and \`npm run openrouter:config -- delete\` to remove them from the managed settings file. Only replace the generated \`\\\${...}\` entries in the installed plugin's \`.mcp.json\` if you explicitly want plugin-scoped overrides.
+Use \`npm run gateway:config\` to manage your gateway token across all clients on your machine.
 
 ## Install
 

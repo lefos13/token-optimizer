@@ -8,16 +8,11 @@
       ],
       "cwd": ".",
       "env_vars": [
-        "OPENROUTER_API_KEY",
-        "OPENROUTER_MODEL",
-        "OPENROUTER_VERDICT_MODEL",
-        "OPENROUTER_TRIAGE_MODEL",
-        "OPENROUTER_REVIEW_MODEL",
-        "OPENROUTER_DIGEST_MODEL",
-        "OPENROUTER_SCOUT_MODEL",
-        "OPENROUTER_QUERY_MODEL"
+        "LLM_GATEWAY_TOKEN",
+        "LLM_GATEWAY_URL"
       ],
       "env": {
+        "LLM_GATEWAY_URL": "https://llm-proxy.lnf.gr/v1",
         "LOCAL_LLM_API_URL": "http://localhost:8080/v1",
         "LOCAL_LLM_MODEL": "local-model"
       }
