@@ -19,6 +19,10 @@ URL is already preconfigured in the plugin.
 - **Codex:** install from the marketplace (`token-optimizer`).
 - **Antigravity:** copy or symlink the generated `plugin/antigravity/` folder into
   Antigravity's plugin directory.
+- **opencode:** copy the generated server and skill bundle into
+  `~/.config/opencode/`.
+- **Cursor:** copy the generated server bundle into `~/.cursor/` and copy the
+  generated rule into each project that should use it.
 
 ### 2. Provide your token
 
@@ -30,14 +34,16 @@ The gateway URL is baked in; the only value you supply is your token.
   - Claude Code → `~/.claude/settings.json` under `env`
   - Codex → your shell/launch environment (it is passed through)
   - Antigravity → its `mcp_config.json` under the `token_optimizer` `env`
+  - opencode → `~/.config/opencode/opencode.jsonc` under `mcp.token_optimizer.environment`
+  - Cursor → `~/.cursor/mcp.json` under `mcpServers.token_optimizer.env`
 
-To make the tools default-on (used automatically unless you say otherwise) in Claude Code, Codex, and Antigravity, also run:
+To make the tools default-on (used automatically unless you say otherwise) in clients with writable global instruction files, also run:
 
 ```bash
 npm run gateway:config -- enable-defaults
 ```
 
-This writes a standing directive into each client's global instructions file (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`). Run `npm run gateway:config -- disable-defaults` to remove it, or `npm run gateway:config -- status` to check whether it's set.
+This writes a standing directive into each managed global instructions file (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`, `~/.config/opencode/AGENTS.md`). Cursor rules remain project-scoped unless you add an equivalent global rule through Cursor Settings. Run `npm run gateway:config -- disable-defaults` to remove the managed directives, or `npm run gateway:config -- status` to check whether they're set.
 
 ### 3. Verify
 
@@ -322,6 +328,8 @@ config surfaces for the supported clients:
 - Claude Code: `~/.claude/settings.json`
 - Gemini CLI: `~/.gemini/config/mcp_config.json`
 - Antigravity staged plugin: `~/.gemini/config/plugins/token-optimizer/mcp_config.json` when present
+- OpenCode: `~/.config/opencode/opencode.jsonc`
+- Cursor: `~/.cursor/mcp.json`
 - Codex and other macOS GUI app launches: the current user `launchctl` environment
 
 Other commands:
@@ -483,13 +491,15 @@ Restart or reload the MCP client after changing the server path, environment var
 
 ## Plugins
 
-This repository can generate the `token-optimizer` plugin for **three different clients**, each with its own generator and output directory. All variants ship the same skill content (from `skill/skill-example.md`), but package it differently for each client.
+This repository can generate the `token-optimizer` plugin or bundle for **five different clients**, each with its own generator and output directory. All variants ship the same skill content (from `skill/skill-example.md`) where the target client supports skills, but package it differently for each client.
 
 | Client      | npm script                     | Output             | Tracked in git | Packaging                                                                 |
 | ----------- | ------------------------------ | ------------------ | -------------- | ------------------------------------------------------------------------ |
 | Antigravity | `npm run build:plugin:antigravity` | `plugin/antigravity/` | No (gitignored) | Self-contained: `plugin.json`, `mcp_config.json` (registers the bundled server), portable `server/`, `skills/`. |
 | Claude Code | `npm run build:plugin:claude`      | `plugin/claude/`      | Yes            | `.claude-plugin/` manifest, bundled portable MCP server, local marketplace. |
 | Codex       | `npm run build:plugin:codex`       | `plugin/codex/`       | Yes            | `.codex-plugin/` manifest, `.mcp.json` with top-level `mcp_servers`, bundled portable MCP server, repo marketplace. |
+| opencode    | `npm run build:plugin:opencode`    | `plugin/opencode/`    | No (gitignored) | Copyable server, global skill, and MCP config snippet. |
+| Cursor      | `npm run build:plugin:cursor`      | `plugin/cursor/`      | No (gitignored) | Copyable server, project rule, and MCP config snippet. |
 
 Run all generators at once with `npm run build:plugin`.
 
@@ -580,12 +590,12 @@ The skill is available as `token-optimizer` and is also model-invoked automatica
 
 ### opencode
 
-opencode has no plugin/marketplace mechanism for MCP servers or skills, so install is a manual copy + merge:
+opencode has no plugin/marketplace mechanism for MCP servers or skills, so install is a copy plus config step:
 
 1. `npm run build && npm run build:plugin:opencode`
 2. Copy `plugin/opencode/server/` to `~/.config/opencode/token-optimizer-server/` and `plugin/opencode/skills/token-optimizer/` to `~/.config/opencode/skills/token-optimizer/`.
-3. Merge `plugin/opencode/mcp-snippet.jsonc` into your `~/.config/opencode/opencode.jsonc`'s `"mcp"` object.
-4. Provide your token (`npm run gateway:config -- setup`) and restart opencode.
+3. Provide your token with `npm run gateway:config -- setup`; it writes the `token_optimizer` MCP block and gateway environment into `~/.config/opencode/opencode.jsonc`.
+4. Run `npm run gateway:config -- enable-defaults` if you want the default-on directive in `~/.config/opencode/AGENTS.md`, then restart opencode.
 
 Full instructions: [`plugin/opencode/README.md`](plugin/opencode/README.md) (generated).
 
@@ -595,11 +605,22 @@ Cursor also has no plugin/marketplace mechanism:
 
 1. `npm run build && npm run build:plugin:cursor`
 2. Copy `plugin/cursor/server/` to `~/.cursor/token-optimizer-server/`.
-3. Merge `plugin/cursor/mcp-snippet.json` into `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project).
+3. Provide your token with `npm run gateway:config -- setup`; it writes the `token_optimizer` MCP block and gateway environment into `~/.cursor/mcp.json`.
 4. Copy `plugin/cursor/rules/token-optimizer.mdc` into each project's `.cursor/rules/` — Cursor has no filesystem-writable global rule, so this only applies per-project unless you also add an equivalent rule via Cursor Settings.
-5. Provide your token (`npm run gateway:config -- setup`) and restart Cursor.
+5. Restart Cursor.
 
 Full instructions: [`plugin/cursor/README.md`](plugin/cursor/README.md) (generated).
+
+### One-command npm installer feasibility
+
+Packaging the end-user install flow as an npm package is feasible, with client-specific limits:
+
+- The npm package can ship the compiled server, generated skill/rule files, and an installer CLI such as `npx token-optimizer-setup`.
+- The CLI can copy the server bundle, create or update MCP config files, prompt once for the gateway token, write the managed gateway env values, and apply default-on instruction files where the target client exposes a writable file.
+- Claude Code and Codex marketplace registration can be automated when their CLIs are installed, but the installer should still detect missing CLIs and print the exact fallback command.
+- Antigravity, opencode, and Cursor can be installed by direct file copy and config mutation because their generated bundles are file-based.
+- Cursor remains the main partial exception: the CLI can write global MCP config, but project rules still need either per-project `.cursor/rules/token-optimizer.mdc` writes or a manual global User Rule in Cursor Settings.
+- The package should be a separate installer package from the MCP server package so it can own OS-specific setup, backups, idempotency, and uninstall/update commands without changing the server runtime.
 
 ## Typical Agent Workflow
 

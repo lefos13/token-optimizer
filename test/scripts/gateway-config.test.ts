@@ -34,9 +34,20 @@ test('mergeManagedEnvValues sets provided keys and deletes empty ones', () => {
   assert.ok(!('LLM_GATEWAY_TOKEN' in merged)); // empty managed value removed
 });
 
-test('applyToTargets writes gateway values to Claude + Gemini configs, collect reads them back, empty clears', () => {
+test('applyToTargets writes gateway values to every managed client config, collect reads them back, empty clears', () => {
   const home = tmpHome();
   const values = { LLM_GATEWAY_URL: 'https://llm-proxy.lnf.gr/v1', LLM_GATEWAY_TOKEN: 'person-token' };
+
+  const opencodePath = path.join(home, '.config', 'opencode', 'opencode.jsonc');
+  fs.mkdirSync(path.dirname(opencodePath), { recursive: true });
+  fs.writeFileSync(opencodePath, `{
+    // Existing OpenCode config should survive the gateway manager.
+    "$schema": "https://opencode.ai/config.json",
+    "mcp": {
+      "existing": { "type": "local", "command": ["node", "server.js"], },
+    },
+  }\n`);
+
   cli.applyToTargets(values, home);
 
   const claude = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
@@ -46,11 +57,26 @@ test('applyToTargets writes gateway values to Claude + Gemini configs, collect r
   const gemini = JSON.parse(fs.readFileSync(path.join(home, '.gemini', 'config', 'mcp_config.json'), 'utf8'));
   assert.equal(gemini.mcpServers.token_optimizer.env.LLM_GATEWAY_TOKEN, 'person-token');
 
+  const opencode = JSON.parse(fs.readFileSync(opencodePath, 'utf8'));
+  assert.equal(opencode.mcp.token_optimizer.environment.LLM_GATEWAY_TOKEN, 'person-token');
+  assert.equal(opencode.mcp.token_optimizer.environment.LLM_GATEWAY_URL, 'https://llm-proxy.lnf.gr/v1');
+  assert.equal(opencode.mcp.existing.command[1], 'server.js');
+
+  const cursor = JSON.parse(fs.readFileSync(path.join(home, '.cursor', 'mcp.json'), 'utf8'));
+  assert.equal(cursor.mcpServers.token_optimizer.env.LLM_GATEWAY_TOKEN, 'person-token');
+  assert.equal(cursor.mcpServers.token_optimizer.env.LLM_GATEWAY_URL, 'https://llm-proxy.lnf.gr/v1');
+
   assert.equal(cli.collectCurrentValues(home).LLM_GATEWAY_TOKEN, 'person-token');
 
   cli.applyToTargets({}, home);
   const cleared = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
   assert.ok(!('LLM_GATEWAY_TOKEN' in cleared.env));
+
+  const clearedOpencode = JSON.parse(fs.readFileSync(opencodePath, 'utf8'));
+  assert.ok(!('LLM_GATEWAY_TOKEN' in clearedOpencode.mcp.token_optimizer.environment));
+
+  const clearedCursor = JSON.parse(fs.readFileSync(path.join(home, '.cursor', 'mcp.json'), 'utf8'));
+  assert.ok(!('LLM_GATEWAY_TOKEN' in clearedCursor.mcpServers.token_optimizer.env));
 });
 
 test('launchctl values round-trip through the state-file seam', () => {
@@ -72,11 +98,15 @@ test('applyDirectiveToTargets inserts the block into existing global instruction
   const claudeMd = path.join(home, '.claude', 'CLAUDE.md');
   fs.mkdirSync(path.dirname(claudeMd), { recursive: true });
   fs.writeFileSync(claudeMd, '# My existing instructions\n');
+  const opencodeAgents = path.join(home, '.config', 'opencode', 'AGENTS.md');
+  fs.mkdirSync(path.dirname(opencodeAgents), { recursive: true });
+  fs.writeFileSync(opencodeAgents, '# OpenCode instructions\n');
 
   cli.applyDirectiveToTargets(home);
   const first = fs.readFileSync(claudeMd, 'utf8');
   assert.ok(first.includes('# My existing instructions'));
   assert.ok(cli.hasDirectiveBlock(first));
+  assert.ok(cli.hasDirectiveBlock(fs.readFileSync(opencodeAgents, 'utf8')));
 
   cli.applyDirectiveToTargets(home); // re-run must not duplicate
   const second = fs.readFileSync(claudeMd, 'utf8');
@@ -84,10 +114,31 @@ test('applyDirectiveToTargets inserts the block into existing global instruction
   assert.equal(occurrences, 1);
 });
 
-test('applyDirectiveToTargets skips files that do not exist', () => {
-  const home = tmpHome(); // no .codex/AGENTS.md created
-  cli.applyDirectiveToTargets(home); // must not throw or create the file
-  assert.ok(!fs.existsSync(path.join(home, '.codex', 'AGENTS.md')));
+test('stripJsonCommentsAndTrailingCommas preserves URLs while removing JSONC comments', () => {
+  const stripped = cli.stripJsonCommentsAndTrailingCommas(`{
+    "url": "https://example.test/v1", // comment
+    "nested": {
+      "enabled": true,
+    },
+    /* block comment */
+    "items": [1, 2,],
+    "literal": "keep ,] and ,} inside strings",
+  }`);
+  assert.deepEqual(JSON.parse(stripped), {
+    url: 'https://example.test/v1',
+    nested: { enabled: true },
+    items: [1, 2],
+    literal: 'keep ,] and ,} inside strings',
+  });
+});
+
+test('applyDirectiveToTargets creates missing managed instruction files', () => {
+  const home = tmpHome();
+  cli.applyDirectiveToTargets(home);
+  const agentsPath = path.join(home, '.codex', 'AGENTS.md');
+  const opencodePath = path.join(home, '.config', 'opencode', 'AGENTS.md');
+  assert.ok(cli.hasDirectiveBlock(fs.readFileSync(agentsPath, 'utf8')));
+  assert.ok(cli.hasDirectiveBlock(fs.readFileSync(opencodePath, 'utf8')));
 });
 
 test('removeDirectiveFromTargets removes a previously-inserted block and is a no-op when absent', () => {
@@ -137,4 +188,3 @@ test('removeDirectiveBlock removes the block, and collapses multiple newlines (s
   const contentCrlf = `Hello\r\n\r\n\r\n${blockCrlf}\r\n\r\n\r\nWorld`;
   assert.equal(cli.removeDirectiveBlock(contentCrlf), 'Hello\n\nWorld');
 });
-

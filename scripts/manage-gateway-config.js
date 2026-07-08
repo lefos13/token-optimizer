@@ -32,13 +32,15 @@ ${DIRECTIVE_MARKER_END}
 
 /* Global instruction files each client reads on its own (not MCP config), so
    this is a separate target list from getManagedTargets — different files,
-   different mutation shape (raw text, not JSON). */
+   different mutation shape (raw text, not JSON). Cursor project rules are not
+   included because Cursor has no filesystem-writable global .mdc rule path. */
 function getDirectiveTargets(home) {
   const homeDir = path.resolve(home || process.env.HOME || os.homedir());
   return [
     { label: "Claude Code global instructions", filePath: path.join(homeDir, ".claude", "CLAUDE.md") },
     { label: "Codex global instructions", filePath: path.join(homeDir, ".codex", "AGENTS.md") },
     { label: "Antigravity/Gemini global instructions", filePath: path.join(homeDir, ".gemini", "GEMINI.md") },
+    { label: "OpenCode global instructions", filePath: path.join(homeDir, ".config", "opencode", "AGENTS.md") },
   ];
 }
 
@@ -76,11 +78,11 @@ function directiveBackupRoot(home) {
 function applyDirectiveToTargets(home) {
   const backupRoot = directiveBackupRoot(home);
   for (const target of getDirectiveTargets(home)) {
-    if (!fs.existsSync(target.filePath)) {
-      continue;
+    if (fs.existsSync(target.filePath)) {
+      backupFileIfPresent(target.filePath, backupRoot);
     }
-    backupFileIfPresent(target.filePath, backupRoot);
-    const content = fs.readFileSync(target.filePath, "utf8");
+    ensureDirectory(path.dirname(target.filePath));
+    const content = fs.existsSync(target.filePath) ? fs.readFileSync(target.filePath, "utf8") : "";
     fs.writeFileSync(target.filePath, applyDirectiveBlock(content));
   }
 }
@@ -124,8 +126,17 @@ function getManagedTargets(home) {
   const antigravityPluginConfigPath = path.join(
     homeDir, ".gemini", "config", "plugins", "token-optimizer", "mcp_config.json"
   );
+  const opencodeConfigPath = path.join(homeDir, ".config", "opencode", "opencode.jsonc");
+  const cursorConfigPath = path.join(homeDir, ".cursor", "mcp.json");
   const localTesterServerArgs = [
     path.join(homeDir, ".gemini", "config", "plugins", "token-optimizer", "server", "start.sh"),
+  ];
+  const opencodeServerCommand = [
+    "bash",
+    path.join(homeDir, ".config", "opencode", "token-optimizer-server", "start.sh"),
+  ];
+  const cursorServerArgs = [
+    path.join(homeDir, ".cursor", "token-optimizer-server", "start.sh"),
   ];
 
   return [
@@ -179,6 +190,56 @@ function getManagedTargets(home) {
         next.mcpServers.token_optimizer = next.mcpServers.token_optimizer || {
           command: "bash", args: localTesterServerArgs,
         };
+        next.mcpServers.token_optimizer.env = mergeManagedEnvValues(
+          next.mcpServers.token_optimizer.env || {}, values
+        );
+        return next;
+      },
+    },
+    {
+      label: "OpenCode global config",
+      filePath: opencodeConfigPath,
+      backupRoot,
+      readConfig: readJsoncFile,
+      writeConfig: writeJsonFile,
+      getValues(config) { return sanitizeEnvObject(config?.mcp?.token_optimizer?.environment || {}); },
+      applyValues(config, values) {
+        const next = config;
+        next.mcp = next.mcp || {};
+        next.mcp.token_optimizer = next.mcp.token_optimizer || {
+          type: "local",
+          command: opencodeServerCommand,
+          enabled: true,
+        };
+        next.mcp.token_optimizer.type = next.mcp.token_optimizer.type || "local";
+        next.mcp.token_optimizer.command =
+          Array.isArray(next.mcp.token_optimizer.command) && next.mcp.token_optimizer.command.length > 0
+            ? next.mcp.token_optimizer.command : opencodeServerCommand;
+        next.mcp.token_optimizer.enabled = next.mcp.token_optimizer.enabled !== false;
+        next.mcp.token_optimizer.environment = mergeManagedEnvValues(
+          next.mcp.token_optimizer.environment || {}, values
+        );
+        return next;
+      },
+    },
+    {
+      label: "Cursor global MCP config",
+      filePath: cursorConfigPath,
+      backupRoot,
+      readConfig: readJsonFile,
+      writeConfig: writeJsonFile,
+      getValues(config) { return sanitizeEnvObject(config?.mcpServers?.token_optimizer?.env || {}); },
+      applyValues(config, values) {
+        const next = config;
+        next.mcpServers = next.mcpServers || {};
+        next.mcpServers.token_optimizer = next.mcpServers.token_optimizer || {
+          command: "bash",
+          args: cursorServerArgs,
+        };
+        next.mcpServers.token_optimizer.command = next.mcpServers.token_optimizer.command || "bash";
+        next.mcpServers.token_optimizer.args =
+          Array.isArray(next.mcpServers.token_optimizer.args) && next.mcpServers.token_optimizer.args.length > 0
+            ? next.mcpServers.token_optimizer.args : cursorServerArgs;
         next.mcpServers.token_optimizer.env = mergeManagedEnvValues(
           next.mcpServers.token_optimizer.env || {}, values
         );
@@ -262,7 +323,7 @@ Commands:
   update           Prompt again and replace the managed gateway values
   delete           Remove managed gateway values from all managed clients
   status           Show current managed gateway values, GUI-session state, and directive status
-  enable-defaults  Write a default-on usage directive into Claude/Codex/Antigravity global instructions
+  enable-defaults  Write a default-on usage directive into managed global instructions
   disable-defaults Remove the default-on usage directive from those files
 
 When no command is provided, the script prompts for one interactively.`);
@@ -422,8 +483,125 @@ function readJsonFile(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+/* OpenCode accepts JSONC for its global config. The manager only needs to read
+   normal config objects and write canonical JSON, so it strips comments and
+   trailing commas before parsing instead of introducing a runtime parser
+   dependency into this repo-shipped setup script. */
+function readJsoncFile(filePath) {
+  return JSON.parse(stripJsonCommentsAndTrailingCommas(fs.readFileSync(filePath, "utf8")));
+}
+
 function writeJsonFile(filePath, config) {
   fs.writeFileSync(filePath, `${JSON.stringify(config, null, 2)}\n`);
+}
+
+function stripJsonCommentsAndTrailingCommas(content) {
+  let out = "";
+  let inString = false;
+  let quote = "";
+  let escaped = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let i = 0; i < content.length; i += 1) {
+    const char = content[i];
+    const next = content[i + 1];
+
+    if (inLineComment) {
+      if (char === "\n" || char === "\r") {
+        inLineComment = false;
+        out += char;
+      }
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (char === "*" && next === "/") {
+        inBlockComment = false;
+        i += 1;
+      }
+      continue;
+    }
+
+    if (inString) {
+      out += char;
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        inString = false;
+      }
+      continue;
+    }
+
+    if ((char === "\"" || char === "'")) {
+      inString = true;
+      quote = char;
+      out += char;
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      inLineComment = true;
+      i += 1;
+      continue;
+    }
+
+    if (char === "/" && next === "*") {
+      inBlockComment = true;
+      i += 1;
+      continue;
+    }
+
+    out += char;
+  }
+
+  return stripTrailingCommas(out);
+}
+
+function stripTrailingCommas(content) {
+  let out = "";
+  let inString = false;
+  let quote = "";
+  let escaped = false;
+
+  for (let i = 0; i < content.length; i += 1) {
+    const char = content[i];
+
+    if (inString) {
+      out += char;
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"" || char === "'") {
+      inString = true;
+      quote = char;
+      out += char;
+      continue;
+    }
+
+    if (char === ",") {
+      let j = i + 1;
+      while (j < content.length && /\s/.test(content[j])) {
+        j += 1;
+      }
+      if (content[j] === "}" || content[j] === "]") {
+        continue;
+      }
+    }
+
+    out += char;
+  }
+
+  return out;
 }
 
 function mergeManagedEnvValues(existingEnv, incomingValues) {
@@ -621,4 +799,6 @@ module.exports = {
   removeDirectiveBlock,
   applyDirectiveToTargets,
   removeDirectiveFromTargets,
+  stripJsonCommentsAndTrailingCommas,
+  stripTrailingCommas,
 };
