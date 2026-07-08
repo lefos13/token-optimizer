@@ -21,9 +21,17 @@ test('resolveProvider prefers the gateway when its token+url are set', () => {
   clearEnv();
 });
 
-test('resolveProvider falls back to local when no gateway/openrouter env is set', () => {
+test('resolveProvider falls back to local when no gateway env is set', () => {
   clearEnv();
   const p = resolveProvider('triage');
+  assert.equal(p.providerName, 'local-openai-compatible');
+  clearEnv();
+});
+
+test('OPENROUTER_API_KEY alone no longer selects a remote provider (legacy path removed)', () => {
+  clearEnv();
+  process.env.OPENROUTER_API_KEY = 'sk-legacy';
+  const p = resolveProvider('verdict');
   assert.equal(p.providerName, 'local-openai-compatible');
   clearEnv();
 });
