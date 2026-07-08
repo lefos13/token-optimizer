@@ -14,6 +14,8 @@
     "build:plugin:codex": "node scripts/generate-plugin-codex.js",
     "build:plugin:opencode": "node scripts/generate-plugin-opencode.js",
     "build:plugin:cursor": "node scripts/generate-plugin-cursor.js",
+    "build:installer": "npm run build && npm run build:plugin && node scripts/build-installer-package.js",
+    "pack:installer": "npm run build:installer && npm pack ./packages/installer --dry-run",
     "gateway:config": "node scripts/manage-gateway-config.js",
     "start": "node dist/index.js",
     "dev": "tsc -w",

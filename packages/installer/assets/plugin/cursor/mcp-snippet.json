@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "token_optimizer": {
+      "command": "bash",
+      "args": [
+        "/Users/eevangelinos/.cursor/token-optimizer-server/start.sh"
+      ],
+      "env": {
+        "LLM_GATEWAY_URL": "${env:LLM_GATEWAY_URL}",
+        "LLM_GATEWAY_TOKEN": "${env:LLM_GATEWAY_TOKEN}"
+      }
+    }
+  }
+}

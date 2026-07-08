@@ -15,6 +15,10 @@ URL is already preconfigured in the plugin.
 
 ### 1. Install the plugin
 
+- **One-command npm installer (optional):** run `npx @softawarest/token-optimizer-installer`
+  and paste your gateway token. This detects installed clients, copies the
+  packaged plugin/server/skill assets, writes supported MCP config, and applies
+  default-on instructions where possible.
 - **Claude Code:** install from the marketplace (`token-optimizer`).
 - **Codex:** install from the marketplace (`token-optimizer`).
 - **Antigravity:** copy or symlink the generated `plugin/antigravity/` folder into
@@ -613,14 +617,38 @@ Full instructions: [`plugin/cursor/README.md`](plugin/cursor/README.md) (generat
 
 ### One-command npm installer feasibility
 
-Packaging the end-user install flow as an npm package is feasible, with client-specific limits:
+Packaging the end-user install flow as an npm package is supported as an
+optional installer package:
 
-- The npm package can ship the compiled server, generated skill/rule files, and an installer CLI such as `npx token-optimizer-setup`.
-- The CLI can copy the server bundle, create or update MCP config files, prompt once for the gateway token, write the managed gateway env values, and apply default-on instruction files where the target client exposes a writable file.
-- Claude Code and Codex marketplace registration can be automated when their CLIs are installed, but the installer should still detect missing CLIs and print the exact fallback command.
-- Antigravity, opencode, and Cursor can be installed by direct file copy and config mutation because their generated bundles are file-based.
-- Cursor remains the main partial exception: the CLI can write global MCP config, but project rules still need either per-project `.cursor/rules/token-optimizer.mdc` writes or a manual global User Rule in Cursor Settings.
-- The package should be a separate installer package from the MCP server package so it can own OS-specific setup, backups, idempotency, and uninstall/update commands without changing the server runtime.
+```bash
+npx @softawarest/token-optimizer-installer
+```
+
+The package lives under `packages/installer/` and is built with:
+
+```bash
+npm run build:installer
+```
+
+The installer package ships the compiled server, generated plugin folders,
+OpenCode skill, Cursor rule, and marketplace metadata as package assets. It
+copies those assets into stable user-owned locations before writing config, so
+the installed clients do not depend on npm's transient `npx` cache.
+
+Useful commands:
+
+```bash
+npx @softawarest/token-optimizer-installer
+npx @softawarest/token-optimizer-installer --clients opencode,cursor
+npx @softawarest/token-optimizer-installer --clients all --cursor-project /path/to/project
+npx @softawarest/token-optimizer-installer config --token <token>
+npx @softawarest/token-optimizer-installer defaults --clients claude,codex,opencode
+```
+
+Cursor remains the main partial exception: the CLI can write global MCP config,
+but default-on rules are project-scoped unless the user adds an equivalent
+global User Rule in Cursor Settings. Pass `--cursor-project /path/to/project` to
+copy the generated project rule during install.
 
 ## Typical Agent Workflow
 

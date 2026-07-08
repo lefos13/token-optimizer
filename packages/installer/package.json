@@ -1,0 +1,20 @@
+{
+  "name": "@softawarest/token-optimizer-installer",
+  "version": "1.7.0",
+  "description": "One-command installer for the Token Optimizer MCP server, skills, plugins, gateway config, and default-on instructions.",
+  "bin": {
+    "token-optimizer": "bin/token-optimizer.js",
+    "token-optimizer-installer": "bin/token-optimizer.js"
+  },
+  "files": [
+    "assets/",
+    "bin/",
+    "lib/",
+    "README.md"
+  ],
+  "license": "UNLICENSED",
+  "publishConfig": {
+    "access": "public"
+  },
+  "private": false
+}

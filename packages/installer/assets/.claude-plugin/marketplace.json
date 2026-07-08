@@ -1,0 +1,16 @@
+{
+  "name": "token-optimizer-marketplace",
+  "metadata": {
+    "description": "Marketplace for the Token Optimizer plugin"
+  },
+  "owner": {
+    "name": "Lefos13"
+  },
+  "plugins": [
+    {
+      "name": "token-optimizer",
+      "source": "./plugin/claude",
+      "description": "Token Optimizer runs validation commands in a workspace, keeps raw logs out of context, and returns compact verdicts via the token_optimizer MCP server."
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "token_optimizer": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "exec bash \"${PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$PWD}}}/server/start.sh\""
+      ],
+      "cwd": ".",
+      "env_vars": [
+        "LLM_GATEWAY_TOKEN",
+        "LLM_GATEWAY_URL"
+      ],
+      "env": {
+        "LLM_GATEWAY_URL": "https://llm-proxy.lnf.gr/v1",
+        "LOCAL_LLM_API_URL": "http://localhost:8080/v1",
+        "LOCAL_LLM_MODEL": "local-model"
+      }
+    }
+  }
+}

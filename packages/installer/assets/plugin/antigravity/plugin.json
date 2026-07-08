@@ -1,0 +1,16 @@
+{
+  "name": "token-optimizer",
+  "version": "1.7.0",
+  "description": "Token Optimizer runs validation commands in a workspace, keeps raw logs out of context, and returns compact verdicts via the token_optimizer MCP server.",
+  "author": {
+    "name": "Lefos13"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "local-test",
+    "mcp",
+    "verdict",
+    "triage",
+    "validation"
+  ]
+}

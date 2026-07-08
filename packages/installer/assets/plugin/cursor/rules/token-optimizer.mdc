@@ -1,0 +1,13 @@
+---
+alwaysApply: true
+---
+
+Always use the `token_optimizer` MCP tools by default:
+
+- `scout_codebase` before broad exploration of an unfamiliar area.
+- `run_test_verdict` before claiming a change works.
+- `run_failure_triage` on test/build/lint failures instead of reading raw logs.
+- `run_regression_check` before merging.
+- `run_changed_files_review` for small diffs before running expensive validation.
+
+Skip only when the user explicitly says not to use it.

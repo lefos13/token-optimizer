@@ -1,0 +1,20 @@
+{
+  "name": "Softaware-marketplace",
+  "interface": {
+    "displayName": "Softaware Marketplace"
+  },
+  "plugins": [
+    {
+      "name": "token-optimizer",
+      "source": {
+        "source": "local",
+        "path": "./plugin/codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

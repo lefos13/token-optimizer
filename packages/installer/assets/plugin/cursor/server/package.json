@@ -1,0 +1,10 @@
+{
+  "name": "token-optimizer-server",
+  "version": "1.7.0",
+  "private": true,
+  "description": "Bundled token_optimizer MCP server (compiled).",
+  "main": "index.js",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  }
+}

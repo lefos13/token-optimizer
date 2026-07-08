@@ -1,0 +1,14 @@
+{
+  "token_optimizer": {
+    "type": "local",
+    "command": [
+      "bash",
+      "/Users/eevangelinos/.config/opencode/token-optimizer-server/start.sh"
+    ],
+    "environment": {
+      "LLM_GATEWAY_URL": "{env:LLM_GATEWAY_URL}",
+      "LLM_GATEWAY_TOKEN": "{env:LLM_GATEWAY_TOKEN}"
+    },
+    "enabled": true
+  }
+}
