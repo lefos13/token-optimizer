@@ -37,6 +37,7 @@ export interface LLMHealthResponse extends LLMResponseMetadata {
 
 const LOCAL_PROVIDER_NAME = 'local-openai-compatible';
 const OPENROUTER_PROVIDER_NAME = 'openrouter';
+export const GATEWAY_PROVIDER_NAME = 'gateway';
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1';
 const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4o-mini';
 const DEFAULT_API_URL = 'http://localhost:8080/v1';
@@ -136,7 +137,32 @@ function resolveLocalProvider(taskType: LLMTaskType): LLMProvider {
   };
 }
 
-function resolveProvider(taskType: LLMTaskType): LLMProvider {
+/* Gateway is the centralized proxy: the client holds a revocable proxy token (not
+   the real OpenRouter key) and sends X-Task-Type so the gateway can pin the model.
+   The model here is nominal; the gateway overrides it and reports the real one. */
+function resolveGatewayProvider(taskType: LLMTaskType): LLMProvider | null {
+  const token = process.env.LLM_GATEWAY_TOKEN;
+  const url = process.env.LLM_GATEWAY_URL;
+  if (!token || !url) {
+    return null;
+  }
+  return {
+    taskType,
+    providerName: GATEWAY_PROVIDER_NAME,
+    apiUrl: url.replace(/\/+$/, ''),
+    model: 'gateway-managed',
+    authHeaders: {
+      Authorization: `Bearer ${token}`,
+      'X-Task-Type': taskType
+    }
+  };
+}
+
+export function resolveProvider(taskType: LLMTaskType): LLMProvider {
+  const gateway = resolveGatewayProvider(taskType);
+  if (gateway) {
+    return gateway;
+  }
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (apiKey) {
     const modelEnvName = TASK_OPENROUTER_MODEL_ENV[taskType];
@@ -162,7 +188,7 @@ export function combineLLMUsage(usage1?: LLMUsage, usage2?: LLMUsage): LLMUsage 
   };
 }
 
-export interface LLMVerdictResponse {
+export interface LLMVerdictResponse extends LLMResponseMetadata {
   verdict: 'pass' | 'fail' | 'uncertain';
   confidence: number;
   summary: string;
@@ -248,27 +274,33 @@ async function callChatCompletion(provider: LLMProvider, systemPrompt: string, u
   if (!rawContent) {
     throw new Error('Empty response from LLM');
   }
+  /* The gateway (and OpenRouter) echo the model that actually ran; prefer it so
+     analytics/metadata reflect central config without any client update. */
+  const responseModel = typeof data.model === 'string' && data.model ? data.model : provider.model;
+  const metadata = metadataFromProvider(provider, Date.now() - start);
+  metadata.llmModel = responseModel;
   return {
     content: rawContent,
     usage: normalizeUsage(data, systemPrompt, userPrompt, rawContent),
-    metadata: metadataFromProvider(provider, Date.now() - start)
+    metadata
   };
 }
 
 /* Resolve provider, attempt the call. If the primary provider is OpenRouter and the call fails, retry once with the local provider and surface the fallback reason in metadata. */
 async function callWithFallback(taskType: LLMTaskType, systemPrompt: string, userPrompt: string): Promise<ChatCompletionResult> {
   const provider = resolveProvider(taskType);
+  const isRemote = provider.providerName === OPENROUTER_PROVIDER_NAME || provider.providerName === GATEWAY_PROVIDER_NAME;
   try {
     return await callChatCompletion(provider, systemPrompt, userPrompt);
   } catch (error) {
-    if (provider.providerName !== OPENROUTER_PROVIDER_NAME) {
+    if (!isRemote) {
       throw error;
     }
     const localProvider = resolveLocalProvider(taskType);
     const result = await callChatCompletion(localProvider, systemPrompt, userPrompt);
     result.metadata = {
       ...result.metadata,
-      fallbackReason: `OpenRouter call failed: ${error instanceof Error ? error.message : String(error)}`
+      fallbackReason: `${provider.providerName} call failed: ${error instanceof Error ? error.message : String(error)}`
     };
     return result;
   }
