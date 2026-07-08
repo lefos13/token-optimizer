@@ -44,7 +44,7 @@ const analytics_1 = require("./analytics");
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const server = new index_js_1.Server({
-    name: 'local-tester-mcp',
+    name: 'token-optimizer-mcp',
     version: '1.0.0',
 }, {
     capabilities: {

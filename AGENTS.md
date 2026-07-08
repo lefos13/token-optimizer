@@ -1,6 +1,6 @@
 # Project Instructions
 
-This repository contains the `local-tester-mcp` server used by the `local-test-verdict` skill. It runs validation commands in a target workspace, stores full logs locally, and asks a local OpenAI-compatible LLM endpoint for compact verdicts, failure triage, changed-file review, and regression checks.
+This repository contains the `token-optimizer-mcp` server used by the `token-optimizer` skill. It runs validation commands in a target workspace, stores full logs locally, and asks a local OpenAI-compatible LLM endpoint for compact verdicts, failure triage, changed-file review, and regression checks.
 
 ## Required Checks
 
@@ -15,7 +15,7 @@ This repository contains the `local-tester-mcp` server used by the `local-test-v
 
 ## Plugin Generators
 
-Five generators package the same `local-test-verdict` skill for different clients. `npm run build:plugin` runs all of them; each also has a dedicated script.
+Five generators package the same `token-optimizer` skill for different clients. `npm run build:plugin` runs all of them; each also has a dedicated script.
 
 - `scripts/generate-plugin-antigravity.js` (`npm run build:plugin:antigravity`) → `plugin/antigravity/`. Gitignored — Antigravity loads plugins from a local folder; copy/symlink the generated folder into Antigravity's plugin directory.
 - `scripts/generate-plugin-claude.js` (`npm run build:plugin:claude`) → `plugin/claude/` plus repo-root `.claude-plugin/marketplace.json`. Both committed for git-based marketplace installs.
@@ -68,7 +68,7 @@ When changing a tool:
 - Resolve user-provided workspace-relative paths under `workspacePath` and avoid reading outside the intended workspace.
 - Keep raw logs out of conversational output when a compact verdict or triage summary is actionable.
 
-## Local LLM Behavior
+## Token Optimizer Behavior
 
 - The server prefers the centralized gateway (`LLM_GATEWAY_URL` + `LLM_GATEWAY_TOKEN`) and falls back to a local OpenAI-compatible model (`LOCAL_LLM_API_URL` / `LOCAL_LLM_MODEL`, defaulting to `http://localhost:8080/v1` and `local-model`) when the gateway is unset or unreachable. Models are pinned server-side on the gateway per task type; clients do not select a model.
 - Keep prompts strict about JSON-only responses.
@@ -86,7 +86,7 @@ When changing a tool:
 ## Analytics
 
 - Every successful tool path records compact, privacy-preserving analytics via `src/analytics.ts` into `<workspacePath>/.codex-local-test-runs/analytics.json` and `analytics-summary.json`, **inside the target workspace** (never relative to the MCP server's own directory — keeps them portable across plugin install locations). Records include: tool name, timestamp, commands and exit codes, token counts, savings percentage, provider/model/latency, confidence, and fallback reason. Raw logs, prompts, file contents, and full model responses are never stored.
-- `src/analytics-ui.ts` (`npm run analytics:ui`) is a standalone multi-workspace dashboard that reads these files; it never calls back into the MCP server. Registered workspaces persist at `~/.local-tester-analytics/workspaces.json`.
+- `src/analytics-ui.ts` (`npm run analytics:ui`) is a standalone multi-workspace dashboard that reads these files; it never calls back into the MCP server. Registered workspaces persist at `~/.token-optimizer-analytics/workspaces.json`.
 - Analytics writes are best-effort: a failed write must never fail the underlying tool call.
 - If you change the analytics record shape, storage location, or dashboard behavior, update `README.md` and `skill/skill-example.md` in the same change, then run `npm run build:plugin`.
 

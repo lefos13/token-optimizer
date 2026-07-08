@@ -4,7 +4,7 @@ const path = require("path");
 /* Claude Code plugin flow.
    Generates a complete, installable, portable Claude Code plugin under
    plugin/claude/. Unlike the Antigravity flow (generate-plugin-antigravity.js),
-   this registers the local_tester MCP server, ships the compiled server inside
+   this registers the token_optimizer MCP server, ships the compiled server inside
    the plugin (referenced via ${CLAUDE_PLUGIN_ROOT}, not an absolute repo path),
    and ships a local marketplace so it can be installed with
    `claude plugin marketplace add` + install.
@@ -17,11 +17,11 @@ const path = require("path");
    Output layout:
      .claude-plugin/marketplace.json               (REPO-ROOT marketplace catalog)
      plugin/claude/.claude-plugin/plugin.json      (plugin manifest)
-     plugin/claude/.mcp.json                       (registers the local_tester server)
+   plugin/claude/.mcp.json                       (registers the token_optimizer server)
      plugin/claude/server/*.js                     (compiled server, copied from dist/)
      plugin/claude/server/package.json             (single runtime dep to install)
      plugin/claude/server/start.sh                 (installs deps + execs server)
-     plugin/claude/skills/local-llm-subagent/SKILL.md
+     plugin/claude/skills/token-optimizer/SKILL.md
      plugin/claude/README.md
    The marketplace catalog lives at the repo root so the repository is itself a
    valid marketplace (`claude plugin marketplace add <repo>`). Do not edit
@@ -35,7 +35,7 @@ const metaDir = path.join(pluginDir, ".claude-plugin");
    relative source path resolved from the repo root. */
 const repoMetaDir = path.join(rootDir, ".claude-plugin");
 const PLUGIN_SOURCE_PATH = "./plugin/claude";
-const SKILL_NAME = "local-llm-subagent";
+const SKILL_NAME = "token-optimizer";
 const skillsDir = path.join(pluginDir, "skills", SKILL_NAME);
 const serverDir = path.join(pluginDir, "server");
 const distDir = path.join(rootDir, "dist");
@@ -55,6 +55,7 @@ const SERVER_FILES = [
 console.log("Generating Claude Code plugin structure...");
 
 try {
+  fs.rmSync(pluginDir, { recursive: true, force: true });
   fs.mkdirSync(metaDir, { recursive: true });
   fs.mkdirSync(repoMetaDir, { recursive: true });
   fs.mkdirSync(skillsDir, { recursive: true });
@@ -63,7 +64,7 @@ try {
   /* Bump this on every meaningful change. Claude only pulls plugin updates
      when the version changes; keeping it static pins installs to the commit
      they were first installed from and updates become silent no-ops. */
-  const VERSION = "1.5.0";
+  const VERSION = "1.6.0";
 
   /* Pin the runtime dep to the version this repo was built and tested against. */
   const sdkVersion = require(
@@ -77,10 +78,10 @@ try {
   ).version;
 
   const pluginJson = {
-    name: "local-tester",
+    name: "token-optimizer",
     version: VERSION,
     description:
-      "Local test execution, verification, and local-LLM triage. Runs validation commands in a workspace, keeps raw logs out of context, and returns compact verdicts via the local_tester MCP server.",
+      "Token Optimizer runs validation commands in a workspace, keeps raw logs out of context, and returns compact verdicts via the token_optimizer MCP server.",
     author: { name: "Lefos13" },
     license: "Apache-2.0",
     keywords: ["local-test", "mcp", "verdict", "triage", "validation"],
@@ -100,12 +101,12 @@ try {
      The plugin source is a relative path (must start with "./") resolved from
      the repo root; relative paths resolve when the marketplace is added via git. */
   const marketplaceJson = {
-    name: "local-tester-marketplace",
-    metadata: { description: "Marketplace for the local-tester plugin" },
+    name: "token-optimizer-marketplace",
+    metadata: { description: "Marketplace for the Token Optimizer plugin" },
     owner: { name: "Lefos13" },
     plugins: [
       {
-        name: "local-tester",
+        name: "token-optimizer",
         source: PLUGIN_SOURCE_PATH,
         description: pluginJson.description,
       },
@@ -116,8 +117,8 @@ try {
     JSON.stringify(marketplaceJson, null, 2) + "\n",
   );
 
-  /* Registers the local_tester stdio server. The tool names referenced by the
-     skill are mcp__local_tester__*, so the server key must be local_tester.
+  /* Registers the token_optimizer stdio server. The tool names referenced by the
+     skill are mcp__token_optimizer__*, so the server key must be token_optimizer.
      The launcher is referenced via ${CLAUDE_PLUGIN_ROOT} so the plugin is
      portable: it carries its own compiled server and resolves deps relative to
      the install dir rather than an absolute repo path.
@@ -127,7 +128,7 @@ try {
      gateway URL is defaulted to the primary endpoint. */
   const mcpJson = {
     mcpServers: {
-      local_tester: {
+      token_optimizer: {
         command: "bash",
         args: ["${CLAUDE_PLUGIN_ROOT}/server/start.sh"],
         env: {
@@ -159,10 +160,10 @@ try {
   /* Minimal package.json describing only the runtime dependency to install
      into ${CLAUDE_PLUGIN_DATA}. The compiled server uses CommonJS require. */
   const serverPackageJson = {
-    name: "local-tester-server",
+    name: "token-optimizer-server",
     version: VERSION,
     private: true,
-    description: "Bundled local_tester MCP server (compiled).",
+    description: "Bundled token_optimizer MCP server (compiled).",
     main: "index.js",
     dependencies: {
       "@modelcontextprotocol/sdk": `^${sdkVersion}`,
@@ -206,9 +207,9 @@ exec node "$ROOT/server/index.js"
   }
   fs.copyFileSync(sourceSkill, destSkill);
 
-  const readme = `# local-tester plugin (Claude Code)
+  const readme = `# Token Optimizer plugin (Claude Code)
 
-Bundles the \`local_tester\` MCP server and the \`${SKILL_NAME}\` skill so an
+Bundles the \`token_optimizer\` MCP server and the \`${SKILL_NAME}\` skill so an
 agent can validate code changes, triage failures, review changed files, check
 regressions, and scout code without flooding chat context with raw logs.
 
@@ -216,8 +217,8 @@ regressions, and scout code without flooding chat context with raw logs.
 
 ## Contents
 
-- \`.claude-plugin/plugin.json\` — plugin manifest (\`local-tester\` v${VERSION}).
-- \`.mcp.json\` — registers the \`local_tester\` stdio server (tools exposed as \`mcp__local_tester__*\`).
+- \`.claude-plugin/plugin.json\` — plugin manifest (\`token-optimizer\` v${VERSION}).
+- \`.mcp.json\` — registers the \`token_optimizer\` stdio server (tools exposed as \`mcp__token_optimizer__*\`).
 - \`server/\` — the compiled MCP server plus a launcher (\`start.sh\`) and a minimal \`package.json\`.
 - \`skills/${SKILL_NAME}/SKILL.md\` — usage guidance, copied from \`skill/skill-example.md\`.
 
@@ -232,7 +233,7 @@ plugin is portable across machines.
 **Requirements on the target machine:** \`node\` and \`npm\` on \`PATH\`, plus network
 access the first time (to install the dependency). After that it runs offline.
 
-The skill is invoked as \`/local-tester:${SKILL_NAME}\` and is also model-invoked
+The skill is invoked as \`/token-optimizer:${SKILL_NAME}\` and is also model-invoked
 automatically based on its description.
 
 ## LLM configuration
@@ -241,7 +242,7 @@ automatically based on its description.
 
 > **JSON mode requirement:** All requests send \`response_format: { type: "json_object" }\`. The gateway (or local fallback model, if configured) is responsible for returning JSON-mode-compatible responses; end users do not choose or configure a model.
 
-**Local LLM (fallback):** The server uses a local OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`.
+**Token Optimizer fallback:** The server uses a local OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`.
 
 Use \`npm run gateway:config\` to manage your gateway token across all clients on your machine.
 
@@ -252,11 +253,11 @@ so add the repo as a marketplace, then install the plugin:
 
 \`\`\`bash
 # From a local clone:
-claude plugin marketplace add /path/to/local-tester-mcp
+claude plugin marketplace add /path/to/token-optimizer-mcp
 # Or from a git host (push first):
 # claude plugin marketplace add <github-owner>/<repo>
 
-claude plugin install local-tester@local-tester-marketplace
+claude plugin install token-optimizer@token-optimizer-marketplace
 \`\`\`
 
 Relative plugin sources resolve only when the marketplace is added via git, so

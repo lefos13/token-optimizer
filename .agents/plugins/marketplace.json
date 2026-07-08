@@ -5,7 +5,7 @@
   },
   "plugins": [
     {
-      "name": "local-tester",
+      "name": "token-optimizer",
       "source": {
         "source": "local",
         "path": "./plugin/codex"

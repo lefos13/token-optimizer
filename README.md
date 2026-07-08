@@ -1,6 +1,6 @@
-# Local LLM subagent
+# Token Optimizer
 
-Local LLM subagent is an MCP server for running local validation commands and turning long build, lint, test, and smoke-check logs into compact verdicts with help from a local LLM like Qwen2.5-Coder-7B-Instruct (GGUF on Llama.cpp). This tool has been tested with the Q4_K_M variation on a Macbook M4 Pro (24GB RAM).
+Token Optimizer is an MCP server for running local validation commands and turning long build, lint, test, and smoke-check logs into compact verdicts. This tool has been tested with the Q4_K_M variation on a Macbook M4 Pro (24GB RAM).
 
 It is designed for coding agents that need to verify changes without pasting raw logs into the conversation. The server runs commands in the target workspace, writes full logs to disk, sends trimmed context to a local OpenAI-compatible model endpoint, and returns structured JSON that an agent can act on.
 
@@ -15,8 +15,8 @@ URL is already preconfigured in the plugin.
 
 ### 1. Install the plugin
 
-- **Claude Code:** install from the marketplace (`local-tester`).
-- **Codex:** install from the marketplace (`local-tester`).
+- **Claude Code:** install from the marketplace (`token-optimizer`).
+- **Codex:** install from the marketplace (`token-optimizer`).
 - **Antigravity:** copy or symlink the generated `plugin/antigravity/` folder into
   Antigravity's plugin directory.
 
@@ -29,7 +29,7 @@ The gateway URL is baked in; the only value you supply is your token.
 - **Manual (no repo):** set `LLM_GATEWAY_TOKEN` in your client's config:
   - Claude Code → `~/.claude/settings.json` under `env`
   - Codex → your shell/launch environment (it is passed through)
-  - Antigravity → its `mcp_config.json` under the `local_tester` `env`
+  - Antigravity → its `mcp_config.json` under the `token_optimizer` `env`
 
 To make the tools default-on (used automatically unless you say otherwise) in Claude Code, Codex, and Antigravity, also run:
 
@@ -244,7 +244,7 @@ By default, the dashboard serves `http://127.0.0.1:8787`. To use a different por
 npm run analytics:ui -- --port 8787
 ```
 
-The dashboard is workspace-aware: add workspaces by pasting absolute project paths, switch between an aggregated "All workspaces" view or a single workspace, paginate the event feed, and remove workspaces from the list. Registered workspaces persist at `~/.local-tester-analytics/workspaces.json`. You can also seed workspaces on the command line with `--workspace /absolute/path`.
+The dashboard is workspace-aware: add workspaces by pasting absolute project paths, switch between an aggregated "All workspaces" view or a single workspace, paginate the event feed, and remove workspaces from the list. Registered workspaces persist at `~/.token-optimizer-analytics/workspaces.json`, and existing `~/.local-tester-analytics/workspaces.json` data is still read once for migration. You can also seed workspaces on the command line with `--workspace /absolute/path`.
 
 ## Requirements
 
@@ -321,7 +321,7 @@ config surfaces for the supported clients:
 
 - Claude Code: `~/.claude/settings.json`
 - Gemini CLI: `~/.gemini/config/mcp_config.json`
-- Antigravity staged plugin: `~/.gemini/config/plugins/local-tester/mcp_config.json` when present
+- Antigravity staged plugin: `~/.gemini/config/plugins/token-optimizer/mcp_config.json` when present
 - Codex and other macOS GUI app launches: the current user `launchctl` environment
 
 Other commands:
@@ -352,13 +352,13 @@ intentionally want a plugin-scoped override, the plugin is cached at a
 versioned path under `~/.claude/plugins/cache/`. Find the exact file with:
 
 ```sh
-find ~/.claude/plugins/cache/local-tester-marketplace -name ".mcp.json"
+find ~/.claude/plugins/cache/token-optimizer-marketplace -name ".mcp.json"
 ```
 
 This prints something like:
 
 ```
-~/.claude/plugins/cache/local-tester-marketplace/local-tester/1.2.2/.mcp.json
+~/.claude/plugins/cache/token-optimizer-marketplace/token-optimizer/1.2.2/.mcp.json
 ```
 
 Open that file and add the `LLM_GATEWAY_URL` and `LLM_GATEWAY_TOKEN` values inside the `env` block:
@@ -379,10 +379,10 @@ with `launchctl setenv`. The generated plugin uses `env_vars` to forward those
 names into the bundled MCP server without storing the secret in the cached
 `.mcp.json`. If you intentionally want a plugin-scoped override, find the
 installed plugin config and edit its `.mcp.json` under
-`mcpServers.local_tester.env`.
+`mcpServers.token_optimizer.env`.
 
 ```bash
-find ~/.codex/plugins -path '*local-tester*' -name '.mcp.json'
+find ~/.codex/plugins -path '*token-optimizer*' -name '.mcp.json'
 ```
 
 Add your gateway values there:
@@ -402,15 +402,15 @@ After editing the installed plugin config, restart Codex or start a new thread s
 
 The config manager writes `LLM_GATEWAY_*` into
 `~/.gemini/config/mcp_config.json` and, when the staged plugin exists, into
-`~/.gemini/config/plugins/local-tester/mcp_config.json` too. If you
+`~/.gemini/config/plugins/token-optimizer/mcp_config.json` too. If you
 intentionally want a plugin-scoped override, edit that staged plugin config
-directly under `mcpServers.local_tester.env`.
+directly under `mcpServers.token_optimizer.env`.
 
 ### `check_local_llm_health` when the gateway is configured
 
 When `LLM_GATEWAY_URL` and `LLM_GATEWAY_TOKEN` are both set, `check_local_llm_health` verifies gateway reachability the same way it verifies a local-endpoint configuration, reporting availability and latency without exposing the token.
 
-## Local LLM Configuration
+## Token Optimizer Configuration
 
 When the gateway is not configured, the server uses a local OpenAI-compatible endpoint. These environment variables configure that fallback path:
 
@@ -442,9 +442,9 @@ Example stdio configuration:
 ```json
 {
   "mcpServers": {
-    "local_tester": {
+    "token_optimizer": {
       "command": "node",
-      "args": ["/absolute/path/to/local-tester-mcp/dist/index.js"],
+      "args": ["/absolute/path/to/token-optimizer-mcp/dist/index.js"],
       "env": {
         "LOCAL_LLM_API_URL": "http://localhost:8080/v1",
         "LOCAL_LLM_MODEL": "local-model"
@@ -457,11 +457,11 @@ Example stdio configuration:
 For Codex-style TOML configuration, the shape is typically:
 
 ```toml
-[mcp_servers.local_tester]
+[mcp_servers.token_optimizer]
 command = "node"
-args = ["/absolute/path/to/local-tester-mcp/dist/index.js"]
+args = ["/absolute/path/to/token-optimizer-mcp/dist/index.js"]
 
-[mcp_servers.local_tester.env]
+[mcp_servers.token_optimizer.env]
 LOCAL_LLM_API_URL = "http://localhost:8080/v1"
 LOCAL_LLM_MODEL = "local-model"
 ```
@@ -483,7 +483,7 @@ Restart or reload the MCP client after changing the server path, environment var
 
 ## Plugins
 
-This repository can generate the `local-tester` plugin for **three different clients**, each with its own generator and output directory. All variants ship the same skill content (from `skill/skill-example.md`), but package it differently for each client.
+This repository can generate the `token-optimizer` plugin for **three different clients**, each with its own generator and output directory. All variants ship the same skill content (from `skill/skill-example.md`), but package it differently for each client.
 
 | Client      | npm script                     | Output             | Tracked in git | Packaging                                                                 |
 | ----------- | ------------------------------ | ------------------ | -------------- | ------------------------------------------------------------------------ |
@@ -510,12 +510,12 @@ The plugin bundles the compiled MCP server and registers it via `mcp_config.json
 
    ```bash
    mkdir -p ~/.gemini/config/plugins
-   cp -R plugin/antigravity ~/.gemini/config/plugins/local-tester
+   cp -R plugin/antigravity ~/.gemini/config/plugins/token-optimizer
    ```
 
    Plugin directories vary by client version: `~/.gemini/config/plugins/` (global), `~/.gemini/antigravity-cli/plugins/`, or `<workspace>/.agents/plugins/`.
 
-3. Restart Antigravity (or reload plugins) so it registers the `local_tester` server and loads the `local-llm-subagent` skill.
+3. Restart Antigravity (or reload plugins) so it registers the `token_optimizer` server and loads the `token-optimizer` skill.
 
 **Requirements:** `node`, `npm`, and `bash` on `PATH`; network access on first run only. Override the LLM endpoint via `LOCAL_LLM_API_URL` / `LOCAL_LLM_MODEL` in the copied `mcp_config.json`.
 
@@ -540,12 +540,12 @@ The plugin bundles the compiled MCP server and launches it via `${CLAUDE_PLUGIN_
    # Or from a git host once pushed:
    # claude plugin marketplace add <github-owner>/<repo>
 
-   claude plugin install local-tester@local-tester-marketplace
+   claude plugin install token-optimizer@token-optimizer-marketplace
    ```
 
 3. Restart Claude Code (or run `/reload-plugins`) so the MCP server and skill load.
 
-The skill is invoked as `/local-tester:local-llm-subagent` and is also model-invoked automatically based on its description. The MCP tools are exposed as `mcp__local_tester__*`.
+The skill is invoked as `/token-optimizer:token-optimizer` and is also model-invoked automatically based on its description. The MCP tools are exposed as `mcp__token_optimizer__*`.
 
 **Requirements on the target machine:** `node` and `npm` on `PATH`, plus network access the first time (to install the dependency). After that the server runs offline. Override the LLM endpoint with the same environment variables described in [MCP Client Setup](#mcp-client-setup) (`LOCAL_LLM_API_URL`, `LOCAL_LLM_MODEL`, and the per-task `LOCAL_LLM_*_MODEL` overrides).
 
@@ -572,9 +572,9 @@ The plugin bundles the compiled MCP server and launches `./server/start.sh` from
    codex plugin marketplace add "$(pwd)"
    ```
 
-3. Install or enable the `local-tester` plugin in Codex, then restart or reload Codex so the MCP server and skill load.
+3. Install or enable the `token-optimizer` plugin in Codex, then restart or reload Codex so the MCP server and skill load.
 
-The skill is available as `local-llm-subagent` and is also model-invoked automatically based on its description. The bundled MCP server is named `local_tester`.
+The skill is available as `token-optimizer` and is also model-invoked automatically based on its description. The bundled MCP server is named `token_optimizer`.
 
 **Requirements on the target machine:** `node` and `npm` on `PATH`, plus network access the first time (to install the dependency). After that the server runs offline. Override the LLM endpoint with the same environment variables described in [MCP Client Setup](#mcp-client-setup) (`LOCAL_LLM_API_URL`, `LOCAL_LLM_MODEL`, and the per-task `LOCAL_LLM_*_MODEL` overrides).
 
@@ -583,7 +583,7 @@ The skill is available as `local-llm-subagent` and is also model-invoked automat
 opencode has no plugin/marketplace mechanism for MCP servers or skills, so install is a manual copy + merge:
 
 1. `npm run build && npm run build:plugin:opencode`
-2. Copy `plugin/opencode/server/` to `~/.config/opencode/local-tester-server/` and `plugin/opencode/skills/local-llm-subagent/` to `~/.config/opencode/skills/local-llm-subagent/`.
+2. Copy `plugin/opencode/server/` to `~/.config/opencode/token-optimizer-server/` and `plugin/opencode/skills/token-optimizer/` to `~/.config/opencode/skills/token-optimizer/`.
 3. Merge `plugin/opencode/mcp-snippet.jsonc` into your `~/.config/opencode/opencode.jsonc`'s `"mcp"` object.
 4. Provide your token (`npm run gateway:config -- setup`) and restart opencode.
 
@@ -594,9 +594,9 @@ Full instructions: [`plugin/opencode/README.md`](plugin/opencode/README.md) (gen
 Cursor also has no plugin/marketplace mechanism:
 
 1. `npm run build && npm run build:plugin:cursor`
-2. Copy `plugin/cursor/server/` to `~/.cursor/local-tester-server/`.
+2. Copy `plugin/cursor/server/` to `~/.cursor/token-optimizer-server/`.
 3. Merge `plugin/cursor/mcp-snippet.json` into `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (per project).
-4. Copy `plugin/cursor/rules/local-tester.mdc` into each project's `.cursor/rules/` — Cursor has no filesystem-writable global rule, so this only applies per-project unless you also add an equivalent rule via Cursor Settings.
+4. Copy `plugin/cursor/rules/token-optimizer.mdc` into each project's `.cursor/rules/` — Cursor has no filesystem-writable global rule, so this only applies per-project unless you also add an equivalent rule via Cursor Settings.
 5. Provide your token (`npm run gateway:config -- setup`) and restart Cursor.
 
 Full instructions: [`plugin/cursor/README.md`](plugin/cursor/README.md) (generated).

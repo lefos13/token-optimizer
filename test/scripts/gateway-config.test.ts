@@ -44,7 +44,7 @@ test('applyToTargets writes gateway values to Claude + Gemini configs, collect r
   assert.equal(claude.env.LLM_GATEWAY_URL, 'https://llm-proxy.lnf.gr/v1');
 
   const gemini = JSON.parse(fs.readFileSync(path.join(home, '.gemini', 'config', 'mcp_config.json'), 'utf8'));
-  assert.equal(gemini.mcpServers.local_tester.env.LLM_GATEWAY_TOKEN, 'person-token');
+  assert.equal(gemini.mcpServers.token_optimizer.env.LLM_GATEWAY_TOKEN, 'person-token');
 
   assert.equal(cli.collectCurrentValues(home).LLM_GATEWAY_TOKEN, 'person-token');
 
@@ -56,14 +56,14 @@ test('applyToTargets writes gateway values to Claude + Gemini configs, collect r
 test('launchctl values round-trip through the state-file seam', () => {
   const home = tmpHome();
   const statePath = path.join(home, 'launchctl-state.json');
-  process.env.LOCAL_TESTER_LAUNCHCTL_STATE_PATH = statePath;
+  process.env.LOCAL_OPTIMIZER_LAUNCHCTL_STATE_PATH = statePath;
   try {
     cli.applyLaunchctlValues({ LLM_GATEWAY_TOKEN: 'tok', LLM_GATEWAY_URL: 'https://g/v1' });
     assert.equal(cli.readLaunchctlValues().LLM_GATEWAY_TOKEN, 'tok');
     cli.clearLaunchctlValues();
     assert.ok(!('LLM_GATEWAY_TOKEN' in cli.readLaunchctlValues()));
   } finally {
-    delete process.env.LOCAL_TESTER_LAUNCHCTL_STATE_PATH;
+    delete process.env.LOCAL_OPTIMIZER_LAUNCHCTL_STATE_PATH;
   }
 });
 
@@ -109,9 +109,9 @@ test('removeDirectiveFromTargets removes a previously-inserted block and is a no
 });
 
 test('hasDirectiveBlock returns true if both markers are present, false otherwise', () => {
-  assert.equal(cli.hasDirectiveBlock('Some content <!-- LOCAL_TESTER_START --> foo <!-- LOCAL_TESTER_END -->'), true);
-  assert.equal(cli.hasDirectiveBlock('Some content <!-- LOCAL_TESTER_START --> foo'), false);
-  assert.equal(cli.hasDirectiveBlock('foo <!-- LOCAL_TESTER_END -->'), false);
+  assert.equal(cli.hasDirectiveBlock('Some content <!-- TOKEN_OPTIMIZER_START --> foo <!-- TOKEN_OPTIMIZER_END -->'), true);
+  assert.equal(cli.hasDirectiveBlock('Some content <!-- TOKEN_OPTIMIZER_START --> foo'), false);
+  assert.equal(cli.hasDirectiveBlock('foo <!-- TOKEN_OPTIMIZER_END -->'), false);
   assert.equal(cli.hasDirectiveBlock('just some content'), false);
 });
 
@@ -137,5 +137,4 @@ test('removeDirectiveBlock removes the block, and collapses multiple newlines (s
   const contentCrlf = `Hello\r\n\r\n\r\n${blockCrlf}\r\n\r\n\r\nWorld`;
   assert.equal(cli.removeDirectiveBlock(contentCrlf), 'Hello\n\nWorld');
 });
-
 

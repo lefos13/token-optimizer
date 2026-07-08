@@ -76,11 +76,13 @@ const DEFAULT_PAGE_SIZE = 25;
 const MAX_PAGE_SIZE = 200;
 const MAX_REQUEST_BODY_BYTES = 64 * 1024;
 
-/* The list of registered workspaces is kept outside any single workspace (in the
-   user's home directory) so the dashboard can aggregate analytics from many
-   projects regardless of where it is launched from. It persists across restarts. */
-const CONFIG_DIR = path.join(os.homedir(), '.local-tester-analytics');
+/* Registered workspaces live under a product-specific home directory so the
+   dashboard keeps a stable cross-workspace registry without depending on any
+   single project checkout. A legacy path is still read for migration. */
+const CONFIG_DIR = path.join(os.homedir(), '.token-optimizer-analytics');
+const LEGACY_CONFIG_DIR = path.join(os.homedir(), '.local-tester-analytics');
 const WORKSPACES_FILE = path.join(CONFIG_DIR, 'workspaces.json');
+const LEGACY_WORKSPACES_FILE = path.join(LEGACY_CONFIG_DIR, 'workspaces.json');
 
 function parseArgs(argv: string[]): { seedWorkspaces: string[]; port: number } {
   const seedWorkspaces: string[] = [];
@@ -124,10 +126,13 @@ function readJson<T>(filePath: string): T {
    remembers them across restarts and across the many projects it reports on. */
 function loadWorkspaceList(): string[] {
   try {
-    if (!fs.existsSync(WORKSPACES_FILE)) {
+    const sourceFile = fs.existsSync(WORKSPACES_FILE)
+      ? WORKSPACES_FILE
+      : LEGACY_WORKSPACES_FILE;
+    if (!fs.existsSync(sourceFile)) {
       return [];
     }
-    const parsed = JSON.parse(fs.readFileSync(WORKSPACES_FILE, 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(sourceFile, 'utf8'));
     if (!Array.isArray(parsed)) {
       return [];
     }
@@ -330,7 +335,7 @@ function renderHtml(): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Local Tester Analytics</title>
+  <title>Token Optimizer Analytics</title>
   <style>
     :root {
       color-scheme: light;
@@ -732,7 +737,7 @@ function renderHtml(): string {
   <header>
     <div class="wrap topbar">
       <div>
-        <h1>Local Tester Analytics</h1>
+        <h1>Token Optimizer Analytics</h1>
         <div class="meta" id="store">Loading workspaces...</div>
       </div>
       <button type="button" id="refresh">Refresh</button>
@@ -768,7 +773,7 @@ function renderHtml(): string {
       <div class="card"><div class="label">MCP tool calls</div><div class="value" id="totalCalls">0</div></div>
       <div class="card"><div class="label">Shell commands</div><div class="value" id="commandCount">0</div></div>
       <div class="card"><div class="label">Raw source tokens</div><div class="value" id="rawTokens">0</div></div>
-      <div class="card"><div class="label">Local LLM tokens</div><div class="value" id="llmTokens">0</div></div>
+      <div class="card"><div class="label">Token Optimizer tokens</div><div class="value" id="llmTokens">0</div></div>
       <div class="card"><div class="label">Returned main-model tokens</div><div class="value" id="returnedTokens">0</div></div>
       <div class="card"><div class="label">Estimated tokens saved</div><div class="value" id="savedTokens">0</div></div>
       <div class="card"><div class="label">Average savings</div><div class="value" id="avgSavings">0%</div></div>
@@ -871,7 +876,7 @@ function renderHtml(): string {
     }
 
     function providerLabel(key) {
-      if (key === 'local-openai-compatible') return 'Local LLM';
+      if (key === 'local-openai-compatible') return 'Token Optimizer';
       if (key === 'gateway') return 'Gateway';
       if (key === 'none') return 'No LLM (fallback)';
       return key;
@@ -1043,7 +1048,7 @@ function renderHtml(): string {
         const metrics = document.createElement('div');
         metrics.className = 'metrics';
         metrics.appendChild(buildMetric('Raw tokens', num(record.rawSourceTokens)));
-        metrics.appendChild(buildMetric('Local LLM', num(record.localLlmTotalTokens)));
+        metrics.appendChild(buildMetric('Token Optimizer', num(record.localLlmTotalTokens)));
         metrics.appendChild(buildMetric('Returned', num(record.returnedToMainTokens)));
         metrics.appendChild(buildMetric('Saved', num(record.estimatedTokensSaved), 'saved'));
         card.appendChild(metrics);
@@ -1058,7 +1063,7 @@ function renderHtml(): string {
       if (workspaces.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'empty';
-        empty.textContent = 'No workspaces registered yet. Add an absolute path to a project that has run local-tester tools.';
+        empty.textContent = 'No workspaces registered yet. Add an absolute path to a project that has run Token Optimizer tools.';
         ids.workspaceList.appendChild(empty);
         return;
       }
@@ -1196,7 +1201,7 @@ function renderHtml(): string {
 
       const unavailable = (payload.workspaces || []).filter((ws) => !ws.available);
       if (unavailable.length > 0 && (payload.workspaces || []).length > 0) {
-        showNotice(unavailable.length + ' of ' + payload.workspaces.length + ' workspace(s) have no analytics yet (no local-tester tool calls recorded there so far).');
+        showNotice(unavailable.length + ' of ' + payload.workspaces.length + ' workspace(s) have no analytics yet (no Token Optimizer tool calls recorded there so far).');
       } else {
         showNotice('');
       }

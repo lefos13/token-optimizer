@@ -9,12 +9,12 @@ mkdir -p "$DATA"
 # find no matter where Codex installs the plugin. Every stderr line from this
 # script AND the server is tee'd here while still flowing to the host; stdout is
 # left untouched so the JSON-RPC channel stays clean.
-LOG_DIR="${LOCAL_TESTER_LOG_DIR:-$HOME/.local-tester-mcp}"
+LOG_DIR="${TOKEN_OPTIMIZER_LOG_DIR:-$HOME/.token-optimizer-mcp}"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/start.log"
 exec 2> >(tee -a "$LOG" >&2)
 
-echo "==== local-tester start: $(date '+%Y-%m-%dT%H:%M:%S%z') (pid $$) ====" >&2
+echo "==== token-optimizer start: $(date '+%Y-%m-%dT%H:%M:%S%z') (pid $$) ====" >&2
 echo "ROOT=$ROOT" >&2
 echo "DATA=$DATA" >&2
 echo "PWD=$(pwd)" >&2
@@ -39,7 +39,7 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 if ! command -v node >/dev/null 2>&1; then
-  echo "local-tester: 'node' not found on PATH. Install Node.js (or add it to PATH) so the MCP server can start." 1>&2
+  echo "token-optimizer: 'node' not found on PATH. Install Node.js (or add it to PATH) so the MCP server can start." 1>&2
   exit 127
 fi
 

@@ -1,8 +1,8 @@
 {
-  "name": "local-tester-server",
-  "version": "1.5.0",
+  "name": "token-optimizer-server",
+  "version": "1.6.0",
   "private": true,
-  "description": "Bundled local_tester MCP server (compiled).",
+  "description": "Bundled token_optimizer MCP server (compiled).",
   "main": "index.js",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"

@@ -1,13 +1,13 @@
 ---
-name: local-llm-subagent
-description: Use this MCP server and its local LLM flow to scout codebases, validate code changes, review changed files, triage failures, check regressions, classify command output, and keep raw logs out of context. Trigger when starting scouting a codebase, implementing code changes, fixing bugs, touching tests/build/lint behavior, preparing final verification, triaging failures, reviewing changed files, checking regressions, or when the user asks to use the local llm subagent, local llm test triage, or avoid reading raw logs or using an llm subagent to unload high context tasks from the main model.
+name: token-optimizer
+description: Use this MCP server to scout codebases, validate code changes, review changed files, triage failures, check regressions, classify command output, and keep raw logs out of context. Trigger when starting scouting a codebase, implementing code changes, fixing bugs, touching tests/build/lint behavior, preparing final verification, triaging failures, reviewing changed files, checking regressions, or when the user asks to use Token Optimizer or avoid reading raw logs.
 ---
 
-# Local LLM Subagent
+# Token Optimizer
 
 ## Overview
 
-Use the `mcp__local_tester` tools as the first validation path after code changes. Let the MCP server run validation commands, persist full logs under the target workspace, and ask the local LLM for compact verdicts, changed-file review, failure triage, or regression checks before deciding whether raw logs are needed.
+Use the `mcp__token_optimizer` tools as the first validation path after code changes. Let the MCP server run validation commands, persist full logs under the target workspace, and ask Token Optimizer for compact verdicts, changed-file review, failure triage, or regression checks before deciding whether raw logs are needed.
 
 Currently implemented server tools:
 
@@ -182,7 +182,7 @@ Use `run_regression_check` for baseline-aware checks only when baseline churn is
 - Detect whether a newly failing auto-detected suite regressed from a previously successful baseline.
 - Avoid it when you need a read-only check, a custom command, or stable historical baselines.
 
-If a tool exists in the server but is not exposed in the current Codex session, check plugin-provided MCP policy in `~/.codex/config.toml`, such as `[plugins."local-tester@local-tester-marketplace".mcp_servers.local_tester]` and its `enabled_tools` / `disabled_tools` settings, then start a new thread or restart Codex so the tool surface refreshes.
+If a tool exists in the server but is not exposed in the current Codex session, check plugin-provided MCP policy in `~/.codex/config.toml`, such as `[plugins."token-optimizer@token-optimizer-marketplace".mcp_servers.token_optimizer]` and its `enabled_tools` / `disabled_tools` settings, then start a new thread or restart Codex so the tool surface refreshes.
 
 ## Guardrails
 

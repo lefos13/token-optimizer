@@ -9,16 +9,16 @@ const { execFileSync } = require("child_process");
 const GATEWAY_ENV_KEYS = ["LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN"];
 const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
 
-const DIRECTIVE_MARKER_START = "<!-- LOCAL_TESTER_START -->";
-const DIRECTIVE_MARKER_END = "<!-- LOCAL_TESTER_END -->";
+const DIRECTIVE_MARKER_START = "<!-- TOKEN_OPTIMIZER_START -->";
+const DIRECTIVE_MARKER_END = "<!-- TOKEN_OPTIMIZER_END -->";
 /* Mirrors the shipped skill's existing triggers (scout / verdict / triage /
    regression / changed-files-review) as a standing default-on rule instead of
    a heuristic description, so the model reaches for these tools without
    needing to be asked each time. */
 const DIRECTIVE_BLOCK = `${DIRECTIVE_MARKER_START}
-## Local Tester (default-on)
+## Token Optimizer (default-on)
 
-Always use the \`local_tester\` MCP tools by default:
+Always use the \`token_optimizer\` MCP tools by default:
 
 - \`scout_codebase\` before broad exploration of an unfamiliar area.
 - \`run_test_verdict\` before claiming a change works.
@@ -70,7 +70,7 @@ function removeDirectiveBlock(content) {
 }
 
 function directiveBackupRoot(home) {
-  return path.join(path.resolve(home || process.env.HOME || os.homedir()), ".local-tester-mcp", "backups");
+  return path.join(path.resolve(home || process.env.HOME || os.homedir()), ".token-optimizer-mcp", "backups");
 }
 
 function applyDirectiveToTargets(home) {
@@ -118,14 +118,14 @@ function printDirectiveStatus(home) {
    point the whole target set at a temp directory. */
 function getManagedTargets(home) {
   const homeDir = path.resolve(home || process.env.HOME || os.homedir());
-  const backupRoot = path.join(homeDir, ".local-tester-mcp", "backups");
+  const backupRoot = path.join(homeDir, ".token-optimizer-mcp", "backups");
   const claudeSettingsPath = path.join(homeDir, ".claude", "settings.json");
   const geminiConfigPath = path.join(homeDir, ".gemini", "config", "mcp_config.json");
   const antigravityPluginConfigPath = path.join(
-    homeDir, ".gemini", "config", "plugins", "local-tester", "mcp_config.json"
+    homeDir, ".gemini", "config", "plugins", "token-optimizer", "mcp_config.json"
   );
   const localTesterServerArgs = [
-    path.join(homeDir, ".gemini", "config", "plugins", "local-tester", "server", "start.sh"),
+    path.join(homeDir, ".gemini", "config", "plugins", "token-optimizer", "server", "start.sh"),
   ];
 
   return [
@@ -148,19 +148,19 @@ function getManagedTargets(home) {
       backupRoot,
       readConfig: readJsonFile,
       writeConfig: writeJsonFile,
-      getValues(config) { return sanitizeEnvObject(config?.mcpServers?.local_tester?.env || {}); },
+      getValues(config) { return sanitizeEnvObject(config?.mcpServers?.token_optimizer?.env || {}); },
       applyValues(config, values) {
         const next = config;
         next.mcpServers = next.mcpServers || {};
-        next.mcpServers.local_tester = next.mcpServers.local_tester || {
+        next.mcpServers.token_optimizer = next.mcpServers.token_optimizer || {
           command: "bash", args: localTesterServerArgs,
         };
-        next.mcpServers.local_tester.command = next.mcpServers.local_tester.command || "bash";
-        next.mcpServers.local_tester.args =
-          Array.isArray(next.mcpServers.local_tester.args) && next.mcpServers.local_tester.args.length > 0
-            ? next.mcpServers.local_tester.args : localTesterServerArgs;
-        next.mcpServers.local_tester.env = mergeManagedEnvValues(
-          next.mcpServers.local_tester.env || {}, values
+        next.mcpServers.token_optimizer.command = next.mcpServers.token_optimizer.command || "bash";
+        next.mcpServers.token_optimizer.args =
+          Array.isArray(next.mcpServers.token_optimizer.args) && next.mcpServers.token_optimizer.args.length > 0
+            ? next.mcpServers.token_optimizer.args : localTesterServerArgs;
+        next.mcpServers.token_optimizer.env = mergeManagedEnvValues(
+          next.mcpServers.token_optimizer.env || {}, values
         );
         return next;
       },
@@ -172,15 +172,15 @@ function getManagedTargets(home) {
       optional: true,
       readConfig: readJsonFile,
       writeConfig: writeJsonFile,
-      getValues(config) { return sanitizeEnvObject(config?.mcpServers?.local_tester?.env || {}); },
+      getValues(config) { return sanitizeEnvObject(config?.mcpServers?.token_optimizer?.env || {}); },
       applyValues(config, values) {
         const next = config;
         next.mcpServers = next.mcpServers || {};
-        next.mcpServers.local_tester = next.mcpServers.local_tester || {
+        next.mcpServers.token_optimizer = next.mcpServers.token_optimizer || {
           command: "bash", args: localTesterServerArgs,
         };
-        next.mcpServers.local_tester.env = mergeManagedEnvValues(
-          next.mcpServers.local_tester.env || {}, values
+        next.mcpServers.token_optimizer.env = mergeManagedEnvValues(
+          next.mcpServers.token_optimizer.env || {}, values
         );
         return next;
       },
@@ -506,7 +506,9 @@ function readLaunchctlValues() {
 }
 
 function runLaunchctl(args, options = {}) {
-  const statePath = process.env.LOCAL_TESTER_LAUNCHCTL_STATE_PATH;
+  const statePath =
+    process.env.LOCAL_OPTIMIZER_LAUNCHCTL_STATE_PATH ||
+    process.env.LOCAL_TESTER_LAUNCHCTL_STATE_PATH;
   if (statePath) {
     return runLaunchctlStateFile(statePath, args, options);
   }

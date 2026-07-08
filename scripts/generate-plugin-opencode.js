@@ -3,7 +3,7 @@ const path = require("path");
 const os = require("os");
 
 /* opencode plugin flow.
-   Generates a portable local_tester bundle under plugin/opencode/ for opencode
+   Generates a portable token_optimizer bundle under plugin/opencode/ for opencode
    (https://opencode.ai). opencode has no plugin/marketplace mechanism for MCP
    servers or skills — plugins are JS lifecycle-hook packages only. MCP servers
    are registered via a static "mcp" block in opencode.jsonc, and skills are
@@ -17,7 +17,7 @@ const os = require("os");
      plugin/opencode/server/*.js                 (compiled server, copied from dist/)
      plugin/opencode/server/package.json         (single runtime dep to install)
      plugin/opencode/server/start.sh             (self-locating launcher)
-     plugin/opencode/skills/local-llm-subagent/SKILL.md
+     plugin/opencode/skills/token-optimizer/SKILL.md
      plugin/opencode/mcp-snippet.jsonc           (block to merge into opencode.jsonc's "mcp")
      plugin/opencode/README.md
    This output is gitignored (see plugin/opencode/ in .gitignore) — like
@@ -27,7 +27,7 @@ const os = require("os");
 
 const rootDir = path.resolve(__dirname, "..");
 const pluginDir = path.join(rootDir, "plugin", "opencode");
-const SKILL_NAME = "local-llm-subagent";
+const SKILL_NAME = "token-optimizer";
 const skillsDir = path.join(pluginDir, "skills", SKILL_NAME);
 const serverDir = path.join(pluginDir, "server");
 const distDir = path.join(rootDir, "dist");
@@ -45,7 +45,7 @@ const SERVER_FILES = [
 /* Conventional install location the README tells the user to copy the server
    to, so the path baked into mcp-snippet.jsonc matches what actually exists
    on disk once they follow the instructions. */
-const installedServerDir = path.join(os.homedir(), ".config", "opencode", "local-tester-server");
+const installedServerDir = path.join(os.homedir(), ".config", "opencode", "token-optimizer-server");
 
 console.log("Generating opencode plugin structure...");
 
@@ -54,7 +54,7 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "1.5.0";
+  const VERSION = "1.6.0";
 
   const sdkVersion = require(
     path.join(rootDir, "node_modules", "@modelcontextprotocol", "sdk", "package.json"),
@@ -70,10 +70,10 @@ try {
   }
 
   const serverPackageJson = {
-    name: "local-tester-server",
+    name: "token-optimizer-server",
     version: VERSION,
     private: true,
-    description: "Bundled local_tester MCP server (compiled).",
+    description: "Bundled token_optimizer MCP server (compiled).",
     main: "index.js",
     dependencies: {
       "@modelcontextprotocol/sdk": `^${sdkVersion}`,
@@ -118,7 +118,7 @@ exec node "$ROOT/index.js"
      interpolation for pulling values from the process environment at
      runtime, so the token never has to be hardcoded here. */
   const mcpSnippet = {
-    local_tester: {
+    token_optimizer: {
       type: "local",
       command: ["bash", path.join(installedServerDir, "start.sh")],
       environment: {
@@ -133,9 +133,9 @@ exec node "$ROOT/index.js"
     JSON.stringify(mcpSnippet, null, 2) + "\n",
   );
 
-  const readme = `# local-tester bundle (opencode)
+  const readme = `# Token Optimizer bundle (opencode)
 
-Bundles the \`local_tester\` MCP server and the \`${SKILL_NAME}\` skill for
+Bundles the \`token_optimizer\` MCP server and the \`${SKILL_NAME}\` skill for
 [opencode](https://opencode.ai). opencode has no plugin/marketplace mechanism
 for MCP servers or skills, so this bundle is installed by copying files and
 merging one JSON snippet by hand.
@@ -159,8 +159,8 @@ merging one JSON snippet by hand.
 1. Copy the server bundle to a stable location:
 
    \`\`\`bash
-   mkdir -p ~/.config/opencode/local-tester-server
-   cp -R plugin/opencode/server/* ~/.config/opencode/local-tester-server/
+   mkdir -p ~/.config/opencode/token-optimizer-server
+   cp -R plugin/opencode/server/* ~/.config/opencode/token-optimizer-server/
    \`\`\`
 
 2. Copy the skill so opencode discovers it globally:

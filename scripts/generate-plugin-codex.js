@@ -10,11 +10,11 @@ const path = require("path");
    Output layout:
      .agents/plugins/marketplace.json              (REPO-ROOT marketplace catalog)
      plugin/codex/.codex-plugin/plugin.json        (plugin manifest)
-     plugin/codex/.mcp.json                        (registers the local_tester server)
+     plugin/codex/.mcp.json                        (registers the token_optimizer server)
      plugin/codex/server/*.js                      (compiled server, copied from dist/)
      plugin/codex/server/package.json              (single runtime dep to install)
      plugin/codex/server/start.sh                  (installs deps + execs server)
-     plugin/codex/skills/local-llm-subagent/SKILL.md
+     plugin/codex/skills/token-optimizer/SKILL.md
      plugin/codex/README.md
    Do not edit generated files by hand; run npm run build:plugin:codex. */
 
@@ -23,7 +23,7 @@ const pluginDir = path.join(rootDir, "plugin", "codex");
 const metaDir = path.join(pluginDir, ".codex-plugin");
 const repoMarketplaceDir = path.join(rootDir, ".agents", "plugins");
 const PLUGIN_SOURCE_PATH = "./plugin/codex";
-const SKILL_NAME = "local-llm-subagent";
+const SKILL_NAME = "token-optimizer";
 const skillsDir = path.join(pluginDir, "skills", SKILL_NAME);
 const serverDir = path.join(pluginDir, "server");
 const distDir = path.join(rootDir, "dist");
@@ -41,12 +41,13 @@ const SERVER_FILES = [
 console.log("Generating Codex plugin structure...");
 
 try {
+  fs.rmSync(pluginDir, { recursive: true, force: true });
   fs.mkdirSync(metaDir, { recursive: true });
   fs.mkdirSync(repoMarketplaceDir, { recursive: true });
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "1.5.0";
+  const VERSION = "1.6.0";
 
   const sdkVersion = require(
     path.join(
@@ -59,10 +60,10 @@ try {
   ).version;
 
   const description =
-    "Local test execution, verification, and local-LLM triage. Runs validation commands in a workspace, keeps raw logs out of context, and returns compact verdicts via the local_tester MCP server.";
+    "Token Optimizer runs validation commands in a workspace, keeps raw logs out of context, and returns compact verdicts via the token_optimizer MCP server.";
 
   const pluginJson = {
-    name: "local-tester",
+    name: "token-optimizer",
     version: VERSION,
     description,
     author: { name: "Lefos13" },
@@ -71,7 +72,7 @@ try {
     skills: "./skills/",
     mcpServers: "./.mcp.json",
     interface: {
-      displayName: "Local Tester",
+      displayName: "Token Optimizer",
       shortDescription:
         "Run local validation and summarize logs with a local LLM.",
       longDescription:
@@ -80,8 +81,8 @@ try {
       category: "Productivity",
       capabilities: ["Read", "Run"],
       defaultPrompt: [
-        "Use Local Tester to validate my current code changes.",
-        "Use Local Tester to triage the failing test log.",
+        "Use Token Optimizer to validate my current code changes.",
+        "Use Token Optimizer to triage the failing test log.",
       ],
       brandColor: "#10A37F",
     },
@@ -101,7 +102,7 @@ try {
         /* MUST equal the manifest name in .codex-plugin/plugin.json. Codex
            resolves the plugin by this entry name, then opens the source path
            and reads plugin.json; a name mismatch fails the install. */
-        name: "local-tester",
+        name: "token-optimizer",
         source: {
           source: "local",
           path: PLUGIN_SOURCE_PATH,
@@ -144,7 +145,7 @@ try {
      Codex's env-merge behavior — not verified here. */
   const mcpJson = {
     mcpServers: {
-      local_tester: {
+      token_optimizer: {
         command: "bash",
         args: ["-c", launcher],
         cwd: ".",
@@ -177,10 +178,10 @@ try {
   }
 
   const serverPackageJson = {
-    name: "local-tester-server",
+    name: "token-optimizer-server",
     version: VERSION,
     private: true,
-    description: "Bundled local_tester MCP server (compiled).",
+    description: "Bundled token_optimizer MCP server (compiled).",
     main: "index.js",
     dependencies: {
       "@modelcontextprotocol/sdk": `^${sdkVersion}`,
@@ -202,12 +203,12 @@ mkdir -p "$DATA"
 # find no matter where Codex installs the plugin. Every stderr line from this
 # script AND the server is tee'd here while still flowing to the host; stdout is
 # left untouched so the JSON-RPC channel stays clean.
-LOG_DIR="\${LOCAL_TESTER_LOG_DIR:-$HOME/.local-tester-mcp}"
+LOG_DIR="\${TOKEN_OPTIMIZER_LOG_DIR:-$HOME/.token-optimizer-mcp}"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/start.log"
 exec 2> >(tee -a "$LOG" >&2)
 
-echo "==== local-tester start: $(date '+%Y-%m-%dT%H:%M:%S%z') (pid $$) ====" >&2
+echo "==== token-optimizer start: $(date '+%Y-%m-%dT%H:%M:%S%z') (pid $$) ====" >&2
 echo "ROOT=$ROOT" >&2
 echo "DATA=$DATA" >&2
 echo "PWD=$(pwd)" >&2
@@ -232,7 +233,7 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 if ! command -v node >/dev/null 2>&1; then
-  echo "local-tester: 'node' not found on PATH. Install Node.js (or add it to PATH) so the MCP server can start." 1>&2
+  echo "token-optimizer: 'node' not found on PATH. Install Node.js (or add it to PATH) so the MCP server can start." 1>&2
   exit 127
 fi
 
@@ -265,9 +266,9 @@ exec node "$ROOT/server/index.js"
   }
   fs.copyFileSync(sourceSkill, destSkill);
 
-  const readme = `# local-tester plugin (Codex)
+  const readme = `# Token Optimizer plugin (Codex)
 
-Bundles the \`local_tester\` MCP server and the \`${SKILL_NAME}\` skill so Codex
+Bundles the \`token_optimizer\` MCP server and the \`${SKILL_NAME}\` skill so Codex
 can validate code changes, triage failures, review changed files, check
 regressions, digest noisy commands, and scout code without flooding chat context
 with raw logs.
@@ -276,8 +277,8 @@ with raw logs.
 
 ## Contents
 
-- \`.codex-plugin/plugin.json\` - plugin manifest (\`local-tester\` v${VERSION}).
-- \`.mcp.json\` - registers the \`local_tester\` stdio server via the \`mcpServers\` wrapper, launched via \`bash -c\` so the shell resolves the plugin root at runtime.
+- \`.codex-plugin/plugin.json\` - plugin manifest (\`token-optimizer\` v${VERSION}).
+- \`.mcp.json\` - registers the \`token_optimizer\` stdio server via the \`mcpServers\` wrapper, launched via \`bash -c\` so the shell resolves the plugin root at runtime.
 - \`server/\` - the compiled MCP server plus a launcher (\`start.sh\`) and a minimal \`package.json\`.
 - \`skills/${SKILL_NAME}/SKILL.md\` - usage guidance, copied from \`skill/skill-example.md\`.
 
@@ -305,7 +306,7 @@ runs offline.
 
 > **JSON mode requirement:** All requests send \`response_format: { type: "json_object" }\`. The gateway (or local fallback model, if configured) is responsible for returning JSON-mode-compatible responses; end users do not choose or configure a model.
 
-**Local LLM (fallback):** The server uses a local OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`.
+**Token Optimizer fallback:** The server uses a local OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`.
 
 The plugin ships with the gateway URL baked in (\`https://llm-proxy.lnf.gr/v1\`).
 Your per-person gateway token is passed through via \`env_vars\`, allowing a session
@@ -316,10 +317,10 @@ Use \`npm run gateway:config\` to manage your gateway token across all clients o
 
 The marketplace catalog lives at the repository root:
 \`.agents/plugins/marketplace.json\`. Add the repository as a marketplace, then
-install or enable the \`local-tester\` plugin from Codex.
+install or enable the \`token-optimizer\` plugin from Codex.
 
 \`\`\`bash
-codex plugin marketplace add /path/to/local-tester-mcp
+codex plugin marketplace add /path/to/token-optimizer-mcp
 \`\`\`
 
 For local development without marketplace installation, load \`${pluginDir}\`

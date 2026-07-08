@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "local_tester": {
+    "token_optimizer": {
       "command": "bash",
       "args": [
         "-c",

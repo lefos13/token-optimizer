@@ -1,7 +1,7 @@
 {
-  "name": "local-tester",
-  "version": "1.5.0",
-  "description": "Local test execution, verification, and local-LLM triage. Runs validation commands in a workspace, keeps raw logs out of context, and returns compact verdicts via the local_tester MCP server.",
+  "name": "token-optimizer",
+  "version": "1.6.0",
+  "description": "Token Optimizer runs validation commands in a workspace, keeps raw logs out of context, and returns compact verdicts via the token_optimizer MCP server.",
   "author": {
     "name": "Lefos13"
   },
@@ -16,7 +16,7 @@
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "Local Tester",
+    "displayName": "Token Optimizer",
     "shortDescription": "Run local validation and summarize logs with a local LLM.",
     "longDescription": "Validate code changes, triage failures, review changed files, check regressions, digest noisy commands, and scout codebases without flooding the conversation with raw logs.",
     "developerName": "Lefos13",
@@ -26,8 +26,8 @@
       "Run"
     ],
     "defaultPrompt": [
-      "Use Local Tester to validate my current code changes.",
-      "Use Local Tester to triage the failing test log."
+      "Use Token Optimizer to validate my current code changes.",
+      "Use Token Optimizer to triage the failing test log."
     ],
     "brandColor": "#10A37F"
   }

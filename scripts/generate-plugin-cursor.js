@@ -3,7 +3,7 @@ const path = require("path");
 const os = require("os");
 
 /* Cursor plugin flow.
-   Generates a portable local_tester bundle under plugin/cursor/ for Cursor
+   Generates a portable token_optimizer bundle under plugin/cursor/ for Cursor
    (https://cursor.com). Cursor has no plugin/marketplace mechanism either —
    MCP servers are a static "mcpServers" block in mcp.json (global
    ~/.cursor/mcp.json or project .cursor/mcp.json), and standing agent
@@ -17,7 +17,7 @@ const os = require("os");
      plugin/cursor/server/*.js                 (compiled server, copied from dist/)
      plugin/cursor/server/package.json         (single runtime dep to install)
      plugin/cursor/server/start.sh             (self-locating launcher)
-     plugin/cursor/rules/local-tester.mdc      (alwaysApply:true, project-scoped)
+     plugin/cursor/rules/token-optimizer.mdc      (alwaysApply:true, project-scoped)
      plugin/cursor/mcp-snippet.json            (block to merge into mcp.json's "mcpServers")
      plugin/cursor/README.md
    This output is gitignored (see plugin/cursor/ in .gitignore) — like
@@ -40,7 +40,7 @@ const SERVER_FILES = [
   "types.js",
 ];
 
-const installedServerDir = path.join(os.homedir(), ".cursor", "local-tester-server");
+const installedServerDir = path.join(os.homedir(), ".cursor", "token-optimizer-server");
 
 console.log("Generating Cursor plugin structure...");
 
@@ -49,7 +49,7 @@ try {
   fs.mkdirSync(rulesDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "1.5.0";
+  const VERSION = "1.6.0";
 
   const sdkVersion = require(
     path.join(rootDir, "node_modules", "@modelcontextprotocol", "sdk", "package.json"),
@@ -65,10 +65,10 @@ try {
   }
 
   const serverPackageJson = {
-    name: "local-tester-server",
+    name: "token-optimizer-server",
     version: VERSION,
     private: true,
-    description: "Bundled local_tester MCP server (compiled).",
+    description: "Bundled token_optimizer MCP server (compiled).",
     main: "index.js",
     dependencies: {
       "@modelcontextprotocol/sdk": `^${sdkVersion}`,
@@ -108,7 +108,7 @@ exec node "$ROOT/index.js"
 alwaysApply: true
 ---
 
-Always use the \`local_tester\` MCP tools by default:
+Always use the \`token_optimizer\` MCP tools by default:
 
 - \`scout_codebase\` before broad exploration of an unfamiliar area.
 - \`run_test_verdict\` before claiming a change works.
@@ -118,11 +118,11 @@ Always use the \`local_tester\` MCP tools by default:
 
 Skip only when the user explicitly says not to use it.
 `;
-  fs.writeFileSync(path.join(rulesDir, "local-tester.mdc"), ruleMdc);
+  fs.writeFileSync(path.join(rulesDir, "token-optimizer.mdc"), ruleMdc);
 
   const mcpSnippet = {
     mcpServers: {
-      local_tester: {
+      token_optimizer: {
         command: "bash",
         args: [path.join(installedServerDir, "start.sh")],
         env: {
@@ -137,9 +137,9 @@ Skip only when the user explicitly says not to use it.
     JSON.stringify(mcpSnippet, null, 2) + "\n",
   );
 
-  const readme = `# local-tester bundle (Cursor)
+  const readme = `# Token Optimizer bundle (Cursor)
 
-Bundles the \`local_tester\` MCP server and a default-on usage rule for
+Bundles the \`token_optimizer\` MCP server and a default-on usage rule for
 [Cursor](https://cursor.com). Cursor has no plugin/marketplace mechanism, so
 this bundle is installed by copying files and merging one JSON snippet by
 hand.
@@ -152,8 +152,8 @@ hand.
 
 - \`server/\` — the compiled MCP server plus a self-locating launcher
   (\`start.sh\`) and a minimal \`package.json\`.
-- \`rules/local-tester.mdc\` — \`alwaysApply: true\` rule instructing the agent
-  to use the \`local_tester\` tools by default.
+- \`rules/token-optimizer.mdc\` — \`alwaysApply: true\` rule instructing the agent
+  to use the \`token_optimizer\` tools by default.
 - \`mcp-snippet.json\` — the exact block to merge into your \`mcp.json\`'s
   \`"mcpServers"\` object.
 
@@ -162,8 +162,8 @@ hand.
 1. Copy the server bundle to a stable location:
 
    \`\`\`bash
-   mkdir -p ~/.cursor/local-tester-server
-   cp -R plugin/cursor/server/* ~/.cursor/local-tester-server/
+   mkdir -p ~/.cursor/token-optimizer-server
+   cp -R plugin/cursor/server/* ~/.cursor/token-optimizer-server/
    \`\`\`
 
 2. Merge the contents of \`mcp-snippet.json\` into \`~/.cursor/mcp.json\`
@@ -175,7 +175,7 @@ hand.
 
    \`\`\`bash
    mkdir -p .cursor/rules
-   cp plugin/cursor/rules/local-tester.mdc .cursor/rules/local-tester.mdc
+   cp plugin/cursor/rules/token-optimizer.mdc .cursor/rules/token-optimizer.mdc
    \`\`\`
 
    **Limitation:** Cursor has no filesystem-writable *global* rule — only
@@ -198,7 +198,7 @@ first run only.
 
 To pick up changes, re-run \`npm run build:plugin:cursor\`, re-copy the
 \`server/\` contents, re-merge \`mcp-snippet.json\` if it changed, and re-copy
-\`rules/local-tester.mdc\` into each project using it.
+\`rules/token-optimizer.mdc\` into each project using it.
 `;
   fs.writeFileSync(path.join(pluginDir, "README.md"), readme);
 

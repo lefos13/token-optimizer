@@ -1,6 +1,6 @@
-# local-tester plugin (Codex)
+# Token Optimizer plugin (Codex)
 
-Bundles the `local_tester` MCP server and the `local-llm-subagent` skill so Codex
+Bundles the `token_optimizer` MCP server and the `token-optimizer` skill so Codex
 can validate code changes, triage failures, review changed files, check
 regressions, digest noisy commands, and scout code without flooding chat context
 with raw logs.
@@ -9,10 +9,10 @@ with raw logs.
 
 ## Contents
 
-- `.codex-plugin/plugin.json` - plugin manifest (`local-tester` v1.5.0).
-- `.mcp.json` - registers the `local_tester` stdio server via the `mcpServers` wrapper, launched via `bash -c` so the shell resolves the plugin root at runtime.
+- `.codex-plugin/plugin.json` - plugin manifest (`token-optimizer` v1.6.0).
+- `.mcp.json` - registers the `token_optimizer` stdio server via the `mcpServers` wrapper, launched via `bash -c` so the shell resolves the plugin root at runtime.
 - `server/` - the compiled MCP server plus a launcher (`start.sh`) and a minimal `package.json`.
-- `skills/local-llm-subagent/SKILL.md` - usage guidance, copied from `skill/skill-example.md`.
+- `skills/token-optimizer/SKILL.md` - usage guidance, copied from `skill/skill-example.md`.
 
 ## How the server runs
 
@@ -38,7 +38,7 @@ runs offline.
 
 > **JSON mode requirement:** All requests send `response_format: { type: "json_object" }`. The gateway (or local fallback model, if configured) is responsible for returning JSON-mode-compatible responses; end users do not choose or configure a model.
 
-**Local LLM (fallback):** The server uses a local OpenAI-compatible endpoint. Defaults: `LOCAL_LLM_API_URL=http://localhost:8080/v1`, `LOCAL_LLM_MODEL=local-model`. Per-task overrides: `LOCAL_LLM_VERDICT_MODEL`, `LOCAL_LLM_TRIAGE_MODEL`, `LOCAL_LLM_REVIEW_MODEL`, `LOCAL_LLM_DIGEST_MODEL`, `LOCAL_LLM_SCOUT_MODEL`, `LOCAL_LLM_QUERY_MODEL`.
+**Token Optimizer fallback:** The server uses a local OpenAI-compatible endpoint. Defaults: `LOCAL_LLM_API_URL=http://localhost:8080/v1`, `LOCAL_LLM_MODEL=local-model`. Per-task overrides: `LOCAL_LLM_VERDICT_MODEL`, `LOCAL_LLM_TRIAGE_MODEL`, `LOCAL_LLM_REVIEW_MODEL`, `LOCAL_LLM_DIGEST_MODEL`, `LOCAL_LLM_SCOUT_MODEL`, `LOCAL_LLM_QUERY_MODEL`.
 
 The plugin ships with the gateway URL baked in (`https://llm-proxy.lnf.gr/v1`).
 Your per-person gateway token is passed through via `env_vars`, allowing a session
@@ -49,10 +49,10 @@ Use `npm run gateway:config` to manage your gateway token across all clients on 
 
 The marketplace catalog lives at the repository root:
 `.agents/plugins/marketplace.json`. Add the repository as a marketplace, then
-install or enable the `local-tester` plugin from Codex.
+install or enable the `token-optimizer` plugin from Codex.
 
 ```bash
-codex plugin marketplace add /path/to/local-tester-mcp
+codex plugin marketplace add /path/to/token-optimizer-mcp
 ```
 
 For local development without marketplace installation, load `/Users/eevangelinos/.gemini/antigravity/scratch/local-tester-mcp/plugin/codex`

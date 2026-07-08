@@ -1,6 +1,6 @@
-# local-tester plugin (Claude Code)
+# Token Optimizer plugin (Claude Code)
 
-Bundles the `local_tester` MCP server and the `local-llm-subagent` skill so an
+Bundles the `token_optimizer` MCP server and the `token-optimizer` skill so an
 agent can validate code changes, triage failures, review changed files, check
 regressions, and scout code without flooding chat context with raw logs.
 
@@ -8,10 +8,10 @@ regressions, and scout code without flooding chat context with raw logs.
 
 ## Contents
 
-- `.claude-plugin/plugin.json` — plugin manifest (`local-tester` v1.5.0).
-- `.mcp.json` — registers the `local_tester` stdio server (tools exposed as `mcp__local_tester__*`).
+- `.claude-plugin/plugin.json` — plugin manifest (`token-optimizer` v1.6.0).
+- `.mcp.json` — registers the `token_optimizer` stdio server (tools exposed as `mcp__token_optimizer__*`).
 - `server/` — the compiled MCP server plus a launcher (`start.sh`) and a minimal `package.json`.
-- `skills/local-llm-subagent/SKILL.md` — usage guidance, copied from `skill/skill-example.md`.
+- `skills/token-optimizer/SKILL.md` — usage guidance, copied from `skill/skill-example.md`.
 
 ## How the server runs (portable)
 
@@ -24,7 +24,7 @@ plugin is portable across machines.
 **Requirements on the target machine:** `node` and `npm` on `PATH`, plus network
 access the first time (to install the dependency). After that it runs offline.
 
-The skill is invoked as `/local-tester:local-llm-subagent` and is also model-invoked
+The skill is invoked as `/token-optimizer:token-optimizer` and is also model-invoked
 automatically based on its description.
 
 ## LLM configuration
@@ -33,7 +33,7 @@ automatically based on its description.
 
 > **JSON mode requirement:** All requests send `response_format: { type: "json_object" }`. The gateway (or local fallback model, if configured) is responsible for returning JSON-mode-compatible responses; end users do not choose or configure a model.
 
-**Local LLM (fallback):** The server uses a local OpenAI-compatible endpoint. Defaults: `LOCAL_LLM_API_URL=http://localhost:8080/v1`, `LOCAL_LLM_MODEL=local-model`. Per-task overrides: `LOCAL_LLM_VERDICT_MODEL`, `LOCAL_LLM_TRIAGE_MODEL`, `LOCAL_LLM_REVIEW_MODEL`, `LOCAL_LLM_DIGEST_MODEL`, `LOCAL_LLM_SCOUT_MODEL`, `LOCAL_LLM_QUERY_MODEL`.
+**Token Optimizer fallback:** The server uses a local OpenAI-compatible endpoint. Defaults: `LOCAL_LLM_API_URL=http://localhost:8080/v1`, `LOCAL_LLM_MODEL=local-model`. Per-task overrides: `LOCAL_LLM_VERDICT_MODEL`, `LOCAL_LLM_TRIAGE_MODEL`, `LOCAL_LLM_REVIEW_MODEL`, `LOCAL_LLM_DIGEST_MODEL`, `LOCAL_LLM_SCOUT_MODEL`, `LOCAL_LLM_QUERY_MODEL`.
 
 Use `npm run gateway:config` to manage your gateway token across all clients on your machine.
 
@@ -44,11 +44,11 @@ so add the repo as a marketplace, then install the plugin:
 
 ```bash
 # From a local clone:
-claude plugin marketplace add /path/to/local-tester-mcp
+claude plugin marketplace add /path/to/token-optimizer-mcp
 # Or from a git host (push first):
 # claude plugin marketplace add <github-owner>/<repo>
 
-claude plugin install local-tester@local-tester-marketplace
+claude plugin install token-optimizer@token-optimizer-marketplace
 ```
 
 Relative plugin sources resolve only when the marketplace is added via git, so

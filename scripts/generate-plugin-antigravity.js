@@ -14,10 +14,10 @@ const os = require("os");
                           object (same shape as the user's global
                           ~/.gemini/config/mcp_config.json: command/args/env).
      skills/<name>/SKILL.md - each skill is a directory containing a SKILL.md.
-     server/            - the bundled compiled local_tester MCP server.
+     server/            - the bundled compiled token_optimizer MCP server.
 
    PRIOR GENERATOR GAP: the old version of this script shipped only plugin.json
-   and a skill — it never registered the local_tester MCP server at all, so
+   and a skill — it never registered the token_optimizer MCP server at all, so
    importing it gave you the skill with none of the MCP tools it instructs you
    to use. This version bundles and registers the server like the Claude Code
    and Codex flows do.
@@ -37,7 +37,7 @@ const os = require("os");
      plugin/antigravity/server/*.js                 (compiled server, copied from dist/)
      plugin/antigravity/server/package.json         (single runtime dep to install)
      plugin/antigravity/server/start.sh             (self-locating launcher)
-     plugin/antigravity/skills/local-llm-subagent/SKILL.md
+     plugin/antigravity/skills/token-optimizer/SKILL.md
      plugin/antigravity/README.md
    This output is gitignored (see plugin/antigravity/ in .gitignore) — unlike the
    Claude Code flow, Antigravity plugins are imported from a local path rather
@@ -46,8 +46,8 @@ const os = require("os");
 
 const rootDir = path.resolve(__dirname, "..");
 const pluginDir = path.join(rootDir, "plugin", "antigravity");
-const PLUGIN_NAME = "local-tester";
-const SKILL_NAME = "local-llm-subagent";
+const PLUGIN_NAME = "token-optimizer";
+const SKILL_NAME = "token-optimizer";
 const skillsDir = path.join(pluginDir, "skills", SKILL_NAME);
 const serverDir = path.join(pluginDir, "server");
 const distDir = path.join(rootDir, "dist");
@@ -79,7 +79,7 @@ try {
      install (Antigravity does not document version-gated update pulls the way
      Claude Code's marketplace install does, but keeping this accurate still
      matters for users diffing or re-staging the plugin folder). */
-  const VERSION = "1.5.0";
+  const VERSION = "1.6.0";
 
   const sdkVersion = require(
     path.join(
@@ -92,7 +92,7 @@ try {
   ).version;
 
   const description =
-    "Local test execution, verification, and local-LLM triage. Runs validation commands in a workspace, keeps raw logs out of context, and returns compact verdicts via the local_tester MCP server.";
+    "Token Optimizer runs validation commands in a workspace, keeps raw logs out of context, and returns compact verdicts via the token_optimizer MCP server.";
 
   /* plugin.json: the required marker file. Antigravity only documents "name" as
      a recognized field (optional, defaults to the directory name); the rest are
@@ -110,10 +110,10 @@ try {
     JSON.stringify(pluginJson, null, 2) + "\n",
   );
 
-  /* mcp_config.json: registers the local_tester stdio server using the same
+  /* mcp_config.json: registers the token_optimizer stdio server using the same
      "mcpServers" shape documented for the user's global mcp_config.json. The
-     tool names referenced by the skill are mcp__local_tester__*, so the server
-     key must stay "local_tester". The launcher path is relative to the plugin
+     tool names referenced by the skill are mcp__token_optimizer__*, so the server
+     key must stay "token_optimizer". The launcher path is relative to the plugin
      directory; self-contained plugin bundles only make sense if the host
      resolves bundled paths relative to the staged plugin root.
 
@@ -121,7 +121,7 @@ try {
      is written into the staged/global mcp_config.json by `npm run gateway:config`. */
   const mcpConfigJson = {
     mcpServers: {
-      local_tester: {
+      token_optimizer: {
         command: "bash",
         args: [path.join(os.homedir(), ".gemini", "config", "plugins", PLUGIN_NAME, "server", "start.sh")],
         env: {
@@ -153,10 +153,10 @@ try {
      into a persistent .data/ directory next to the server. The compiled server
      uses CommonJS require. */
   const serverPackageJson = {
-    name: "local-tester-server",
+    name: "token-optimizer-server",
     version: VERSION,
     private: true,
-    description: "Bundled local_tester MCP server (compiled).",
+    description: "Bundled token_optimizer MCP server (compiled).",
     main: "index.js",
     dependencies: {
       "@modelcontextprotocol/sdk": `^${sdkVersion}`,
@@ -202,9 +202,9 @@ exec node "$ROOT/server/index.js"
   }
   fs.copyFileSync(sourceSkill, destSkill);
 
-  const readme = `# local-tester plugin (Antigravity)
+  const readme = `# Token Optimizer plugin (Antigravity)
 
-Bundles the \`local_tester\` MCP server and the \`${SKILL_NAME}\` skill so an
+Bundles the \`token_optimizer\` MCP server and the \`${SKILL_NAME}\` skill so an
 Antigravity agent can validate code changes, triage failures, review changed
 files, check regressions, digest noisy commands, and scout code without
 flooding chat context with raw logs.
@@ -216,7 +216,7 @@ flooding chat context with raw logs.
 ## Contents
 
 - \`plugin.json\` — required plugin marker/manifest (\`${PLUGIN_NAME}\` v${VERSION}).
-- \`mcp_config.json\` — registers the \`local_tester\` stdio server (tools exposed as \`mcp__local_tester__*\`), using the same \`mcpServers\` shape as Antigravity's global \`~/.gemini/config/mcp_config.json\`.
+- \`mcp_config.json\` — registers the \`token_optimizer\` stdio server (tools exposed as \`mcp__token_optimizer__*\`), using the same \`mcpServers\` shape as Antigravity's global \`~/.gemini/config/mcp_config.json\`.
 - \`server/\` — the compiled MCP server plus a self-locating launcher (\`start.sh\`) and a minimal \`package.json\`.
 - \`skills/${SKILL_NAME}/SKILL.md\` — usage guidance, copied from \`skill/skill-example.md\`.
 
@@ -235,7 +235,7 @@ paths are baked in, so the plugin folder can be copied or staged anywhere.
 plus network access the first time (to install the dependency). After that it
 runs offline.
 
-The skill is invoked as \`local-llm-subagent\` (folder name under \`skills/\`) and
+The skill is invoked as \`token-optimizer\` (folder name under \`skills/\`) and
 is also model-invoked automatically based on its description.
 
 ## LLM configuration
@@ -244,7 +244,7 @@ is also model-invoked automatically based on its description.
 
 > **JSON mode requirement:** All requests send \`response_format: { type: "json_object" }\`. The gateway (or local fallback model, if configured) is responsible for returning JSON-mode-compatible responses; end users do not choose or configure a model.
 
-**Local LLM (fallback):** The server uses a local OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`.
+**Token Optimizer fallback:** The server uses a local OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`.
 
 Use \`npm run gateway:config\` to manage your gateway token across all clients on your machine.
 

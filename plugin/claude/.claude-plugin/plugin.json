@@ -1,7 +1,7 @@
 {
-  "name": "local-tester",
-  "version": "1.5.0",
-  "description": "Local test execution, verification, and local-LLM triage. Runs validation commands in a workspace, keeps raw logs out of context, and returns compact verdicts via the local_tester MCP server.",
+  "name": "token-optimizer",
+  "version": "1.6.0",
+  "description": "Token Optimizer runs validation commands in a workspace, keeps raw logs out of context, and returns compact verdicts via the token_optimizer MCP server.",
   "author": {
     "name": "Lefos13"
   },

@@ -1,7 +1,7 @@
 {
-  "name": "local-tester-mcp",
+  "name": "token-optimizer-mcp",
   "version": "1.0.0",
-  "description": "An MCP server for running workspace tests and triaging failures using a local LLM.",
+  "description": "An MCP server for running workspace tests and triaging failures using Token Optimizer.",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
