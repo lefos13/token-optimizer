@@ -11,7 +11,7 @@ Use the `mcp__local_tester` tools as the first validation path after code change
 
 Currently implemented server tools:
 
-- `check_local_llm_health`: verifies the configured LLM provider. When `OPENROUTER_API_KEY` is set, returns `skipped: true` immediately (no network call — the key is assumed valid). Otherwise pings the local OpenAI-compatible endpoint and returns availability metadata.
+- `check_local_llm_health`: verifies the configured LLM provider. When `LLM_GATEWAY_URL` and `LLM_GATEWAY_TOKEN` are set, pings the gateway and returns availability metadata. Otherwise pings the local OpenAI-compatible endpoint.
 - `run_test_verdict`: runs build/lint/test/smoke commands in a workspace and returns a compact local-LLM verdict.
 - `run_failure_triage`: analyzes an existing log file and returns compact root-cause/fix guidance.
 - `run_changed_files_review`: reads changed files under 500 KB and asks the local LLM for likely issues before expensive validation.
@@ -186,14 +186,7 @@ If a tool exists in the server but is not exposed in the current Codex session, 
 
 ## Guardrails
 
-**LLM provider:** Prefer the repo-shipped config manager (`npm run openrouter:config -- setup`) to install `OPENROUTER_*` into the stable client-owned config surfaces and the macOS GUI-session environment. Generated plugins intentionally omit blank `OPENROUTER_*` placeholders so inherited host values keep working after plugin reinstalls. When the key is absent, the server falls back to a local OpenAI-compatible endpoint (`LOCAL_LLM_API_URL`). If an OpenRouter call fails, the server automatically retries with the local endpoint and surfaces `fallbackReason` in the response. The chosen OpenRouter model must support `response_format: { type: "json_object" }` (JSON mode); models that do not support it will error and trigger the local fallback. Compatible models include `openai/gpt-4o`, `openai/gpt-4o-mini`, `anthropic/claude-3-5-sonnet`, `anthropic/claude-3-haiku`, and `google/gemini-flash-1.5`.
-
-**Centralized gateway:** When `LLM_GATEWAY_URL` and `LLM_GATEWAY_TOKEN` are both set, the skill behaves identically — the gateway just centralizes the OpenRouter key and pins the model per task, so no individual user needs to hold a real key. `check_local_llm_health` verifies gateway reachability the same way it verifies a direct OpenRouter or local-endpoint configuration.
-
-**OpenRouter env vars:**
-- `OPENROUTER_API_KEY` — enables OpenRouter mode
-- `OPENROUTER_MODEL` — default model for all tasks (falls back to `openai/gpt-4o-mini`)
-- Per-task: `OPENROUTER_VERDICT_MODEL`, `OPENROUTER_TRIAGE_MODEL`, `OPENROUTER_REVIEW_MODEL`, `OPENROUTER_DIGEST_MODEL`, `OPENROUTER_SCOUT_MODEL`, `OPENROUTER_QUERY_MODEL`
+**LLM provider:** Prefer the repo-shipped config manager (`npm run gateway:config -- setup`) to install `LLM_GATEWAY_URL` and `LLM_GATEWAY_TOKEN` into the stable client-owned config surfaces and the macOS GUI-session environment. Generated plugins intentionally omit blank `LLM_GATEWAY_*` placeholders so inherited host values keep working after plugin reinstalls. The plugin talks to the gateway using `LLM_GATEWAY_URL` (preconfigured) and `LLM_GATEWAY_TOKEN` (per person); models are pinned server-side on the gateway per task type, so no client-side model selection is needed. When the gateway is not configured, the server falls back to a local OpenAI-compatible endpoint (`LOCAL_LLM_API_URL`). If a gateway call fails, the server automatically retries with the local endpoint and surfaces `fallbackReason` in the response. `check_local_llm_health` verifies gateway reachability the same way it verifies a local-endpoint configuration.
 
 - Do not paste raw logs into the conversation when the verdict or triage is actionable.
 - Do not let the LLM override command truth: non-zero exits are failures unless the tool explicitly reports uncertainty.

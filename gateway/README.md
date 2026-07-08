@@ -102,3 +102,12 @@ next call; no client update needed.
 
 `PROXY_TOKENS` accepts a comma-separated list, so you can add a new token, roll
 clients over, then drop the old one — all via the env file + a restart.
+
+### Issuing a token to a person
+
+1. Generate a token: `openssl rand -hex 32`.
+2. Add it to the comma-separated `PROXY_TOKENS` in `gateway/deploy/gateway.env`.
+3. Redeploy: `./deploy-pm2.sh` (or restart the service) so the gateway reloads the list.
+4. Hand that token to the person; they run `npm run gateway:config -- setup` (or set
+   `LLM_GATEWAY_TOKEN` manually) on their machine. Revoke by removing their token
+   from `PROXY_TOKENS` and redeploying.

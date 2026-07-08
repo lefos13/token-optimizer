@@ -4,6 +4,43 @@ Local LLM subagent is an MCP server for running local validation commands and tu
 
 It is designed for coding agents that need to verify changes without pasting raw logs into the conversation. The server runs commands in the target workspace, writes full logs to disk, sends trimmed context to a local OpenAI-compatible model endpoint, and returns structured JSON that an agent can act on.
 
+## Setup (end users)
+
+This plugin runs your workspace's build/lint/test commands locally and returns
+compact LLM verdicts, triage, and reviews via a shared gateway — so raw logs
+stay out of your agent's context.
+
+**Prerequisite:** a gateway access token (ask your gateway operator). The gateway
+URL is already preconfigured in the plugin.
+
+### 1. Install the plugin
+
+- **Claude Code:** install from the marketplace (`local-tester`).
+- **Codex:** install from the marketplace (`local-tester`).
+- **Antigravity:** copy or symlink the generated `plugin/antigravity/` folder into
+  Antigravity's plugin directory.
+
+### 2. Provide your token
+
+The gateway URL is baked in; the only value you supply is your token.
+
+- **Shortcut (repo clone):** `npm run gateway:config -- setup`, paste your token
+  once — it is written to every client on your machine.
+- **Manual (no repo):** set `LLM_GATEWAY_TOKEN` in your client's config:
+  - Claude Code → `~/.claude/settings.json` under `env`
+  - Codex → your shell/launch environment (it is passed through)
+  - Antigravity → its `mcp_config.json` under the `local_tester` `env`
+
+### 3. Verify
+
+Restart the client. The tools (`run_test_verdict`, `run_failure_triage`,
+`run_changed_files_review`, `run_regression_check`, `run_command_digest`,
+`query_log`, `grep_log`, `scout_codebase`) are available, and
+`check_local_llm_health` reports the gateway reachable.
+
+> Hosting the gateway, issuing/rotating tokens, and choosing models are operator
+> tasks — see [`gateway/README.md`](gateway/README.md).
+
 ## What This Server Offers
 
 - Runs explicit validation commands, such as `npm test`, `npm run build`, `pytest`, `cargo test`, or any command supplied by the agent.
@@ -206,7 +243,7 @@ The dashboard is workspace-aware: add workspaces by pasting absolute project pat
 - Node.js 20 or newer.
 - npm.
 - An MCP-compatible client that can launch stdio servers.
-- An OpenRouter API key (`OPENROUTER_API_KEY`), **or** a local OpenAI-compatible chat completions endpoint — at least one must be configured.
+- A gateway access token (`LLM_GATEWAY_TOKEN`), **or** a local OpenAI-compatible chat completions endpoint — at least one must be configured.
 - Validation tools required by target workspaces, such as npm scripts, pytest, Cargo, or Go tooling.
 
 The local model endpoint must accept requests like:
@@ -245,13 +282,13 @@ npm run dev
 
 ### Centralized gateway (recommended)
 
-Point the server at a shared gateway so users never hold the real OpenRouter key
+Point the server at a shared gateway so users never hold a raw provider key
 and the model is chosen centrally. Set two variables:
 
 | Variable | Purpose |
 | --- | --- |
 | `LLM_GATEWAY_URL` | Gateway base URL, e.g. `https://llm-proxy.lnf.gr/v1`. |
-| `LLM_GATEWAY_TOKEN` | Shared proxy token issued by the gateway operator (revocable; not your OpenRouter key). |
+| `LLM_GATEWAY_TOKEN` | Shared proxy token issued by the gateway operator (revocable). |
 
 When both are set, the gateway is the primary LLM provider. Each call sends an
 `X-Task-Type` header so the gateway pins the model; the client's model choice is
@@ -260,46 +297,18 @@ is unreachable, the server falls back to a local model when `LOCAL_LLM_*` is
 configured, otherwise it returns a conservative `uncertain` result.
 
 Precedence: `LLM_GATEWAY_URL` + `LLM_GATEWAY_TOKEN` (both must be set together to
-engage the gateway) → `OPENROUTER_API_KEY` (direct, for local dev) → local
-model. To host the gateway, see [`gateway/README.md`](gateway/README.md).
-
-## OpenRouter Configuration
-
-Set `OPENROUTER_API_KEY` to route all LLM calls through [OpenRouter](https://openrouter.ai) instead of a local endpoint. When the key is set it takes priority; the local LLM path is used only when the key is absent or when an OpenRouter call fails.
-
-| Variable | Required | Purpose |
-|---|---|---|
-| `OPENROUTER_API_KEY` | Yes (to enable OpenRouter) | Enables OpenRouter mode. Absence falls back to local LLM. |
-| `OPENROUTER_MODEL` | No | Default model for all tasks. Falls back to `openai/gpt-4o-mini`. |
-| `OPENROUTER_VERDICT_MODEL` | No | Per-task override for `run_test_verdict` |
-| `OPENROUTER_TRIAGE_MODEL` | No | Per-task override for `run_failure_triage` |
-| `OPENROUTER_REVIEW_MODEL` | No | Per-task override for `run_changed_files_review` |
-| `OPENROUTER_DIGEST_MODEL` | No | Per-task override for `run_command_digest` |
-| `OPENROUTER_SCOUT_MODEL` | No | Per-task override for `scout_codebase` |
-| `OPENROUTER_QUERY_MODEL` | No | Per-task override for `query_log` and inline `autoTriage` |
-
-### JSON mode requirement
-
-All requests — both OpenRouter and local — send `response_format: { type: "json_object" }`. **The selected OpenRouter model must support JSON mode.** Models that do not support it will return an API error, which triggers an automatic retry against the local LLM (if configured) or surfaces as an error.
-
-Known-compatible models (non-exhaustive):
-- `openai/gpt-4o`
-- `openai/gpt-4o-mini` *(default)*
-- `anthropic/claude-3-5-sonnet`
-- `anthropic/claude-3-haiku`
-- `google/gemini-flash-1.5`
-
-Check the [OpenRouter models page](https://openrouter.ai/models) and filter by JSON mode support before choosing a model.
+engage the gateway) → local model. To host the gateway, see
+[`gateway/README.md`](gateway/README.md).
 
 ### Recommended setup command
 
 Use the repo-shipped config manager instead of editing plugin cache files:
 
 ```sh
-npm run openrouter:config -- setup
+npm run gateway:config -- setup
 ```
 
-It prompts for the API key and model once, then updates the stable user-owned
+It prompts for the gateway URL and token once, then updates the stable user-owned
 config surfaces for the supported clients:
 
 - Claude Code: `~/.claude/settings.json`
@@ -310,25 +319,25 @@ config surfaces for the supported clients:
 Other commands:
 
 ```sh
-npm run openrouter:config -- update
-npm run openrouter:config -- delete
-npm run openrouter:config -- status
+npm run gateway:config -- update
+npm run gateway:config -- delete
+npm run gateway:config -- status
 ```
 
-### Setting the key in a stable config
+### Setting the token in a stable config
 
-Generated plugins intentionally omit `OPENROUTER_*` placeholders from their
+Generated plugins intentionally omit `LLM_GATEWAY_*` placeholders from their
 bundled config. Blank plugin-scoped values override inherited host settings,
 which forces users to re-edit versioned cache directories after every update.
 
 Preferred order:
 - Use the client's stable user config when it can supply environment variables to plugin MCP processes.
-- Otherwise set `OPENROUTER_*` in the parent shell or app launch environment.
-- Only set `OPENROUTER_*` inside an installed plugin config when you explicitly want a plugin-scoped override.
+- Otherwise set `LLM_GATEWAY_*` in the parent shell or app launch environment.
+- Only set `LLM_GATEWAY_*` inside an installed plugin config when you explicitly want a plugin-scoped override.
 
 #### Claude Code
 
-The config manager writes `OPENROUTER_*` into `~/.claude/settings.json` under
+The config manager writes `LLM_GATEWAY_*` into `~/.claude/settings.json` under
 the top-level `env` object. The generated plugin uses Claude's `${VAR}`
 expansion so new plugin versions inherit those values automatically. If you
 intentionally want a plugin-scoped override, the plugin is cached at a
@@ -344,14 +353,12 @@ This prints something like:
 ~/.claude/plugins/cache/local-tester-marketplace/local-tester/1.2.2/.mcp.json
 ```
 
-Open that file and add the `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` values inside the `env` block:
+Open that file and add the `LLM_GATEWAY_URL` and `LLM_GATEWAY_TOKEN` values inside the `env` block:
 
 ```json
 "env": {
-  "OPENROUTER_API_KEY": "sk-or-v1-...",
-  "OPENROUTER_MODEL": "deepseek/deepseek-v3",
-  "OPENROUTER_VERDICT_MODEL": "optional-override",
-  "OPENROUTER_TRIAGE_MODEL": "optional-override"
+  "LLM_GATEWAY_URL": "https://llm-proxy.lnf.gr/v1",
+  "LLM_GATEWAY_TOKEN": "your-token"
 }
 ```
 
@@ -359,7 +366,7 @@ Plugin-scoped edits are not carried across plugin updates, which is why the stab
 
 #### Codex
 
-The config manager writes `OPENROUTER_*` into the current macOS GUI session
+The config manager writes `LLM_GATEWAY_*` into the current macOS GUI session
 with `launchctl setenv`. The generated plugin uses `env_vars` to forward those
 names into the bundled MCP server without storing the secret in the cached
 `.mcp.json`. If you intentionally want a plugin-scoped override, find the
@@ -370,14 +377,14 @@ installed plugin config and edit its `.mcp.json` under
 find ~/.codex/plugins -path '*local-tester*' -name '.mcp.json'
 ```
 
-Add your OpenRouter values there:
+Add your gateway values there:
 
 ```json
 "env": {
   "LOCAL_LLM_API_URL": "http://localhost:8080/v1",
   "LOCAL_LLM_MODEL": "local-model",
-  "OPENROUTER_API_KEY": "sk-or-v1-...",
-  "OPENROUTER_MODEL": "deepseek/deepseek-v3"
+  "LLM_GATEWAY_URL": "https://llm-proxy.lnf.gr/v1",
+  "LLM_GATEWAY_TOKEN": "your-token"
 }
 ```
 
@@ -385,19 +392,19 @@ After editing the installed plugin config, restart Codex or start a new thread s
 
 #### Antigravity
 
-The config manager writes `OPENROUTER_*` into
+The config manager writes `LLM_GATEWAY_*` into
 `~/.gemini/config/mcp_config.json` and, when the staged plugin exists, into
 `~/.gemini/config/plugins/local-tester/mcp_config.json` too. If you
 intentionally want a plugin-scoped override, edit that staged plugin config
 directly under `mcpServers.local_tester.env`.
 
-### `check_local_llm_health` when OpenRouter is configured
+### `check_local_llm_health` when the gateway is configured
 
-When `OPENROUTER_API_KEY` is set, `check_local_llm_health` returns immediately with `skipped: true` and `available: true` without making a network call. The assumption is that a configured key is valid; live errors surface as `fallbackReason` on actual tool calls.
+When `LLM_GATEWAY_URL` and `LLM_GATEWAY_TOKEN` are both set, `check_local_llm_health` verifies gateway reachability the same way it verifies a local-endpoint configuration, reporting availability and latency without exposing the token.
 
 ## Local LLM Configuration
 
-When `OPENROUTER_API_KEY` is not set, the server uses a local OpenAI-compatible endpoint. These environment variables configure that fallback path:
+When the gateway is not configured, the server uses a local OpenAI-compatible endpoint. These environment variables configure that fallback path:
 
 - `LOCAL_LLM_API_URL`: base URL for the local OpenAI-compatible endpoint. Defaults to `http://localhost:8080/v1`.
 - `LOCAL_LLM_MODEL`: model name sent in chat completion requests. Defaults to `local-model`.
