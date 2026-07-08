@@ -22,7 +22,8 @@
     "analytics:ui": "npm run build && node dist/analytics-ui.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.1"
+    "@modelcontextprotocol/sdk": "^1.0.1",
+    "@softawarest/token-optimizer-installer": "^1.7.1"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

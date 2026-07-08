@@ -5,6 +5,8 @@ const { execFileSync } = require("child_process");
 
 const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
 const GATEWAY_ENV_KEYS = ["LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN"];
+const CLAUDE_MARKETPLACE_NAME = "token-optimizer-marketplace";
+const CODEX_MARKETPLACE_NAME = "Softaware-marketplace";
 const DIRECTIVE_MARKER_START = "<!-- TOKEN_OPTIMIZER_START -->";
 const DIRECTIVE_MARKER_END = "<!-- TOKEN_OPTIMIZER_END -->";
 const DIRECTIVE_BLOCK = `${DIRECTIVE_MARKER_START}
@@ -132,7 +134,7 @@ function installClaude(options) {
     copyDirectory(marketplaceSrc, path.join(options.installRoot, ".claude-plugin"));
   }
   tryClientCommand("claude", ["plugin", "marketplace", "add", options.installRoot], options);
-  tryClientCommand("claude", ["plugin", "install", "token-optimizer@token-optimizer-marketplace"], options);
+  tryClientCommand("claude", ["plugin", "install", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`], options);
   applyGatewayConfig({ ...options, clients: ["claude"] });
   if (options.defaults !== false) {
     applyDefaultDirectives({ ...options, clients: ["claude"] });
@@ -148,6 +150,7 @@ function installCodex(options) {
     copyFile(marketplaceSrc, path.join(options.installRoot, ".agents", "plugins", "marketplace.json"));
   }
   tryClientCommand("codex", ["plugin", "marketplace", "add", options.installRoot], options);
+  tryClientCommand("codex", ["plugin", "add", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options);
   applyGatewayConfig({ ...options, clients: ["codex"] });
   if (options.defaults !== false) {
     applyDefaultDirectives({ ...options, clients: ["codex"] });

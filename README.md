@@ -16,9 +16,12 @@ URL is already preconfigured in the plugin.
 ### 1. Install the plugin
 
 - **One-command npm installer (optional):** run `npx @softawarest/token-optimizer-installer`
-  and paste your gateway token. This detects installed clients, copies the
-  packaged plugin/server/skill assets, writes supported MCP config, and applies
-  default-on instructions where possible.
+  and paste your gateway token. By default this installer:
+  - detects installed clients
+  - installs marketplace/plugin assets where the client supports them
+  - copies bundled server/skill files where the client is file-based
+  - writes `LLM_GATEWAY_URL` and `LLM_GATEWAY_TOKEN` into supported client config
+  - writes default-on global instructions where the client exposes a writable global file
 - **Claude Code:** install from the marketplace (`token-optimizer`).
 - **Codex:** install from the marketplace (`token-optimizer`).
 - **Antigravity:** copy or symlink the generated `plugin/antigravity/` folder into
@@ -644,6 +647,51 @@ npx @softawarest/token-optimizer-installer --clients all --cursor-project /path/
 npx @softawarest/token-optimizer-installer config --token <token>
 npx @softawarest/token-optimizer-installer defaults --clients claude,codex,opencode
 ```
+
+Default installer flow:
+
+1. `npx @softawarest/token-optimizer-installer`
+2. Paste the gateway access token when prompted.
+3. The installer detects supported clients on the machine unless you override with `--clients ...`.
+4. For each selected client it installs the plugin/server assets, writes gateway config, and applies defaults where supported.
+5. Restart or reload each selected client.
+
+What the default `install` command does:
+
+- Claude Code:
+  copies the packaged plugin and marketplace catalog into `~/.token-optimizer/`, runs `claude plugin marketplace add ...`, runs `claude plugin install token-optimizer@token-optimizer-marketplace`, writes gateway env into `~/.claude/settings.json`, and writes the default-on block into `~/.claude/CLAUDE.md`.
+- Codex:
+  copies the packaged plugin and marketplace catalog into `~/.token-optimizer/`, runs `codex plugin marketplace add ...`, runs `codex plugin add token-optimizer --marketplace Softaware-marketplace`, writes gateway env into the macOS GUI launch environment, and writes the default-on block into `~/.codex/AGENTS.md`.
+- Antigravity:
+  copies the packaged plugin into `~/.gemini/config/plugins/token-optimizer`, writes gateway env into Gemini and staged plugin config, and writes the default-on block into `~/.gemini/GEMINI.md`.
+- OpenCode:
+  copies the bundled server into `~/.config/opencode/token-optimizer-server`, copies the skill into `~/.config/opencode/skills/token-optimizer`, writes the MCP block and gateway env into `~/.config/opencode/opencode.jsonc`, and writes the default-on block into `~/.config/opencode/AGENTS.md`.
+- Cursor:
+  copies the bundled server into `~/.cursor/token-optimizer-server` and writes the MCP block and gateway env into `~/.cursor/mcp.json`.
+  Defaults are not global in Cursor: pass `--cursor-project /path/to/project` to copy `token-optimizer.mdc` into that project's `.cursor/rules/`, or add an equivalent global User Rule in Cursor Settings manually.
+
+Use these when you want only part of the flow:
+
+- `npx @softawarest/token-optimizer-installer config --token <token>`:
+  writes only the gateway token/URL config for the selected clients.
+- `npx @softawarest/token-optimizer-installer defaults --clients claude,codex,opencode`:
+  writes only the default-on instruction files for the selected clients.
+- `npx @softawarest/token-optimizer-installer --no-defaults`:
+  installs assets and gateway config but skips default-on instruction writes.
+
+Publish verification:
+
+```bash
+npm run pack:installer
+cd packages/installer
+npm publish --access public
+npm view @softawarest/token-optimizer-installer name version dist-tags --json
+npx @softawarest/token-optimizer-installer --help
+```
+
+Do not announce the package until both `npm view` and `npx ... --help` succeed
+from a clean shell. If `npm view` returns `404`, the package is either not
+published under that exact scope/name yet or is not publicly available.
 
 Cursor remains the main partial exception: the CLI can write global MCP config,
 but default-on rules are project-scoped unless the user adds an equivalent

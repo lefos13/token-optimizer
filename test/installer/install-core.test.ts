@@ -21,6 +21,12 @@ function writeFixtureAssets(root: string): void {
     'plugin/cursor/server/index.js': 'console.log("server")\n',
     'plugin/cursor/server/package.json': '{"name":"token-optimizer-server"}\n',
     'plugin/cursor/rules/token-optimizer.mdc': '---\nalwaysApply: true\n---\n',
+    'plugin/claude/server/start.sh': '#!/usr/bin/env bash\n',
+    'plugin/claude/README.md': '# Claude\n',
+    'plugin/codex/server/start.sh': '#!/usr/bin/env bash\n',
+    'plugin/codex/README.md': '# Codex\n',
+    '.claude-plugin/marketplace.json': '{"name":"token-optimizer-marketplace"}\n',
+    '.agents/plugins/marketplace.json': '{"name":"Softaware-marketplace"}\n',
   };
   for (const [relativePath, content] of Object.entries(files)) {
     const filePath = path.join(root, relativePath);
@@ -104,4 +110,39 @@ test('installSelectedClients defaults to detected clients and does not write eve
   assert.deepEqual(installed, ['opencode']);
   assert.ok(fs.existsSync(path.join(home, '.config', 'opencode', 'token-optimizer-server', 'start.sh')));
   assert.ok(!fs.existsSync(path.join(home, '.cursor', 'mcp.json')));
+});
+
+test('installClaude and installCodex copy marketplace assets and write config/defaults', () => {
+  const home = tmpDir('to-installer-home-');
+  const assetsRoot = tmpDir('to-installer-assets-');
+  const installRoot = path.join(home, '.token-optimizer');
+  writeFixtureAssets(assetsRoot);
+
+  installer.installClaude({
+    home,
+    assetsRoot,
+    installRoot,
+    gatewayToken: 'person-token',
+    skipLaunchctl: true,
+    skipClientCommands: true,
+  });
+  installer.installCodex({
+    home,
+    assetsRoot,
+    installRoot,
+    gatewayToken: 'person-token',
+    skipLaunchctl: true,
+    skipClientCommands: true,
+  });
+
+  assert.ok(fs.existsSync(path.join(installRoot, '.claude-plugin', 'marketplace.json')));
+  assert.ok(fs.existsSync(path.join(installRoot, 'plugin', 'claude', 'README.md')));
+  assert.ok(fs.existsSync(path.join(installRoot, '.agents', 'plugins', 'marketplace.json')));
+  assert.ok(fs.existsSync(path.join(installRoot, 'plugin', 'codex', 'README.md')));
+
+  const claude = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
+  assert.equal(claude.env.LLM_GATEWAY_TOKEN, 'person-token');
+
+  const codexAgents = fs.readFileSync(path.join(home, '.codex', 'AGENTS.md'), 'utf8');
+  assert.ok(codexAgents.includes('TOKEN_OPTIMIZER_START'));
 });
