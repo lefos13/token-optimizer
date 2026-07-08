@@ -51,6 +51,26 @@ for automatic HTTPS.
    curl https://llm-proxy.lnf.gr/health   # → {"ok":true}
    ```
 
+## Alternative: run under pm2 instead of systemd
+
+If you'd rather supervise the gateway with pm2 than a systemd unit, skip step 4-5
+above and instead:
+
+1. Copy the whole `gateway/` directory (with `dist/` already built) to the droplet,
+   e.g. `scp -r gateway droplet:/tmp/gateway`.
+2. On the droplet: `cd /tmp/gateway/deploy && ./deploy-pm2.sh`.
+
+That script installs pm2 if missing, syncs `dist/` and `gateway/deploy/ecosystem.config.js`
+into `/opt/local-tester-gateway`, seeds `/etc/local-tester-gateway.env` from the example
+on first run (edit it with your real key + token before relying on it), starts/reloads
+the process under pm2, and runs `pm2 save`. It prints a one-time `pm2 startup` command
+you copy/run once so pm2 itself resurrects the gateway after a droplet reboot. Steps
+1, 2 (Node/Caddy install), 6 (Caddy config), 7 (ufw), and 8 (verify) above are unchanged
+— only the process supervisor differs.
+
+Re-running `./deploy-pm2.sh` after a new build or an env-file edit picks up the changes
+and reloads the process; it never touches an existing `/etc/local-tester-gateway.env`.
+
 ## Changing the model centrally
 
 Edit `/etc/local-tester-gateway.env` (`DEFAULT_MODEL` or a `MODEL_<TASK>` line),
