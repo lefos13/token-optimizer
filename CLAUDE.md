@@ -67,10 +67,10 @@ When changing a tool:
 
 ## Local LLM Behavior
 
-- The server uses `LOCAL_LLM_API_URL` and `LOCAL_LLM_MODEL`, defaulting to `http://localhost:8080/v1` and `local-model`.
+- The server prefers the centralized gateway (`LLM_GATEWAY_URL` + `LLM_GATEWAY_TOKEN`) and falls back to a local OpenAI-compatible model (`LOCAL_LLM_API_URL` / `LOCAL_LLM_MODEL`, defaulting to `http://localhost:8080/v1` and `local-model`) when the gateway is unset or unreachable. Models are pinned server-side on the gateway per task type; clients do not select a model.
 - Keep prompts strict about JSON-only responses.
-- Keep fallback behavior conservative. If the model is offline, returns invalid JSON, or cannot classify the result, return `uncertain` or an advisory review issue instead of pretending confidence.
-- Do not add remote hosted LLM dependencies or external network calls unless the user explicitly requests that architecture change.
+- Keep fallback behavior conservative. If neither provider is reachable, returns invalid JSON, or cannot classify the result, return `uncertain` or an advisory review issue instead of pretending confidence.
+- The gateway is a remote hop the maintainer controls and is the approved primary LLM path; do not add ad-hoc third-party LLM dependencies or other external network calls unless the user explicitly requests that architecture change.
 
 ## Command Execution and Logs
 
