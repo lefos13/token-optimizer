@@ -9,6 +9,10 @@ description: Use this MCP server to scout codebases, validate code changes, revi
 
 Use the `mcp__token_optimizer` tools as the first validation path after code changes. Let the MCP server run validation commands, persist full logs under the target workspace, and ask Token Optimizer for compact verdicts, changed-file review, failure triage, or regression checks before deciding whether raw logs are needed.
 
+When a shared gateway token is needed, request it through
+`https://llm-proxy.lnf.gr/`; the operator approves the request in the gateway's
+`/admin` dashboard before the token is issued.
+
 Currently implemented server tools:
 
 - `check_local_llm_health`: verifies the configured LLM provider. When `LLM_GATEWAY_URL` and `LLM_GATEWAY_TOKEN` are set, pings the gateway and returns availability metadata. Otherwise pings the local OpenAI-compatible endpoint.
