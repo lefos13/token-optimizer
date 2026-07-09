@@ -48,7 +48,7 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "1.10.2";
+  const VERSION = "1.10.3";
 
   const sdkVersion = require(
     path.join(
@@ -158,6 +158,7 @@ try {
         env_vars: [
           "LLM_GATEWAY_TOKEN",
           "LLM_GATEWAY_URL",
+          "OPENROUTER_BYOK_KEY",
         ],
         env: {
           LLM_GATEWAY_URL: "https://llm-proxy.lnf.gr/v1",
@@ -246,19 +247,9 @@ fi
 echo "node=$(command -v node) ($(node -v 2>&1))" >&2
 echo "npm=$(command -v npm 2>/dev/null || echo 'NOT FOUND') ($(npm -v 2>&1 || true))" >&2
 
-# (Re)install runtime deps only when the manifest changes. Output goes to
-# stderr/null so stdout stays a clean JSON-RPC channel.
-if ! diff -q "$ROOT/server/package.json" "$DATA/package.json" >/dev/null 2>&1; then
-  echo "installing runtime deps into $DATA" >&2
-  cp "$ROOT/server/package.json" "$DATA/package.json"
-  ( cd "$DATA" && npm install --omit=dev --no-audit --no-fund ) 1>&2
-else
-  echo "runtime deps up to date" >&2
-fi
-
-echo "exec node $ROOT/server/index.js" >&2
-export NODE_PATH="$DATA/node_modules"
-exec node "$ROOT/server/index.js"
+echo "exec node $ROOT/server/start.js" >&2
+export PLUGIN_DATA="$DATA"
+exec node "$ROOT/server/start.js"
 `;
   const startShPath = path.join(serverDir, "start.sh");
   fs.writeFileSync(startShPath, startSh);

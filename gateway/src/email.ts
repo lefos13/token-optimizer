@@ -34,6 +34,24 @@ function hasEmailConfig(config: GatewayConfig): boolean {
     : Boolean(config.smtpHost);
 }
 
+export function buildTokenEmailText(config: Pick<GatewayConfig, 'defaultDailyLimit'>, token: string): string {
+  return [
+    'Your Token Optimizer gateway access has been approved.',
+    '',
+    `Access token: ${token}`,
+    '',
+    'Recommended setup:',
+    '1. Open a terminal outside any Token Optimizer source checkout.',
+    '2. Run:',
+    '   cd $HOME',
+    `   npx --yes @softawarest/token-optimizer-installer config --token ${token}`,
+    '3. Restart your client so it loads the updated MCP configuration.',
+    '',
+    `Your token allows ${config.defaultDailyLimit} tool calls per day by default.`,
+    'Keep this token secret. It can be revoked by the gateway operator.'
+  ].join('\n');
+}
+
 /* Approved tokens are sent only through configured transports. Delivery
    failures return a safe status so the admin response can show its existing
    one-time manual-token fallback without exposing credentials. */
@@ -41,17 +59,7 @@ export async function sendTokenEmail(config: GatewayConfig, to: string, token: s
   if (!hasEmailConfig(config)) {
     return { sent: false, error: 'email delivery not configured' };
   }
-  const text = [
-    'Your token-optimizer gateway access token was approved.',
-    '',
-    `Access token: ${token}`,
-    '',
-    `It allows ${config.defaultDailyLimit} tool calls per day by default.`,
-    'Configure it with: npm run gateway:config -- setup',
-    '(or set LLM_GATEWAY_TOKEN in your client environment).',
-    '',
-    'Keep this token secret. It can be revoked by the gateway operator.'
-  ].join('\n');
+  const text = buildTokenEmailText(config, token);
   try {
     const transporter = nodemailer.createTransport(buildTransportOptions(config));
     await transporter.sendMail({

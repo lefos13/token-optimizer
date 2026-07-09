@@ -30,3 +30,12 @@ test('Nodemailer transport options mirror the Gmail and SMTP operator configurat
     auth: { user: 'mailer@example.com', pass: 'smtp-password' }
   });
 });
+
+test('approval email recommends the published npm installer command', () => {
+  assert.equal(typeof gatewayEmail.buildTokenEmailText, 'function');
+  const text = gatewayEmail.buildTokenEmailText({ defaultDailyLimit: 100 }, 'to_test_token');
+  assert.match(text, /npx --yes @softawarest\/token-optimizer-installer config --token to_test_token/);
+  assert.match(text, /cd \$HOME/);
+  assert.match(text, /Restart your client/);
+  assert.doesNotMatch(text, /npm run gateway:config/);
+});

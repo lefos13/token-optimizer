@@ -119,6 +119,10 @@ The installer is fully supported on Windows. All MCP servers are launched with
 `node server/start.js` (a cross-platform launcher) — `bash` is never required.
 For Codex, this direct registration is also the credential-bearing runtime
 path, while the marketplace plugin supplies skill discovery.
+
+The launcher verifies that the MCP SDK and `zod/v3` resolve before startup. An
+incomplete launcher-owned dependency cache is removed and reinstalled once,
+then verified again; healthy caches remain on the no-install fast path.
 Client CLI detection uses `where` on Windows, and `.cmd`-shim CLIs are invoked
 through `cmd.exe`. When the `claude` or `codex` CLI is not on `PATH` (typical
 for desktop-app installs), the CLI-free fallbacks above are used instead.

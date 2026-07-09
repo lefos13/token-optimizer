@@ -50,7 +50,7 @@ try {
   fs.mkdirSync(rulesDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "1.10.2";
+  const VERSION = "1.10.3";
 
   const sdkVersion = require(
     path.join(rootDir, "node_modules", "@modelcontextprotocol", "sdk", "package.json"),
@@ -80,21 +80,14 @@ try {
     JSON.stringify(serverPackageJson, null, 2) + "\n",
   );
 
-  /* Flat path structure as required by Task 3 instructions. */
+  /* Preserve Cursor's flat, self-locating data path, then delegate cache
+     validation and server startup to the shared launcher. */
   const startSh = `#!/usr/bin/env bash
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-DATA="$ROOT/.data"
-mkdir -p "$DATA"
-
-if ! diff -q "$ROOT/package.json" "$DATA/package.json" >/dev/null 2>&1; then
-  cp "$ROOT/package.json" "$DATA/package.json"
-  ( cd "$DATA" && npm install --omit=dev --no-audit --no-fund ) 1>&2
-fi
-
-export NODE_PATH="$DATA/node_modules"
-exec node "$ROOT/index.js"
+export PLUGIN_DATA="$ROOT/.data"
+exec node "$ROOT/start.js"
 `;
   const startShPath = path.join(serverDir, "start.sh");
   fs.writeFileSync(startShPath, startSh);

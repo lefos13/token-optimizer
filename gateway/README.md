@@ -218,6 +218,7 @@ needed. The manual `PROXY_TOKENS` flow below issues an
 1. Generate a token: `openssl rand -hex 32`.
 2. Add it to the comma-separated `PROXY_TOKENS` in `gateway/deploy/gateway.env`.
 3. Redeploy: `./deploy-pm2.sh` (or restart the service) so the gateway reloads the list.
-4. Hand that token to the person; they run `npm run gateway:config -- setup` (or set
-   `LLM_GATEWAY_TOKEN` manually) on their machine. Revoke by removing their token
+4. Hand that token to the person; they run `cd $HOME` followed by
+   `npx --yes @softawarest/token-optimizer-installer config --token <token>` on
+   their machine. Revoke by removing their token
    from `PROXY_TOKENS` and redeploying.

@@ -27,6 +27,13 @@ The installer detects supported clients, installs the right plugin/server
 assets, writes provider configuration, and enables default-on usage where the
 client supports it. Restart your client after installation.
 
+Generated launchers verify that the MCP SDK and its Zod compatibility entry
+point are actually resolvable before starting. If an interrupted npm install
+left an incomplete launcher-owned dependency cache, the launcher removes only
+that cached `node_modules`, reinstalls it, verifies it again, and then starts
+the server. Codex marketplace launches also forward `OPENROUTER_BYOK_KEY`, so
+BYOK mode does not require a gateway access token.
+
 Run `npx @softawarest/token-optimizer-installer --help` to see non-interactive
 options such as `--token`, `--byok-key`, and `--local`.
 
@@ -63,6 +70,9 @@ than claiming an LLM verdict.
 
 - Restart your client after installing or changing provider settings.
 - Run `check_local_llm_health` to verify the selected provider.
+- If tools are absent after a prior interrupted dependency install, restart the
+  client. The launcher now detects and repairs incomplete runtime caches before
+  registering its MCP tools.
 - Run the installer from outside this repository so `npx` does not select an
   older local development dependency.
 - Use `npx @softawarest/token-optimizer-installer config` to update provider
