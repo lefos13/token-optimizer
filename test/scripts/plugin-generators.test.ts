@@ -16,10 +16,10 @@ function readGenerator(name: string): string {
   return fs.readFileSync(path.join(root, 'scripts', name), 'utf8');
 }
 
-test('every plugin generator carries version 1.10.3 and delegates POSIX startup to start.js', () => {
+test('every plugin generator carries version 1.10.5 and delegates POSIX startup to start.js', () => {
   for (const generator of generators) {
     const source = readGenerator(generator);
-    assert.match(source, /const VERSION = "1\.10\.3"/, `${generator} should carry the new version`);
+    assert.match(source, /const VERSION = "1\.10\.5"/, `${generator} should carry the new version`);
     const startSh = source.match(/const startSh = `([\s\S]*?)`;\r?\n/)?.[1] || '';
     assert.match(startSh, /start\.js/, `${generator} start.sh should delegate to start.js`);
     assert.doesNotMatch(startSh, /npm install/, `${generator} start.sh should not duplicate dependency setup`);

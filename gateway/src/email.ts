@@ -52,6 +52,40 @@ export function buildTokenEmailText(config: Pick<GatewayConfig, 'defaultDailyLim
   ].join('\n');
 }
 
+/* Operator alerts reuse the configured mail transport but do not contain an
+   issued token, making them safe to receive as mobile notifications. */
+export function buildTokenRequestNotificationText(requesterEmail: string, requestedAt: Date): string {
+  return [
+    'A Token Optimizer gateway access token was requested.',
+    '',
+    `Requester email: ${requesterEmail}`,
+    `Requested at: ${requestedAt.toISOString()}`
+  ].join('\n');
+}
+
+export async function sendTokenRequestNotification(
+  config: GatewayConfig,
+  requesterEmail: string,
+  requestedAt: Date
+): Promise<EmailResult> {
+  if (!hasEmailConfig(config) || !config.gmailUser) {
+    return { sent: false, error: 'email delivery not configured' };
+  }
+  try {
+    const transporter = nodemailer.createTransport(buildTransportOptions(config));
+    await transporter.sendMail({
+      from: config.emailFrom,
+      replyTo: config.emailReplyTo,
+      to: config.gmailUser,
+      subject: 'New token-optimizer access request',
+      text: buildTokenRequestNotificationText(requesterEmail, requestedAt)
+    });
+    return { sent: true };
+  } catch (err) {
+    return { sent: false, error: err instanceof Error ? err.message : 'email delivery failed' };
+  }
+}
+
 /* Approved tokens are sent only through configured transports. Delivery
    failures return a safe status so the admin response can show its existing
    one-time manual-token fallback without exposing credentials. */

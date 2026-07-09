@@ -6,7 +6,7 @@ import { resolveModel } from './model-map';
 import { createRateLimiter, RateLimiter } from './rate-limit';
 import { TokenStore, createTokenStore, normalizeEmail } from './tokens';
 import { StatsStore, createStatsStore } from './stats';
-import { sendTokenEmail, EmailResult } from './email';
+import { sendTokenEmail, sendTokenRequestNotification, EmailResult } from './email';
 import { renderAccessRequestPage, renderStatsPage, renderAdminPage } from './pages';
 
 export interface ServerDeps {
@@ -15,6 +15,7 @@ export interface ServerDeps {
   tokenStore?: TokenStore;
   statsStore?: StatsStore;
   emailSender?: (config: GatewayConfig, to: string, token: string) => Promise<EmailResult>;
+  tokenRequestNotificationSender?: (config: GatewayConfig, requesterEmail: string, requestedAt: Date) => Promise<EmailResult>;
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -255,14 +256,22 @@ async function handleAnalyticsIngest(
   return sendJson(res, accepted ? 202 : 400, accepted ? { ok: true } : { error: 'invalid record' });
 }
 
-/* Public self-service token request. One request per email, ever: any existing
-   record for the address (pending, approved, denied, or revoked) blocks a new
-   one. Per-IP rate limiting keeps the registry from being spammed. */
+/* Bot signals are checked before storage. The ordinary pending response avoids
+   revealing which safeguard rejected an automated submission. */
+const MIN_REQUEST_COMPLETION_MS = 1_500;
+const MAX_REQUEST_COMPLETION_MS = 60 * 60 * 1_000;
+const PENDING_TOKEN_REQUEST_RESPONSE = {
+  status: 'pending',
+  message: 'Request received. You will get your token by email once approved.'
+};
+
 async function handleTokenRequest(
   req: IncomingMessage,
   res: ServerResponse,
   requestLimiter: RateLimiter,
-  tokenStore: TokenStore
+  tokenStore: TokenStore,
+  config: GatewayConfig,
+  notificationSender: NonNullable<ServerDeps['tokenRequestNotificationSender']>
 ): Promise<void> {
   if (!requestLimiter.allow(`ip:${clientIp(req)}`)) {
     return sendJson(res, 429, { error: 'rate limited' });
@@ -275,11 +284,24 @@ async function handleTokenRequest(
   if (!email) {
     return sendJson(res, 400, { error: 'a valid email is required' });
   }
+  if (typeof body?.website === 'string' && body.website.trim()) {
+    return sendJson(res, 202, PENDING_TOKEN_REQUEST_RESPONSE);
+  }
+  if (body?.startedAt !== undefined) {
+    if (typeof body.startedAt !== 'number' || !Number.isFinite(body.startedAt)) {
+      return sendJson(res, 400, { error: 'startedAt must be a valid timestamp' });
+    }
+    const elapsed = Date.now() - body.startedAt;
+    if (elapsed < MIN_REQUEST_COMPLETION_MS || elapsed > MAX_REQUEST_COMPLETION_MS) {
+      return sendJson(res, 202, PENDING_TOKEN_REQUEST_RESPONSE);
+    }
+  }
   const result = tokenStore.requestToken(email);
   if (!result.ok) {
     return sendJson(res, 409, { error: 'a token has already been requested for this email' });
   }
-  return sendJson(res, 202, { status: 'pending', message: 'Request received. You will get your token by email once approved.' });
+  void notificationSender(config, email, new Date());
+  return sendJson(res, 202, PENDING_TOKEN_REQUEST_RESPONSE);
 }
 
 function isAdminAuthorized(req: IncomingMessage, config: GatewayConfig): boolean {
@@ -377,6 +399,8 @@ export function createGatewayServer(config: GatewayConfig, deps: ServerDeps = {}
   const tokenStore = deps.tokenStore || createTokenStore(config.stateDir, config.defaultDailyLimit);
   const statsStore = deps.statsStore || createStatsStore(config.stateDir);
   const emailSender = deps.emailSender || ((cfg, to, token) => sendTokenEmail(cfg, to, token));
+  const tokenRequestNotificationSender = deps.tokenRequestNotificationSender
+    || ((cfg, email, requestedAt) => sendTokenRequestNotification(cfg, email, requestedAt));
 
   return httpCreateServer(async (req, res) => {
     try {
@@ -399,7 +423,7 @@ export function createGatewayServer(config: GatewayConfig, deps: ServerDeps = {}
         return sendHtml(res, 200, renderStatsPage(statsStore.publicStats()));
       }
       if (req.method === 'POST' && req.url === '/v1/token-requests') {
-        return await handleTokenRequest(req, res, requestLimiter, tokenStore);
+        return await handleTokenRequest(req, res, requestLimiter, tokenStore, config, tokenRequestNotificationSender);
       }
       if ((req.url || '').startsWith('/admin')) {
         return await handleAdmin(req, res, config, tokenStore, emailSender);

@@ -74,10 +74,13 @@ export function attachLLMUsage<T extends object>(value: T, usage: LLMUsage | und
   if (!usage) {
     return value;
   }
+  /* Auto-triage replaces primary usage with the combined primary/follow-up
+     total, so this private analytics property must permit replacement. */
   Object.defineProperty(value, LLM_USAGE, {
     value: usage,
     enumerable: false,
-    configurable: false
+    configurable: true,
+    writable: true
   });
   return value;
 }

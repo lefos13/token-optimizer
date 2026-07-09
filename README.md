@@ -62,6 +62,10 @@ Gateway calls use an approved access token and have the gateway's configured
 daily allowance. A BYOK OpenRouter key is independent of the shared gateway
 quota. A local provider keeps inference on your machine.
 
+The gateway's public token-request portal uses a honeypot and completion-time
+check in addition to its existing rate limit. Operators with email delivery
+configured receive a best-effort alert at `GMAIL_USER` for each accepted request.
+
 If a local or gateway provider is unavailable, validation command exit codes
 remain authoritative and Token Optimizer reports the unavailable summary rather
 than claiming an LLM verdict.
@@ -97,3 +101,8 @@ npm run build:installer
 
 Do not publish an installer package until `npm pack ./packages/installer
 --dry-run` and the full test suite succeed.
+
+Any change that affects the installed server, a plugin, skill instructions, or
+the installer must receive a new aligned release version. Keep the root package,
+installer package, MCP server metadata, and all plugin generators on that same
+version, then run `npm run build:installer` before publishing.

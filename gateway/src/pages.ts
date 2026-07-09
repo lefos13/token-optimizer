@@ -144,14 +144,16 @@ export function renderAccessRequestPage(): string {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>token-optimizer — request access</title>
 <style>
-:root{color-scheme:light dark}body{font-family:system-ui,sans-serif;max-width:38rem;margin:10vh auto;padding:0 1.25rem}form{display:grid;gap:.75rem}label{display:grid;gap:.35rem}input,button{font:inherit;padding:.65rem}button{justify-self:start}#message{min-height:1.5rem}
+:root{color-scheme:light dark}body{font-family:system-ui,sans-serif;max-width:38rem;margin:10vh auto;padding:0 1.25rem}form{display:grid;gap:.75rem}label{display:grid;gap:.35rem}input,button{font:inherit;padding:.65rem}button{justify-self:start}#message{min-height:1.5rem}.hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
 </style></head><body><main>
 <h1>Request access</h1>
 <p>Enter your email to request a token for the token-optimizer gateway.</p>
-<form id="request-form"><label>Email <input id="email" name="email" type="email" autocomplete="email" required></label><button type="submit">Request access</button></form>
+<form id="request-form"><label>Email <input id="email" name="email" type="email" autocomplete="email" required></label><div class="hp" aria-hidden="true"><label>Website <input id="website" name="website" type="text" tabindex="-1" autocomplete="off"></label></div><button type="submit">Request access</button></form>
 <p id="message" role="status" aria-live="polite"></p>
 <script>
-const form=document.getElementById('request-form');const email=document.getElementById('email');const message=document.getElementById('message');
-form.addEventListener('submit',async function(event){event.preventDefault();message.textContent='Submitting…';try{const response=await fetch('/v1/token-requests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email.value.trim()})});if(response.status===202){message.textContent='Request submitted. You will receive your token after approval.';form.reset();return}if(response.status===400){message.textContent='Enter a valid email address.';return}if(response.status===409){message.textContent='A request already exists for this email address.';return}if(response.status===429){message.textContent='Too many requests. Please try again shortly.';return}message.textContent='Unable to submit your request. Please try again.'}catch(_error){message.textContent='Unable to submit your request. Please try again.'}});
+/* The server remains authoritative; these inexpensive values only flag common
+   automated form submissions without blocking compatible API callers. */
+const form=document.getElementById('request-form');const email=document.getElementById('email');const website=document.getElementById('website');const message=document.getElementById('message');const startedAt=Date.now();
+form.addEventListener('submit',async function(event){event.preventDefault();message.textContent='Submitting…';try{const response=await fetch('/v1/token-requests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email.value.trim(),website:website.value,startedAt})});if(response.status===202){message.textContent='Request submitted. You will receive your token after approval.';form.reset();return}if(response.status===400){message.textContent='Enter a valid email address.';return}if(response.status===409){message.textContent='A request already exists for this email address.';return}if(response.status===429){message.textContent='Too many requests. Please try again shortly.';return}message.textContent='Unable to submit your request. Please try again.'}catch(_error){message.textContent='Unable to submit your request. Please try again.'}});
 </script></main></body></html>`;
 }

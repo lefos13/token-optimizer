@@ -55,12 +55,14 @@ Writes are atomic; deleting the directory resets the registry and the stats.
   emails, tokens, workspace paths, commands, or log content.
 - `GET /stats` → public HTML showcase page rendering the same aggregates.
 - `GET /` → public browser portal for requesting a gateway access token. It
-  submits to the existing token-request API and shows submission, validation,
-  duplicate-request, and rate-limit feedback.
-- `POST /v1/token-requests` `{"email":"you@example.com"}` → public self-service
+  submits a hidden honeypot and form-start timestamp alongside the email, then
+  shows submission, validation, duplicate-request, and rate-limit feedback.
+- `POST /v1/token-requests` `{"email":"you@example.com","website":"","startedAt":0}` → public self-service
   token request. **One request per email, ever** — any existing record (pending,
   approved, denied, or revoked) returns `409`. Per-IP rate-limited
-  (`TOKEN_REQUESTS_PER_MIN`, default 3/min).
+  (`TOKEN_REQUESTS_PER_MIN`, default 3/min). A filled honeypot or implausibly
+  fast/old form timestamp returns the normal pending `202` response without
+  creating a record; direct API callers may omit these optional bot signals.
 - `GET /admin` + `/admin/api/*` → operator dashboard and API (see below). All
   admin routes return `404` unless `ADMIN_TOKEN` is set.
 
@@ -100,6 +102,11 @@ tokens emailed automatically. The gateway uses the same names as
 Set `EMAIL_REPLY_TO` when replies should go somewhere other than the sender.
 Without a complete mail configuration, or when delivery fails, approvals still
 work and the dashboard shows each token once for manual delivery.
+
+When a new public token request is accepted, the gateway also sends a
+best-effort operator notification to `GMAIL_USER` containing the normalized
+requester email and UTC request time. Notification failure never changes the
+public request result.
 
 ## Global stats
 

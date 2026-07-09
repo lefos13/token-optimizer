@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { AddressInfo } from 'node:net';
-import { createGatewayServer } from '../../gateway/src/server';
+import { createGatewayServer, ServerDeps } from '../../gateway/src/server';
 import { loadConfig } from '../../gateway/src/config';
 
 /* End-to-end coverage of the token request → approve → use → limit → revoke
@@ -31,9 +31,9 @@ function makeConfig(stateDir: string) {
   } as any);
 }
 
-async function withServer(run: (base: string) => Promise<void>): Promise<void> {
+async function withServer(run: (base: string) => Promise<void>, deps: ServerDeps = {}): Promise<void> {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-flow-'));
-  const server = createGatewayServer(makeConfig(stateDir), { fetchImpl: okUpstream });
+  const server = createGatewayServer(makeConfig(stateDir), { fetchImpl: okUpstream, ...deps });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
   try {
@@ -143,6 +143,35 @@ test('root serves the public access request portal', async () => {
     assert.ok(html.includes('/v1/token-requests'));
     assert.ok(html.includes('type="email"'));
     assert.ok(html.includes('You will receive your token after approval.'));
+  });
+});
+
+/* Public request protections must not expose their decision to bots, while a
+   newly stored request still notifies the operator through the injected sender. */
+test('new requests notify the operator and bot submissions are not stored', async () => {
+  const notified: string[] = [];
+  await withServer(async (base) => {
+    assert.equal((await post(base, '/v1/token-requests', {
+      email: 'notify@example.com', website: '', startedAt: Date.now() - 2_000
+    })).status, 202);
+    assert.deepEqual(notified, ['notify@example.com']);
+
+    assert.equal((await post(base, '/v1/token-requests', {
+      email: 'honeypot@example.com', website: 'https://spam.example', startedAt: Date.now() - 2_000
+    })).status, 202);
+    assert.equal((await post(base, '/v1/token-requests', {
+      email: 'fast@example.com', website: '', startedAt: Date.now()
+    })).status, 202);
+
+    const listed = (await (await fetch(`${base}/admin/api/requests`, {
+      headers: { Authorization: 'Bearer admin-secret' }
+    })).json()) as any;
+    assert.deepEqual(listed.requests.map((request: any) => request.email), ['notify@example.com']);
+  }, {
+    tokenRequestNotificationSender: async (_config: ReturnType<typeof makeConfig>, email: string) => {
+      notified.push(email);
+      return { sent: true };
+    }
   });
 });
 

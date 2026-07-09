@@ -11,7 +11,9 @@ Use the `mcp__token_optimizer` tools as the first validation path after code cha
 
 When a shared gateway token is needed, request it through
 `https://llm-proxy.lnf.gr/`; the operator approves the request in the gateway's
-`/admin` dashboard before the token is issued.
+`/admin` dashboard before the token is issued. The public request portal is
+rate-limited and uses a honeypot plus completion-time check; accepted requests
+send the configured gateway operator (`GMAIL_USER`) a best-effort email alert.
 
 Currently implemented server tools:
 

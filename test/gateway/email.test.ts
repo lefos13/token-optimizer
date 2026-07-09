@@ -39,3 +39,13 @@ test('approval email recommends the published npm installer command', () => {
   assert.match(text, /Restart your client/);
   assert.doesNotMatch(text, /npm run gateway:config/);
 });
+
+test('operator notification describes the requester and request time', () => {
+  assert.equal(typeof gatewayEmail.buildTokenRequestNotificationText, 'function');
+  const text = gatewayEmail.buildTokenRequestNotificationText(
+    'requester@example.com',
+    new Date('2026-07-10T12:00:00.000Z')
+  );
+  assert.match(text, /requester@example\.com/);
+  assert.match(text, /2026-07-10T12:00:00\.000Z/);
+});

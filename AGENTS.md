@@ -29,6 +29,7 @@ Five generators package the same `token-optimizer` skill for different clients. 
 - Launchers (`server/start.sh`) self-locate at runtime. Do not hardcode absolute paths in config files.
 - `node_modules` is not committed. The bundled `server/` carries only compiled JS plus a minimal `package.json`; `start.sh` installs the single runtime dependency on first run.
 - **Bump `VERSION` in the generator script for every change that touches that plugin's output — including wording-only edits to `skill/skill-example.md`.** Run `npm run build:plugin` and commit the regenerated output (Claude and Codex only; Antigravity, opencode, and Cursor are gitignored).
+- **Release-version rule:** Any change that affects an installable final product — MCP server behavior, installer behavior, gateway behavior, plugin output, skill instructions, or user-facing documentation shipped in an installer/plugin — must receive a new aligned release version before regeneration. Keep the root `package.json`, `packages/installer/package.json`, `src/index.ts` MCP server metadata, and all five generator `VERSION` values identical. Run `npm run build:installer` so `packages/installer/assets/` carries the same version; do not publish until `npm pack ./packages/installer --dry-run` and the full suite pass.
 
 **Per-generator differences:**
 
