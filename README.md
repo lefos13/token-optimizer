@@ -752,7 +752,7 @@ What the default `install` command does:
 - Claude Code:
   copies the packaged plugin and marketplace catalog into `~/.token-optimizer/`, runs `claude plugin marketplace add ...`, runs `claude plugin install token-optimizer@token-optimizer-marketplace`, writes gateway env into `~/.claude/settings.json`, and writes the default-on block into `~/.claude/CLAUDE.md`.
 - Codex:
-  copies the packaged plugin and marketplace catalog into `~/.token-optimizer/`, runs `codex plugin marketplace add ...`, runs `codex plugin add token-optimizer --marketplace Softaware-marketplace`, writes gateway env into the macOS GUI launch environment, and writes the default-on block into `~/.codex/AGENTS.md`.
+  copies the packaged plugin and marketplace catalog into `~/.token-optimizer/`, runs `codex plugin marketplace add ...`, runs `codex plugin add token-optimizer --marketplace Softaware-marketplace` for skill discovery, registers the bundled Node server and selected provider environment in `~/.codex/config.toml`, and writes the default-on block into `~/.codex/AGENTS.md`.
 - Antigravity:
   copies the packaged plugin into `~/.gemini/config/plugins/token-optimizer`, writes gateway env into Gemini and staged plugin config, and writes the default-on block into `~/.gemini/GEMINI.md`.
 - OpenCode:

@@ -52,8 +52,7 @@ Client-specific behavior:
   adds the packaged marketplace, installs `token-optimizer@token-optimizer-marketplace`, writes `~/.claude/settings.json`, writes `~/.claude/CLAUDE.md`.
   If the `claude` CLI is unavailable (desktop-app installs, common on Windows), the plugin is instead copied into `~/.claude/skills/token-optimizer/`, which Claude Code loads as a skills-directory plugin (`token-optimizer@skills-dir`) on the next session.
 - Codex:
-  adds the packaged marketplace, installs `token-optimizer` from `Softaware-marketplace`, writes the macOS GUI launch environment, writes `~/.codex/AGENTS.md`.
-  If the `codex` CLI is unavailable, the bundled server is instead registered directly as `[mcp_servers.token_optimizer]` in `~/.codex/config.toml` and the skill is copied into `~/.codex/skills/token-optimizer/`.
+  adds the packaged marketplace and installs `token-optimizer` from `Softaware-marketplace` for skill discovery. It always registers the bundled Node server as `[mcp_servers.token_optimizer]` in `~/.codex/config.toml`, carrying the selected provider environment into the MCP process, and copies the skill into `~/.codex/skills/token-optimizer/`.
 - Antigravity:
   copies the plugin into `~/.gemini/config/plugins/token-optimizer`, writes Gemini/plugin MCP config, writes `~/.gemini/GEMINI.md`.
 - OpenCode:
@@ -110,6 +109,8 @@ Settings.
 
 The installer is fully supported on Windows. All MCP servers are launched with
 `node server/start.js` (a cross-platform launcher) — `bash` is never required.
+For Codex, this direct registration is also the credential-bearing runtime
+path, while the marketplace plugin supplies skill discovery.
 Client CLI detection uses `where` on Windows, and `.cmd`-shim CLIs are invoked
 through `cmd.exe`. When the `claude` or `codex` CLI is not on `PATH` (typical
 for desktop-app installs), the CLI-free fallbacks above are used instead.

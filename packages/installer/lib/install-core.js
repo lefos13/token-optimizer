@@ -225,26 +225,24 @@ function installCodex(options) {
   if (fs.existsSync(marketplaceSrc)) {
     copyFile(marketplaceSrc, path.join(options.installRoot, ".agents", "plugins", "marketplace.json"));
   }
-  /* Try the CLI route first. When the codex CLI is unavailable (desktop-app
-     installs, common on Windows), fall back to registering the bundled server
-     directly in ~/.codex/config.toml and copying the skill into
-     ~/.codex/skills/, which Codex reads without any plugin machinery. */
+  /* Marketplace registration keeps the plugin available for Codex skill
+     discovery. The direct server registration remains authoritative because it
+     carries the installer-managed provider environment into the MCP process. */
   const marketplaceAdded = tryClientCommand("codex", ["plugin", "marketplace", "add", options.installRoot], options);
-  const pluginInstalled = marketplaceAdded
-    && tryClientCommand("codex", ["plugin", "add", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options);
-  if (!pluginInstalled) {
-    const startJs = path.join(pluginDest, "server", "start.js");
-    const configPath = path.join(options.home, ".codex", "config.toml");
-    ensureDirectory(path.dirname(configPath));
-    const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
-    if (existing) {
-      backupFile(configPath, installerPaths(options).backupRoot);
-    }
-    fs.writeFileSync(configPath, upsertCodexTomlServer(existing, startJs, buildProviderValues(options)));
-    const skillSrc = path.join(options.assetsRoot, "plugin", "codex", "skills", "token-optimizer");
-    if (fs.existsSync(skillSrc)) {
-      copyDirectory(skillSrc, path.join(options.home, ".codex", "skills", "token-optimizer"));
-    }
+  if (marketplaceAdded) {
+    tryClientCommand("codex", ["plugin", "add", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options);
+  }
+  const startJs = path.join(pluginDest, "server", "start.js");
+  const configPath = path.join(options.home, ".codex", "config.toml");
+  ensureDirectory(path.dirname(configPath));
+  const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
+  if (existing) {
+    backupFile(configPath, installerPaths(options).backupRoot);
+  }
+  fs.writeFileSync(configPath, upsertCodexTomlServer(existing, startJs, buildProviderValues(options)));
+  const skillSrc = path.join(options.assetsRoot, "plugin", "codex", "skills", "token-optimizer");
+  if (fs.existsSync(skillSrc)) {
+    copyDirectory(skillSrc, path.join(options.home, ".codex", "skills", "token-optimizer"));
   }
   applyGatewayConfig({ ...options, clients: ["codex"] });
   if (options.defaults !== false) {

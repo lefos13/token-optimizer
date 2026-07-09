@@ -243,6 +243,40 @@ test('installClaude and installCodex copy marketplace assets and write config/de
   assert.ok(codexAgents.includes('TOKEN_OPTIMIZER_START'));
 });
 
+test('installCodex writes the credential-bearing direct server after plugin CLI registration succeeds', () => {
+  const home = tmpDir('to-installer-home-');
+  const assetsRoot = tmpDir('to-installer-assets-');
+  const installRoot = path.join(home, '.token-optimizer');
+  const commandDir = tmpDir('to-installer-bin-');
+  writeFixtureAssets(assetsRoot);
+
+  /* Simulate successful marketplace and plugin commands without touching the
+     real Codex installation. The installer must still write its direct server. */
+  const fakeCodex = path.join(commandDir, process.platform === 'win32' ? 'codex.cmd' : 'codex');
+  fs.writeFileSync(fakeCodex, process.platform === 'win32' ? '@exit /b 0\r\n' : '#!/usr/bin/env sh\nexit 0\n');
+  if (process.platform !== 'win32') {
+    fs.chmodSync(fakeCodex, 0o755);
+  }
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${commandDir}${path.delimiter}${originalPath || ''}`;
+  try {
+    installer.installCodex({
+      home,
+      assetsRoot,
+      installRoot,
+      gatewayToken: 'person-token',
+      skipLaunchctl: true,
+    });
+  } finally {
+    process.env.PATH = originalPath;
+  }
+
+  const codexToml = fs.readFileSync(path.join(home, '.codex', 'config.toml'), 'utf8');
+  assert.ok(codexToml.includes("command = 'node'"));
+  assert.ok(codexToml.includes(`start.js`));
+  assert.ok(codexToml.includes("LLM_GATEWAY_TOKEN = 'person-token'"));
+});
+
 test('upsertCodexTomlServer replaces an existing section without touching other config', () => {
   const existing = [
     '[mcp_servers.playwright]',
