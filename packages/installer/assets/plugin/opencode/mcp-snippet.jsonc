@@ -2,8 +2,8 @@
   "token_optimizer": {
     "type": "local",
     "command": [
-      "bash",
-      "/Users/eevangelinos/.config/opencode/token-optimizer-server/start.sh"
+      "node",
+      "C:\\Users\\slode\\.config\\opencode\\token-optimizer-server\\start.js"
     ],
     "environment": {
       "LLM_GATEWAY_URL": "{env:LLM_GATEWAY_URL}",

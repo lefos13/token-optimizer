@@ -26,15 +26,15 @@ Five generators package the same `token-optimizer` skill for different clients. 
 **All generators:**
 
 - Run `npm run build` first — each generator copies `dist/` into its `plugin/<client>/server/`.
-- Launchers (`server/start.sh`) self-locate at runtime. Do not hardcode absolute paths in config files.
-- `node_modules` is not committed. The bundled `server/` carries only compiled JS plus a minimal `package.json`; `start.sh` installs the single runtime dependency on first run.
+- Launchers self-locate at runtime: `server/start.js` (cross-platform Node launcher, referenced from all MCP configs) and `server/start.sh` (POSIX). Do not hardcode absolute paths in config files.
+- `node_modules` is not committed. The bundled `server/` carries only compiled JS plus a minimal `package.json`; the launcher installs the single runtime dependency on first run.
 - **Bump `VERSION` in the generator script for every change that touches that plugin's output — including wording-only edits to `skill/skill-example.md`.** Run `npm run build:plugin` and commit the regenerated output (Claude and Codex only; Antigravity, opencode, and Cursor are gitignored).
 
 **Per-generator differences:**
 
 - **Antigravity**: Launcher self-locates with `$(dirname "${BASH_SOURCE[0]}")` and persists deps in `.data/`. Output is gitignored — regenerate and re-copy/re-symlink to pick up changes.
-- **Claude Code**: Launched via `${CLAUDE_PLUGIN_ROOT}/server/start.sh`; deps persist in `${CLAUDE_PLUGIN_DATA}`. Output is committed. Claude Code pins to the git SHA from first install, so a static `VERSION` makes "Update" a silent no-op.
-- **Codex**: Launched via `./server/start.sh` from the plugin root; deps persist in `${PLUGIN_DATA}` or `.data/` fallback. Output is committed. Avoid argv-level environment variable expansion in `.mcp.json`.
+- **Claude Code**: Launched via `node ${CLAUDE_PLUGIN_ROOT}/server/start.js`; deps persist in `${CLAUDE_PLUGIN_DATA}`. When the `claude` CLI is unavailable (desktop-app installs, common on Windows), the npm installer falls back to copying the plugin into `~/.claude/skills/token-optimizer/`, which Claude Code loads as a skills-directory plugin. Output is committed. Claude Code pins to the git SHA from first install, so a static `VERSION` makes "Update" a silent no-op.
+- **Codex**: Launched via `node server/start.js` anchored at the plugin root (`cwd: "."`); deps persist in `${PLUGIN_DATA}` or `.data/` fallback. When the `codex` CLI is unavailable, the npm installer falls back to writing `[mcp_servers.token_optimizer]` into `~/.codex/config.toml` and copying the skill into `~/.codex/skills/`. Output is committed. Avoid argv-level environment variable expansion in `.mcp.json`.
 
 ## Repository Shape
 

@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const { buildStartJs } = require("./launcher-template");
 
 /* opencode plugin flow.
    Generates a portable token_optimizer bundle under plugin/opencode/ for opencode
@@ -54,7 +55,7 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "1.7.0";
+  const VERSION = "1.10.0";
 
   const sdkVersion = require(
     path.join(rootDir, "node_modules", "@modelcontextprotocol", "sdk", "package.json"),
@@ -106,6 +107,12 @@ exec node "$ROOT/index.js"
   fs.writeFileSync(startShPath, startSh);
   fs.chmodSync(startShPath, 0o755);
 
+  /* Cross-platform launcher referenced by the MCP config (start.sh stays for
+     POSIX scripting compatibility). */
+  const startJsPath = path.join(serverDir, "start.js");
+  fs.writeFileSync(startJsPath, buildStartJs());
+  fs.chmodSync(startJsPath, 0o755);
+
   const sourceSkill = path.join(rootDir, "skill", "skill-example.md");
   const destSkill = path.join(skillsDir, "SKILL.md");
   if (!fs.existsSync(sourceSkill)) {
@@ -120,7 +127,7 @@ exec node "$ROOT/index.js"
   const mcpSnippet = {
     token_optimizer: {
       type: "local",
-      command: ["bash", path.join(installedServerDir, "start.sh")],
+      command: ["node", path.join(installedServerDir, "start.js")],
       environment: {
         LLM_GATEWAY_URL: "{env:LLM_GATEWAY_URL}",
         LLM_GATEWAY_TOKEN: "{env:LLM_GATEWAY_TOKEN}",
@@ -192,7 +199,7 @@ running the repo config manager.
 
 5. Restart opencode so it picks up the new MCP server and skill.
 
-**Requirements:** \`node\`, \`npm\`, and \`bash\` on \`PATH\`; network access on
+**Requirements:** \`node\` and \`npm\` on \`PATH\`; network access on
 first run only (to install the bundled server's single runtime dependency into
 a \`.data/\` directory next to itself).
 

@@ -1,9 +1,9 @@
 {
   "mcpServers": {
     "token_optimizer": {
-      "command": "bash",
+      "command": "node",
       "args": [
-        "${CLAUDE_PLUGIN_ROOT}/server/start.sh"
+        "${CLAUDE_PLUGIN_ROOT}/server/start.js"
       ],
       "env": {
         "LLM_GATEWAY_URL": "${LLM_GATEWAY_URL:-https://llm-proxy.lnf.gr/v1}",

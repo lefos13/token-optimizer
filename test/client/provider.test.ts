@@ -7,6 +7,7 @@ function clearEnv(): void {
   delete process.env.LLM_GATEWAY_TOKEN;
   delete process.env.OPENROUTER_API_KEY;
   delete process.env.LOCAL_LLM_API_URL;
+  delete process.env.OPENROUTER_BYOK_KEY;
 }
 
 test('resolveProvider prefers the gateway when its token+url are set', () => {
@@ -18,6 +19,30 @@ test('resolveProvider prefers the gateway when its token+url are set', () => {
   assert.equal(p.apiUrl, 'https://llm-proxy.lnf.gr/v1');
   assert.equal(p.authHeaders['Authorization'], 'Bearer shared-token');
   assert.equal(p.authHeaders['X-Task-Type'], 'verdict');
+  clearEnv();
+});
+
+test('resolveProvider adds X-OpenRouter-Key when OPENROUTER_BYOK_KEY is set, omits it otherwise', () => {
+  clearEnv();
+  process.env.LLM_GATEWAY_URL = 'https://llm-proxy.lnf.gr/v1';
+  process.env.LLM_GATEWAY_TOKEN = 'shared-token';
+  process.env.OPENROUTER_BYOK_KEY = 'sk-or-v1-mykey';
+  const withByok = resolveProvider('verdict');
+  assert.equal(withByok.authHeaders['X-OpenRouter-Key'], 'sk-or-v1-mykey');
+  delete process.env.OPENROUTER_BYOK_KEY;
+  const withoutByok = resolveProvider('verdict');
+  assert.ok(!('X-OpenRouter-Key' in withoutByok.authHeaders));
+  clearEnv();
+});
+
+test('resolveProvider engages the gateway on OPENROUTER_BYOK_KEY alone, with no Authorization header at all', () => {
+  clearEnv();
+  process.env.LLM_GATEWAY_URL = 'https://llm-proxy.lnf.gr/v1';
+  process.env.OPENROUTER_BYOK_KEY = 'sk-or-v1-mykey';
+  const p = resolveProvider('verdict');
+  assert.equal(p.providerName, GATEWAY_PROVIDER_NAME);
+  assert.equal(p.authHeaders['X-OpenRouter-Key'], 'sk-or-v1-mykey');
+  assert.ok(!('Authorization' in p.authHeaders));
   clearEnv();
 });
 

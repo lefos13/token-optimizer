@@ -1,9 +1,9 @@
 {
   "mcpServers": {
     "token_optimizer": {
-      "command": "bash",
+      "command": "node",
       "args": [
-        "/Users/eevangelinos/.cursor/token-optimizer-server/start.sh"
+        "C:\\Users\\slode\\.cursor\\token-optimizer-server\\start.js"
       ],
       "env": {
         "LLM_GATEWAY_URL": "${env:LLM_GATEWAY_URL}",

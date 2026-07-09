@@ -7,20 +7,66 @@ It is designed for coding agents that need to verify changes without pasting raw
 ## Setup (end users)
 
 This plugin runs your workspace's build/lint/test commands locally and returns
-compact LLM verdicts, triage, and reviews via a shared gateway — so raw logs
-stay out of your agent's context.
+compact LLM verdicts, triage, and reviews — either via a shared gateway (so raw
+logs stay out of your agent's context and you don't need to run a model
+yourself) or against your own local OpenAI-compatible endpoint.
 
-**Prerequisite:** a gateway access token (ask your gateway operator). The gateway
-URL is already preconfigured in the plugin.
+**No gateway token is required to use this tool.** There are three independent
+providers to choose from; pick whichever fits, and switch later at any time:
+
+| | Gateway token | Your own OpenRouter key (BYOK) | Local LLM |
+| --- | --- | --- | --- |
+| Proxy token required? | **Yes** — request + approval | **No** — none at all | **No** — none at all |
+| Who pays for inference? | The gateway operator | **You**, via your own OpenRouter account | Nobody — your own hardware |
+| Usage limit | 20 calls/day by default (operator-adjustable) | **Unlimited** | Unlimited |
+| Data leaves your machine? | Yes, to the gateway/OpenRouter | Yes, to OpenRouter directly (via the gateway proxy) | **No** |
+| Setup | Request a token by email, wait for approval | Get an OpenRouter API key, no approval needed | Run your own OpenAI-compatible server |
+| Env vars written | `LLM_GATEWAY_URL`, `LLM_GATEWAY_TOKEN` | `LLM_GATEWAY_URL`, `OPENROUTER_BYOK_KEY` | `LOCAL_LLM_API_URL`, `LOCAL_LLM_MODEL` |
+
+Important: **the gateway only authenticates callers that don't supply their own
+OpenRouter key.** If you configure `OPENROUTER_BYOK_KEY`, the gateway never
+checks for a proxy token at all — it just proxies your request to OpenRouter
+(using your key) and pins the model. A gateway access token is only meaningful
+for the shared-quota path, because that's the only path where the operator's
+own OpenRouter account is paying for your calls.
+
+- **Gateway access token:** request one from the gateway with your email (one
+  request per email, ever):
+
+  ```bash
+  curl -X POST https://llm-proxy.lnf.gr/v1/token-requests \
+    -H 'Content-Type: application/json' \
+    -d '{"email":"you@example.com"}'
+  ```
+
+  Once the operator approves the request, the token arrives by email. Issued
+  tokens allow 20 tool calls per day by default; the operator can raise the
+  limit or revoke the token at any time. The gateway URL is already
+  preconfigured in the plugin.
+- **Your own OpenRouter key (BYOK), no token needed:** get an API key from
+  [openrouter.ai](https://openrouter.ai) and set `OPENROUTER_BYOK_KEY` to it.
+  No request, no approval, no daily limit — calls bill directly to your own
+  OpenRouter account. See
+  [Bring-your-own OpenRouter key](#bring-your-own-openrouter-key-byok-unlimited-usage-no-token-required)
+  below for the full contract.
+- **Local LLM, no token at all:** run your own OpenAI-compatible endpoint
+  (llama.cpp, LM Studio, Ollama's OpenAI-compat API, etc.) and point the tools
+  at it with `LOCAL_LLM_API_URL`/`LOCAL_LLM_MODEL`. Nothing leaves your
+  machine and no account is needed.
 
 ### 1. Install the plugin
 
-- **One-command npm installer (optional):** run `npx @softawarest/token-optimizer-installer`
-  and paste your gateway token. By default this installer:
+- **One-command npm installer (optional):** run `npx @softawarest/token-optimizer-installer`.
+  With no flags it prompts for how to configure the provider — gateway token,
+  your own OpenRouter key (no token needed), a local LLM (no token), or skip
+  for now. Non-interactive flags: `--token <token>` for a gateway token,
+  `--byok-key <key>` for your own OpenRouter key (no `--token` needed), or
+  `--local` for a local LLM (`--help` lists every flag). By default this
+  installer:
   - detects installed clients
   - installs marketplace/plugin assets where the client supports them
   - copies bundled server/skill files where the client is file-based
-  - writes `LLM_GATEWAY_URL` and `LLM_GATEWAY_TOKEN` into supported client config
+  - writes the resulting provider env vars into supported client config
   - writes default-on global instructions where the client exposes a writable global file
 - **Claude Code:** install from the marketplace (`token-optimizer`).
 - **Codex:** install from the marketplace (`token-optimizer`).
@@ -31,13 +77,17 @@ URL is already preconfigured in the plugin.
 - **Cursor:** copy the generated server bundle into `~/.cursor/` and copy the
   generated rule into each project that should use it.
 
-### 2. Provide your token
+### 2. Configure your provider
 
-The gateway URL is baked in; the only value you supply is your token.
-
-- **Shortcut (repo clone):** `npm run gateway:config -- setup`, paste your token
-  once — it is written to every client on your machine.
-- **Manual (no repo):** set `LLM_GATEWAY_TOKEN` in your client's config:
+- **Shortcut (repo clone):** `npm run gateway:config -- setup` prompts for the
+  same three providers as the npm installer (gateway token, your own
+  OpenRouter key with no token needed, or a local LLM) and writes it to every
+  client on your machine.
+- **Manual (no repo):** set the matching env vars in your client's config —
+  `LLM_GATEWAY_URL`/`LLM_GATEWAY_TOKEN` for the gateway, `LLM_GATEWAY_URL`/
+  `OPENROUTER_BYOK_KEY` for BYOK (no `LLM_GATEWAY_TOKEN` needed), or
+  `LOCAL_LLM_API_URL`/`LOCAL_LLM_MODEL` for a local LLM (both optional; they
+  default to `http://localhost:8080/v1` and `local-model`):
   - Claude Code → `~/.claude/settings.json` under `env`
   - Codex → your shell/launch environment (it is passed through)
   - Antigravity → its `mcp_config.json` under the `token_optimizer` `env`
@@ -243,6 +293,10 @@ Every successful tool path records private analytics inside the target workspace
 
 Records keep the latest 200 tool calls per workspace and include compact metadata: tool name, timestamp, commands and exit codes, token counts, savings percentage, provider/model/latency, confidence, and fallback reason. Raw logs, prompts, file contents, and full model responses are never stored. Analytics writes are best-effort and never fail the underlying tool call.
 
+### Global Gateway Stats
+
+When the gateway is configured (`LLM_GATEWAY_URL` + `LLM_GATEWAY_TOKEN`), a sanitized aggregate subset of each analytics record is also pushed to the gateway's `POST /v1/analytics` endpoint, best-effort and fire-and-forget: tool name, token counts, savings percentage, model/task type, latency, and a fallback flag. Workspace paths, run ids, log paths, commands, exit codes, and error/fallback text are **never** sent. The gateway folds these into aggregate-only global counters (nothing per-user is kept) and shows them on a public showcase page at `GET /stats` (JSON at `GET /v1/stats`), so anyone can see how effective the tool is across all installations. Pushes never count against a token's daily usage limit. Set `LLM_GATEWAY_SHARE_ANALYTICS=off` to opt out of sharing entirely.
+
 ### Multi-Workspace Analytics Dashboard
 
 To view analytics in a browser, run (from the MCP server project):
@@ -303,23 +357,58 @@ npm run dev
 
 ### Centralized gateway (recommended)
 
-Point the server at a shared gateway so users never hold a raw provider key
-and the model is chosen centrally. Set two variables:
+Point the server at a shared gateway so you never have to run a model
+yourself and the model is chosen centrally. Set:
 
 | Variable | Purpose |
 | --- | --- |
 | `LLM_GATEWAY_URL` | Gateway base URL, e.g. `https://llm-proxy.lnf.gr/v1`. |
-| `LLM_GATEWAY_TOKEN` | Shared proxy token issued by the gateway operator (revocable). |
+| `LLM_GATEWAY_TOKEN` | Proxy token issued by the gateway operator (revocable; either a shared operator token or a per-email issued token). **Not needed if `OPENROUTER_BYOK_KEY` is set** — see below. |
+| `LLM_GATEWAY_SHARE_ANALYTICS` | Optional. Set to `off` to stop sharing sanitized aggregate analytics with the gateway's public global stats. Defaults to on when the gateway is configured. |
 
-When both are set, the gateway is the primary LLM provider. Each call sends an
-`X-Task-Type` header so the gateway pins the model; the client's model choice is
-ignored and the actually-used model is reported back in analytics. If the gateway
-is unreachable, the server falls back to a local model when `LOCAL_LLM_*` is
-configured, otherwise it returns a conservative `uncertain` result.
+The gateway becomes the primary LLM provider once `LLM_GATEWAY_URL` is set and
+**either** `LLM_GATEWAY_TOKEN` **or** `OPENROUTER_BYOK_KEY` is also set (see
+[BYOK](#bring-your-own-openrouter-key-byok-unlimited-usage-no-token-required)
+below — a token is not required for that path). Each call sends an
+`X-Task-Type` header so the gateway pins the model; the client's model choice
+is ignored and the actually-used model is reported back in analytics. If the
+gateway is unreachable, the server falls back to a local model when
+`LOCAL_LLM_*` is configured, otherwise it returns a conservative `uncertain`
+result.
 
-Precedence: `LLM_GATEWAY_URL` + `LLM_GATEWAY_TOKEN` (both must be set together to
-engage the gateway) → local model. To host the gateway, see
-[`gateway/README.md`](gateway/README.md).
+Issued (email-approved) tokens carry a per-day call allowance (20 by default,
+operator-adjustable). When it is exhausted the gateway responds
+`429 {"error":"daily limit reached"}`; the client then behaves exactly as if the
+gateway were unreachable — local-model fallback or a conservative `uncertain`
+result — until the allowance resets at midnight UTC.
+
+Precedence: `LLM_GATEWAY_URL` + (`LLM_GATEWAY_TOKEN` or `OPENROUTER_BYOK_KEY`)
+→ local model. To host the gateway, see [`gateway/README.md`](gateway/README.md).
+
+### Bring-your-own OpenRouter key (BYOK, unlimited usage, no token required)
+
+Get an API key from [openrouter.ai](https://openrouter.ai) and set:
+
+| Variable | Purpose |
+| --- | --- |
+| `LLM_GATEWAY_URL` | Gateway base URL, same as above — routing still goes through the gateway so the model is pinned centrally. |
+| `OPENROUTER_BYOK_KEY` | Your own OpenRouter API key (`sk-or-...`). |
+
+**`LLM_GATEWAY_TOKEN` is not required and should not be set for this mode.**
+Every gateway call carries an `X-OpenRouter-Key` header, so the gateway bills
+the call against your own OpenRouter account instead of the operator's, and —
+critically — **the gateway does not authenticate a BYOK-only caller at all.**
+You aren't using the operator's OpenRouter setup, so there is nothing for a
+proxy token to gate: no request/approval step, no daily limit, unlimited usage.
+(If you do also set `LLM_GATEWAY_TOKEN`, it is simply ignored for billing and
+authentication purposes when a valid BYOK key is present — it isn't required
+and doesn't change behavior.)
+
+If the BYOK key is missing, malformed, or the operator has disabled BYOK
+(`ALLOW_BYOK=false`), the gateway falls back to requiring a normal proxy/issued
+token — a bad BYOK key never silently grants access, it just stops granting the
+tokenless path. See [`gateway/README.md`](gateway/README.md) for the full
+gateway-side contract.
 
 ### Recommended setup command
 
@@ -329,8 +418,9 @@ Use the repo-shipped config manager instead of editing plugin cache files:
 npm run gateway:config -- setup
 ```
 
-It prompts for the gateway URL and token once, then updates the stable user-owned
-config surfaces for the supported clients:
+It prompts for a provider mode (gateway token, your own OpenRouter key with no
+token required, local LLM with no token, or skip), then updates the stable
+user-owned config surfaces for the supported clients:
 
 - Claude Code: `~/.claude/settings.json`
 - Gemini CLI: `~/.gemini/config/mcp_config.json`
@@ -514,7 +604,7 @@ Run all generators at once with `npm run build:plugin`.
 
 ### Antigravity
 
-The plugin bundles the compiled MCP server and registers it via `mcp_config.json`. The launcher (`server/start.sh`) self-locates and installs its single runtime dependency into `.data/` on first run — no absolute paths are baked in.
+The plugin bundles the compiled MCP server and registers it via `mcp_config.json`, launched with `node server/start.js` (cross-platform; `start.sh` remains for POSIX scripting). The launcher installs its single runtime dependency into `.data/` on first run — no absolute paths are baked in.
 
 1. Build the server and generate the plugin:
 
@@ -534,13 +624,13 @@ The plugin bundles the compiled MCP server and registers it via `mcp_config.json
 
 3. Restart Antigravity (or reload plugins) so it registers the `token_optimizer` server and loads the `token-optimizer` skill.
 
-**Requirements:** `node`, `npm`, and `bash` on `PATH`; network access on first run only. Override the LLM endpoint via `LOCAL_LLM_API_URL` / `LOCAL_LLM_MODEL` in the copied `mcp_config.json`.
+**Requirements:** `node` and `npm` on `PATH`; network access on first run only. Override the LLM endpoint via `LOCAL_LLM_API_URL` / `LOCAL_LLM_MODEL` in the copied `mcp_config.json`.
 
 To pick up changes, re-run `npm run build:plugin:antigravity` and re-copy (or re-symlink once) the folder, then reload Antigravity.
 
 ### Claude Code
 
-The plugin bundles the compiled MCP server and launches it via `${CLAUDE_PLUGIN_ROOT}/server/start.sh`. The runtime dependency installs into `${CLAUDE_PLUGIN_DATA}` on first run. The repository is the marketplace: the catalog at `.claude-plugin/marketplace.json` and the plugin under `plugin/claude/` are both committed.
+The plugin bundles the compiled MCP server and launches it via `node ${CLAUDE_PLUGIN_ROOT}/server/start.js` (cross-platform, Windows included). The runtime dependency installs into `${CLAUDE_PLUGIN_DATA}` on first run. The repository is the marketplace: the catalog at `.claude-plugin/marketplace.json` and the plugin under `plugin/claude/` are both committed.
 
 1. Build the server and generate the plugin (also regenerates the repo-root marketplace catalog):
 
@@ -574,7 +664,7 @@ claude --plugin-dir ./plugin/claude
 
 ### Codex
 
-The plugin bundles the compiled MCP server and launches `./server/start.sh` from the plugin root. The runtime dependency installs into `${PLUGIN_DATA}` or `.data/` fallback on first run. The repository marketplace is at `.agents/plugins/marketplace.json`; both the catalog and `plugin/codex/` are committed.
+The plugin bundles the compiled MCP server and launches `node server/start.js` from the plugin root (cross-platform, Windows included). The runtime dependency installs into `${PLUGIN_DATA}` or `.data/` fallback on first run. The repository marketplace is at `.agents/plugins/marketplace.json`; both the catalog and `plugin/codex/` are committed.
 
 1. Build the server and generate the plugin:
 

@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const { buildStartJs } = require("./launcher-template");
 
 /* Antigravity plugin flow.
    Generates a complete, installable, portable Antigravity plugin under
@@ -79,7 +80,7 @@ try {
      install (Antigravity does not document version-gated update pulls the way
      Claude Code's marketplace install does, but keeping this accurate still
      matters for users diffing or re-staging the plugin folder). */
-  const VERSION = "1.7.0";
+  const VERSION = "1.10.0";
 
   const sdkVersion = require(
     path.join(
@@ -122,8 +123,8 @@ try {
   const mcpConfigJson = {
     mcpServers: {
       token_optimizer: {
-        command: "bash",
-        args: [path.join(os.homedir(), ".gemini", "config", "plugins", PLUGIN_NAME, "server", "start.sh")],
+        command: "node",
+        args: [path.join(os.homedir(), ".gemini", "config", "plugins", PLUGIN_NAME, "server", "start.js")],
         env: {
           LLM_GATEWAY_URL: "https://llm-proxy.lnf.gr/v1",
           LOCAL_LLM_API_URL: "http://localhost:8080/v1",
@@ -193,6 +194,12 @@ exec node "$ROOT/server/index.js"
   const startShPath = path.join(serverDir, "start.sh");
   fs.writeFileSync(startShPath, startSh);
   fs.chmodSync(startShPath, 0o755);
+
+  /* Cross-platform launcher referenced by the MCP config (start.sh stays for
+     POSIX scripting compatibility). */
+  const startJsPath = path.join(serverDir, "start.js");
+  fs.writeFileSync(startJsPath, buildStartJs());
+  fs.chmodSync(startJsPath, 0o755);
 
   const sourceSkill = path.join(rootDir, "skill", "skill-example.md");
   const destSkill = path.join(skillsDir, "SKILL.md");

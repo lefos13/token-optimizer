@@ -6,8 +6,24 @@ const path = require("path");
 const readline = require("readline");
 const { execFileSync } = require("child_process");
 
-const GATEWAY_ENV_KEYS = ["LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN"];
+/* Every env key this script may write into a client's MCP config. Selecting a
+   provider mode (gateway / gateway+BYOK / local) writes a full values object
+   across all of these keys, so switching modes cleanly clears the previous
+   mode's leftover values instead of leaving stale, conflicting config behind. */
+const MANAGED_ENV_KEYS = [
+  "LLM_GATEWAY_URL",
+  "LLM_GATEWAY_TOKEN",
+  "OPENROUTER_BYOK_KEY",
+  "LOCAL_LLM_API_URL",
+  "LOCAL_LLM_MODEL",
+];
 const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
+const DEFAULT_LOCAL_LLM_URL = "http://localhost:8080/v1";
+const DEFAULT_LOCAL_LLM_MODEL = "local-model";
+
+function emptyManagedValues() {
+  return Object.fromEntries(MANAGED_ENV_KEYS.map((key) => [key, ""]));
+}
 
 const DIRECTIVE_MARKER_START = "<!-- TOKEN_OPTIMIZER_START -->";
 const DIRECTIVE_MARKER_END = "<!-- TOKEN_OPTIMIZER_END -->";
@@ -319,10 +335,10 @@ function printHelp() {
   console.log(`Usage: node scripts/manage-gateway-config.js [setup|update|delete|status|enable-defaults|disable-defaults]
 
 Commands:
-  setup            Prompt for your gateway proxy token and write it to all managed clients
-  update           Prompt again and replace the managed gateway values
-  delete           Remove managed gateway values from all managed clients
-  status           Show current managed gateway values, GUI-session state, and directive status
+  setup            Prompt for a provider (gateway token, your own OpenRouter key with no token needed, or a local LLM with no token) and write it to all managed clients
+  update           Prompt again and replace the managed provider values
+  delete           Remove managed provider values from all managed clients
+  status           Show current managed provider values, GUI-session state, and directive status
   enable-defaults  Write a default-on usage directive into managed global instructions
   disable-defaults Remove the default-on usage directive from those files
 
@@ -362,13 +378,36 @@ async function promptForCommand(rl) {
   }
 }
 
-/* Collect the one per-person proxy token (required) and an optional gateway URL
-   (defaults to the shared gateway), then fan them out to every managed client
-   surface plus the macOS GUI session. */
-async function upsertConfiguration(rl, mode) {
-  const existing = collectCurrentValues();
-  const values = {};
+/* Ask which LLM provider mode to configure, then collect only the values that
+   mode needs.
+   - "gateway": shared infrastructure, requires a proxy/issued token, daily-limited.
+   - "byok": your own OpenRouter key. NO proxy token is required or asked for
+     at all — you aren't using the operator's OpenRouter setup, so the gateway
+     never authenticates you; it only proxies the request and pins the model.
+     Unlimited usage, billed to your own OpenRouter account.
+   - "local": your own OpenAI-compatible endpoint. No token, no gateway, fully
+     offline; nothing leaves your machine.
+   - "skip": leaves existing config untouched.
+   Picking a mode writes a full values object across every managed key, so
+   switching modes cleanly clears whatever the previous mode left behind. */
+async function promptForProviderMode(rl) {
+  console.log("How should the LLM provider be configured?");
+  console.log("  1. Gateway access token - shared infrastructure, requires an approved token, 20 calls/day by default");
+  console.log("  2. Your own OpenRouter key - unlimited usage, billed to your account, NO token needed at all");
+  console.log("  3. Local LLM only - your own OpenAI-compatible endpoint, no token, nothing leaves your machine");
+  console.log("  4. Skip for now (leaves current configuration untouched)");
+  while (true) {
+    const answer = (await ask(rl, "Choice [1-4]: ")).trim();
+    if (answer === "1" || answer === "") return "gateway";
+    if (answer === "2") return "byok";
+    if (answer === "3") return "local";
+    if (answer === "4") return "skip";
+    console.log("Enter 1, 2, 3, or 4.");
+  }
+}
 
+async function collectGatewayValues(rl, existing) {
+  const values = emptyManagedValues();
   values.LLM_GATEWAY_TOKEN = await askRequired(
     rl,
     `Gateway proxy token${existing.LLM_GATEWAY_TOKEN ? " [press Enter to keep current]" : ""}: `,
@@ -377,6 +416,55 @@ async function upsertConfiguration(rl, mode) {
   const currentUrl = existing.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL;
   const urlAnswer = (await ask(rl, `Gateway URL [${currentUrl}]: `)).trim();
   values.LLM_GATEWAY_URL = urlAnswer || currentUrl;
+  return values;
+}
+
+async function collectByokValues(rl, existing) {
+  const values = emptyManagedValues();
+  const currentUrl = existing.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL;
+  const urlAnswer = (await ask(rl, `Gateway URL [${currentUrl}]: `)).trim();
+  values.LLM_GATEWAY_URL = urlAnswer || currentUrl;
+  values.OPENROUTER_BYOK_KEY = await askRequired(
+    rl,
+    `Your OpenRouter API key (sk-or-...)${existing.OPENROUTER_BYOK_KEY ? " [press Enter to keep current]" : ""}: `,
+    existing.OPENROUTER_BYOK_KEY,
+  );
+  console.log("");
+  console.log("No proxy token needed: calls are billed to your OpenRouter account, unlimited.");
+  return values;
+}
+
+async function collectLocalValues(rl, existing) {
+  const values = emptyManagedValues();
+  const currentUrl = existing.LOCAL_LLM_API_URL || DEFAULT_LOCAL_LLM_URL;
+  const urlAnswer = (await ask(rl, `Local LLM endpoint [${currentUrl}]: `)).trim();
+  values.LOCAL_LLM_API_URL = urlAnswer || currentUrl;
+  const currentModel = existing.LOCAL_LLM_MODEL || DEFAULT_LOCAL_LLM_MODEL;
+  const modelAnswer = (await ask(rl, `Local LLM model name [${currentModel}]: `)).trim();
+  values.LOCAL_LLM_MODEL = modelAnswer || currentModel;
+  console.log("");
+  console.log("No token needed. Make sure an OpenAI-compatible endpoint is running and reachable at that URL.");
+  return values;
+}
+
+async function collectValuesForProviderMode(rl, existing, providerMode) {
+  if (providerMode === "byok") return collectByokValues(rl, existing);
+  if (providerMode === "local") return collectLocalValues(rl, existing);
+  return collectGatewayValues(rl, existing);
+}
+
+async function upsertConfiguration(rl, mode) {
+  const existing = collectCurrentValues();
+  const providerMode = await promptForProviderMode(rl);
+
+  if (providerMode === "skip") {
+    console.log("");
+    console.log("Skipped. Existing configuration left untouched.");
+    printStatus();
+    return;
+  }
+
+  const values = await collectValuesForProviderMode(rl, existing, providerMode);
 
   applyToTargets(values);
   applyLaunchctlValues(values);
@@ -384,8 +472,8 @@ async function upsertConfiguration(rl, mode) {
   console.log("");
   console.log(
     mode === "setup"
-      ? "Gateway configuration saved for all managed clients."
-      : "Gateway configuration updated for all managed clients.",
+      ? "Provider configuration saved for all managed clients."
+      : "Provider configuration updated for all managed clients.",
   );
   printStatus();
 }
@@ -412,7 +500,7 @@ function collectCurrentValues(home) {
   for (const target of getManagedTargets(home)) {
     const config = safeReadTargetConfig(target);
     const values = target.getValues(config);
-    if (values.LLM_GATEWAY_TOKEN || values.LLM_GATEWAY_URL) {
+    if (Object.keys(values).length > 0) {
       return values;
     }
   }
@@ -432,15 +520,24 @@ function printStatus(home) {
 }
 
 function summarizeValues(values) {
-  if (!values.LLM_GATEWAY_TOKEN && !values.LLM_GATEWAY_URL) {
+  if (!MANAGED_ENV_KEYS.some((key) => values[key])) {
     return "not configured";
   }
   const parts = [];
   if (values.LLM_GATEWAY_URL) {
-    parts.push(`url=${values.LLM_GATEWAY_URL}`);
+    parts.push(`gateway_url=${values.LLM_GATEWAY_URL}`);
   }
   if (values.LLM_GATEWAY_TOKEN) {
-    parts.push(`token=${redactSecret(values.LLM_GATEWAY_TOKEN)}`);
+    parts.push(`gateway_token=${redactSecret(values.LLM_GATEWAY_TOKEN)}`);
+  }
+  if (values.OPENROUTER_BYOK_KEY) {
+    parts.push(`byok_key=${redactSecret(values.OPENROUTER_BYOK_KEY)}`);
+  }
+  if (values.LOCAL_LLM_API_URL) {
+    parts.push(`local_url=${values.LOCAL_LLM_API_URL}`);
+  }
+  if (values.LOCAL_LLM_MODEL) {
+    parts.push(`local_model=${values.LOCAL_LLM_MODEL}`);
   }
   return parts.join(" ");
 }
@@ -607,7 +704,7 @@ function stripTrailingCommas(content) {
 function mergeManagedEnvValues(existingEnv, incomingValues) {
   const next = { ...existingEnv };
 
-  for (const envKey of GATEWAY_ENV_KEYS) {
+  for (const envKey of MANAGED_ENV_KEYS) {
     const value = incomingValues[envKey];
     if (value) {
       next[envKey] = value;
@@ -621,7 +718,7 @@ function mergeManagedEnvValues(existingEnv, incomingValues) {
 
 function sanitizeEnvObject(envObject) {
   const next = {};
-  for (const envKey of GATEWAY_ENV_KEYS) {
+  for (const envKey of MANAGED_ENV_KEYS) {
     if (typeof envObject[envKey] === "string" && envObject[envKey].trim() !== "") {
       next[envKey] = envObject[envKey];
     }
@@ -653,7 +750,7 @@ function ensureDirectory(dirPath) {
    Claude, and Antigravity read the same values when started normally from the
    Dock, Finder, Spotlight, or their own launchers. */
 function applyLaunchctlValues(values) {
-  for (const envKey of GATEWAY_ENV_KEYS) {
+  for (const envKey of MANAGED_ENV_KEYS) {
     const value = values[envKey];
     if (value) {
       runLaunchctl(["setenv", envKey, value]);
@@ -664,14 +761,14 @@ function applyLaunchctlValues(values) {
 }
 
 function clearLaunchctlValues() {
-  for (const envKey of GATEWAY_ENV_KEYS) {
+  for (const envKey of MANAGED_ENV_KEYS) {
     runLaunchctl(["unsetenv", envKey], { allowFailure: true });
   }
 }
 
 function readLaunchctlValues() {
   const values = {};
-  for (const envKey of GATEWAY_ENV_KEYS) {
+  for (const envKey of MANAGED_ENV_KEYS) {
     const value = runLaunchctl(["printenv", envKey], {
       allowFailure: true,
       captureOutput: true,
@@ -780,8 +877,11 @@ if (require.main === module) {
 }
 
 module.exports = {
-  GATEWAY_ENV_KEYS,
+  MANAGED_ENV_KEYS,
   DEFAULT_GATEWAY_URL,
+  DEFAULT_LOCAL_LLM_URL,
+  DEFAULT_LOCAL_LLM_MODEL,
+  emptyManagedValues,
   DIRECTIVE_MARKER_START,
   DIRECTIVE_MARKER_END,
   DIRECTIVE_BLOCK,

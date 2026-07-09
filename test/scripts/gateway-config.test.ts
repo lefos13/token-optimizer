@@ -13,8 +13,16 @@ function tmpHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'gw-cfg-'));
 }
 
-test('GATEWAY_ENV_KEYS is exactly the two gateway vars', () => {
-  assert.deepEqual(cli.GATEWAY_ENV_KEYS, ['LLM_GATEWAY_URL', 'LLM_GATEWAY_TOKEN']);
+test('MANAGED_ENV_KEYS covers gateway, BYOK, and local-LLM provider vars', () => {
+  assert.deepEqual(cli.MANAGED_ENV_KEYS, [
+    'LLM_GATEWAY_URL', 'LLM_GATEWAY_TOKEN', 'OPENROUTER_BYOK_KEY', 'LOCAL_LLM_API_URL', 'LOCAL_LLM_MODEL'
+  ]);
+});
+
+test('emptyManagedValues returns every managed key set to an empty string', () => {
+  const empty = cli.emptyManagedValues();
+  assert.deepEqual(Object.keys(empty).sort(), [...cli.MANAGED_ENV_KEYS].sort());
+  assert.ok(Object.values(empty).every((v: unknown) => v === ''));
 });
 
 test('sanitizeEnvObject keeps only managed keys with non-empty values', () => {
@@ -77,6 +85,47 @@ test('applyToTargets writes gateway values to every managed client config, colle
 
   const clearedCursor = JSON.parse(fs.readFileSync(path.join(home, '.cursor', 'mcp.json'), 'utf8'));
   assert.ok(!('LLM_GATEWAY_TOKEN' in clearedCursor.mcpServers.token_optimizer.env));
+});
+
+test('local-LLM provider values require no token and switching modes clears the previous mode', () => {
+  const home = tmpHome();
+
+  cli.applyToTargets(
+    { LLM_GATEWAY_URL: 'https://llm-proxy.lnf.gr/v1', LLM_GATEWAY_TOKEN: 'person-token' },
+    home
+  );
+  const beforeSwitch = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
+  assert.equal(beforeSwitch.env.LLM_GATEWAY_TOKEN, 'person-token');
+
+  const localValues = {
+    ...cli.emptyManagedValues(),
+    LOCAL_LLM_API_URL: cli.DEFAULT_LOCAL_LLM_URL,
+    LOCAL_LLM_MODEL: cli.DEFAULT_LOCAL_LLM_MODEL,
+  };
+  cli.applyToTargets(localValues, home);
+
+  const afterSwitch = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
+  assert.ok(!('LLM_GATEWAY_TOKEN' in afterSwitch.env));  // stale gateway token cleared
+  assert.equal(afterSwitch.env.LOCAL_LLM_API_URL, cli.DEFAULT_LOCAL_LLM_URL);
+  assert.equal(afterSwitch.env.LOCAL_LLM_MODEL, cli.DEFAULT_LOCAL_LLM_MODEL);
+
+  const cursor = JSON.parse(fs.readFileSync(path.join(home, '.cursor', 'mcp.json'), 'utf8'));
+  assert.equal(cursor.mcpServers.token_optimizer.env.LOCAL_LLM_API_URL, cli.DEFAULT_LOCAL_LLM_URL);
+  assert.ok(!('LLM_GATEWAY_TOKEN' in cursor.mcpServers.token_optimizer.env));
+});
+
+test('BYOK-mode values write the OpenRouter key and gateway URL, with no gateway token at all', () => {
+  const home = tmpHome();
+  const values = {
+    ...cli.emptyManagedValues(),
+    LLM_GATEWAY_URL: cli.DEFAULT_GATEWAY_URL,
+    OPENROUTER_BYOK_KEY: 'sk-or-v1-mykey',
+  };
+  cli.applyToTargets(values, home);
+  const claude = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
+  assert.equal(claude.env.OPENROUTER_BYOK_KEY, 'sk-or-v1-mykey');
+  assert.equal(claude.env.LLM_GATEWAY_URL, cli.DEFAULT_GATEWAY_URL);
+  assert.ok(!('LLM_GATEWAY_TOKEN' in claude.env));
 });
 
 test('launchctl values round-trip through the state-file seam', () => {

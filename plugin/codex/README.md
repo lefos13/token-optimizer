@@ -9,20 +9,17 @@ with raw logs.
 
 ## Contents
 
-- `.codex-plugin/plugin.json` - plugin manifest (`token-optimizer` v1.7.0).
-- `.mcp.json` - registers the `token_optimizer` stdio server via the `mcpServers` wrapper, launched via `bash -c` so the shell resolves the plugin root at runtime.
-- `server/` - the compiled MCP server plus a launcher (`start.sh`) and a minimal `package.json`.
+- `.codex-plugin/plugin.json` - plugin manifest (`token-optimizer` v1.10.0).
+- `.mcp.json` - registers the `token_optimizer` stdio server via the `mcpServers` wrapper, launched with `node server/start.js` anchored at the plugin root via `cwd: "."`.
+- `server/` - the compiled MCP server plus launchers (`start.js` cross-platform, `start.sh` POSIX) and a minimal `package.json`.
 - `skills/token-optimizer/SKILL.md` - usage guidance, copied from `skill/skill-example.md`.
 
 ## How the server runs
 
 `.mcp.json` uses the top-level `mcpServers` object (the camelCase key the
-Codex app recognizes) and launches
-the bundled `server/start.sh` through `bash -c`, so the shell expands the
-plugin-root variable at runtime. Codex spawns MCP servers from the project
-working directory, not the plugin root, so the launcher resolves the path from
-whichever plugin-root variable is set (`PLUGIN_ROOT`, `CODEX_PLUGIN_ROOT`, or
-`CLAUDE_PLUGIN_ROOT`) rather than a fragile relative path. On first run the launcher installs
+Codex app recognizes) and launches the bundled `server/start.js` with `node`,
+anchored at the plugin root via `cwd: "."`. This works on Windows, macOS, and
+Linux — no bash required. On first run the launcher installs
 `@modelcontextprotocol/sdk` into the plugin data directory when Codex provides
 one, or into a local `.data/` fallback beside the plugin. No absolute repo paths
 are baked in, so the plugin remains portable after Codex installs it into its
@@ -55,5 +52,5 @@ install or enable the `token-optimizer` plugin from Codex.
 codex plugin marketplace add /path/to/token-optimizer-mcp
 ```
 
-For local development without marketplace installation, load `/Users/eevangelinos/.gemini/antigravity/scratch/local-tester-mcp/plugin/codex`
+For local development without marketplace installation, load `C:\Users\slode\Documents\Projects\local-llm-connector-mcp\plugin\codex`
 directly if your Codex surface supports direct plugin paths.

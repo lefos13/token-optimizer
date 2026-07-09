@@ -124,13 +124,20 @@ function resolveLocalProvider(taskType: LLMTaskType): LLMProvider {
   };
 }
 
-/* Gateway is the centralized proxy: the client holds a revocable proxy token (not
-   the real upstream key) and sends X-Task-Type so the gateway can pin the model.
-   The model here is nominal; the gateway overrides it and reports the real one. */
+/* Gateway is the centralized proxy: it pins the model per task type via
+   X-Task-Type. Two ways to use it:
+   - LLM_GATEWAY_TOKEN: a revocable proxy/issued token (not the real upstream
+     key); the operator's OpenRouter account pays and daily limits apply.
+   - OPENROUTER_BYOK_KEY: the caller's own OpenRouter key, sent as
+     X-OpenRouter-Key; the caller's own account pays, usage is unlimited, and
+     no proxy token is needed at all — the gateway only proxies and pins the
+     model, it never authenticates a BYOK-only caller. Either value alone is
+     enough to engage the gateway; both may be set together. */
 function resolveGatewayProvider(taskType: LLMTaskType): LLMProvider | null {
   const token = process.env.LLM_GATEWAY_TOKEN;
   const url = process.env.LLM_GATEWAY_URL;
-  if (!token || !url) {
+  const byokKey = process.env.OPENROUTER_BYOK_KEY;
+  if (!url || (!token && !byokKey)) {
     return null;
   }
   return {
@@ -139,8 +146,9 @@ function resolveGatewayProvider(taskType: LLMTaskType): LLMProvider | null {
     apiUrl: url.replace(/\/+$/, ''),
     model: 'gateway-managed',
     authHeaders: {
-      Authorization: `Bearer ${token}`,
-      'X-Task-Type': taskType
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      'X-Task-Type': taskType,
+      ...(byokKey ? { 'X-OpenRouter-Key': byokKey } : {})
     }
   };
 }
@@ -294,14 +302,19 @@ function redactApiBase(apiUrl: string): string {
 }
 
 export async function checkLocalLLMHealth(): Promise<LLMHealthResponse> {
-  /* Gateway is the configured primary: ping its /health (served at the root, not
-     under /v1) to confirm reachability before real calls spend tokens. */
-  if (process.env.LLM_GATEWAY_TOKEN && process.env.LLM_GATEWAY_URL) {
-    const base = process.env.LLM_GATEWAY_URL.replace(/\/+$/, '');
+  /* Gateway is the configured primary whenever a token or a BYOK key is set
+     (see resolveGatewayProvider): ping its /health (served at the root, not
+     under /v1) to confirm reachability before real calls spend tokens. A
+     BYOK-only setup has no token to validate, so the request omits auth
+     entirely and this only proves the gateway itself is reachable. */
+  const gatewayUrl = process.env.LLM_GATEWAY_URL;
+  const gatewayToken = process.env.LLM_GATEWAY_TOKEN;
+  if (gatewayUrl && (gatewayToken || process.env.OPENROUTER_BYOK_KEY)) {
+    const base = gatewayUrl.replace(/\/+$/, '');
     const healthUrl = `${base.replace(/\/v1$/, '')}/health`;
     const start = Date.now();
     try {
-      const response = await fetch(healthUrl, { headers: { Authorization: `Bearer ${process.env.LLM_GATEWAY_TOKEN}` } });
+      const response = await fetch(healthUrl, gatewayToken ? { headers: { Authorization: `Bearer ${gatewayToken}` } } : {});
       if (!response.ok) {
         throw new Error(`Gateway health ${response.status} ${response.statusText}`);
       }

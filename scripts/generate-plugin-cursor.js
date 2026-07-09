@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const { buildStartJs } = require("./launcher-template");
 
 /* Cursor plugin flow.
    Generates a portable token_optimizer bundle under plugin/cursor/ for Cursor
@@ -49,7 +50,7 @@ try {
   fs.mkdirSync(rulesDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "1.7.0";
+  const VERSION = "1.10.0";
 
   const sdkVersion = require(
     path.join(rootDir, "node_modules", "@modelcontextprotocol", "sdk", "package.json"),
@@ -99,6 +100,12 @@ exec node "$ROOT/index.js"
   fs.writeFileSync(startShPath, startSh);
   fs.chmodSync(startShPath, 0o755);
 
+  /* Cross-platform launcher referenced by the MCP config (start.sh stays for
+     POSIX scripting compatibility). */
+  const startJsPath = path.join(serverDir, "start.js");
+  fs.writeFileSync(startJsPath, buildStartJs());
+  fs.chmodSync(startJsPath, 0o755);
+
   /* Same directive content as scripts/manage-gateway-config.js's
      DIRECTIVE_BLOCK, authored directly here since Cursor's rule format
      (.mdc frontmatter) differs from the Markdown-heading blocks written into
@@ -123,8 +130,8 @@ Skip only when the user explicitly says not to use it.
   const mcpSnippet = {
     mcpServers: {
       token_optimizer: {
-        command: "bash",
-        args: [path.join(installedServerDir, "start.sh")],
+        command: "node",
+        args: [path.join(installedServerDir, "start.js")],
         env: {
           LLM_GATEWAY_URL: "${env:LLM_GATEWAY_URL}",
           LLM_GATEWAY_TOKEN: "${env:LLM_GATEWAY_TOKEN}",
@@ -192,7 +199,7 @@ this bundle is installed by copying files and running the repo config manager.
 4. Restart Cursor (or reload the window) so it picks up the new MCP server
    and rule.
 
-**Requirements:** \`node\`, \`npm\`, and \`bash\` on \`PATH\`; network access on
+**Requirements:** \`node\` and \`npm\` on \`PATH\`; network access on
 first run only.
 
 To pick up changes, re-run \`npm run build:plugin:cursor\`, re-copy the

@@ -1,16 +1,102 @@
 # local-tester LLM gateway
 
 A tiny Node HTTP service that holds the shared OpenRouter API key, authenticates
-clients with a shared bearer token, pins the model per task type, and forwards to
+clients with bearer tokens, pins the model per task type, and forwards to
 OpenRouter. Zero runtime dependencies (Node 18+ built-ins only). Fronted by Caddy
 for automatic HTTPS.
 
+Three ways to authenticate a `POST /v1/chat/completions` call:
+
+- **Shared operator tokens** from `PROXY_TOKENS` (env): unlimited, for the
+  operator and hand-issued trusted users.
+- **Issued tokens** from the self-service request flow: per-email, approved by the
+  operator on the admin dashboard, delivered by email, limited to
+  `DEFAULT_DAILY_LIMIT` calls per day (20 by default, adjustable/revocable per
+  token). Only a sha256 hash of each issued token is persisted.
+- **A caller's own OpenRouter key (BYOK)**, sent as `X-OpenRouter-Key:
+  sk-or-...`. **This requires no proxy/issued token at all** — the caller pays
+  OpenRouter directly, so the gateway has nothing to gate: it does not check
+  for a bearer token, does not look it up in the token registry, and never
+  applies a daily limit to a BYOK-only call. It only proxies the request and
+  pins the model. See [Request contract](#request-contract) below for the
+  exact rule when a bearer token is presented alongside a BYOK key.
+
+Persistent state (issued-token registry + global stats aggregates) lives as JSON
+files under `STATE_DIR` (default `.data` relative to the working directory).
+Writes are atomic; deleting the directory resets the registry and the stats.
+
 ## Request contract
 
-- `GET /health` → `{"ok":true}`. Unauthenticated for plain liveness (uptime pings), but if an `Authorization: Bearer <proxy-token>` header is presented — as the MCP client's health check does — the token is validated and an invalid one is rejected with `401`, so misconfigured tokens are caught at health-check time.
-- `POST /v1/chat/completions` → OpenAI-compatible. Requires `Authorization: Bearer <proxy-token>`.
+- `GET /health` → `{"ok":true}`. Unauthenticated for plain liveness (uptime pings), but if an `Authorization: Bearer <proxy-token>` header is presented — as the MCP client's health check does — the token is validated (without consuming a daily use) and an invalid one is rejected with `401`, so misconfigured tokens are caught at health-check time.
+- `POST /v1/chat/completions` → OpenAI-compatible.
   The `X-Task-Type` header (`verdict|triage|review|digest|scout|query`) selects the
   pinned model. The client's `model` field is always ignored.
+  - **Without** a valid `X-OpenRouter-Key`: requires `Authorization: Bearer
+    <proxy-token>`. Issued tokens consume one daily use per call; past the
+    limit the gateway returns
+    `429 {"error":"daily limit reached","dailyLimit":N,"resetsAt":"midnight UTC"}`.
+  - **With** a valid `X-OpenRouter-Key: sk-or-...`: **no `Authorization`
+    header is required at all.** The call bills against that key upstream
+    instead of the operator's `OPENROUTER_API_KEY`, and no daily limit ever
+    applies. If a bearer token happens to be presented too, its validity is
+    not checked — only used to bucket per-minute rate limiting; without one,
+    rate limiting is bucketed by a hash of the BYOK key instead, so anonymous
+    BYOK traffic is still throttled. A missing/malformed `X-OpenRouter-Key`
+    (or `ALLOW_BYOK=false`) falls back to requiring the normal proxy/issued
+    token — a bad key never grants access on its own, it just loses the
+    tokenless path.
+- `POST /v1/analytics` → sanitized aggregate analytics ingest from MCP clients.
+  Requires a valid bearer token but never consumes a daily use. The payload is
+  re-sanitized server-side (name whitelisting, numeric clamping); everything else
+  is discarded. Returns `202 {"ok":true}`.
+- `GET /v1/stats` → public aggregate-only global stats JSON (no auth). Contains
+  counters, percentages, model/tool breakdowns, and per-day buckets — never
+  emails, tokens, workspace paths, commands, or log content.
+- `GET /stats` → public HTML showcase page rendering the same aggregates.
+- `POST /v1/token-requests` `{"email":"you@example.com"}` → public self-service
+  token request. **One request per email, ever** — any existing record (pending,
+  approved, denied, or revoked) returns `409`. Per-IP rate-limited
+  (`TOKEN_REQUESTS_PER_MIN`, default 3/min).
+- `GET /admin` + `/admin/api/*` → operator dashboard and API (see below). All
+  admin routes return `404` unless `ADMIN_TOKEN` is set.
+
+## Admin dashboard and token lifecycle
+
+Set `ADMIN_TOKEN` in the env file (generate with `openssl rand -hex 32`), then
+open `https://<gateway-host>/admin`, paste the admin token into the page, and
+Load. From there you can:
+
+- **Approve** a request: generates a token, emails it to the requester (when
+  email delivery is configured), and activates it with the default daily limit.
+  If email delivery is not configured or fails, the plaintext token is shown
+  once in the dashboard so you can deliver it manually.
+- **Deny** a pending request, or **Revoke** an issued token (takes effect on the
+  holder's next call).
+- **Change the daily limit** per email inline (0 blocks all use without revoking).
+
+The JSON API behind the page (all require `Authorization: Bearer <ADMIN_TOKEN>`):
+`GET /admin/api/requests`, `POST /admin/api/approve|deny|revoke` `{"email":...}`,
+and `POST /admin/api/limit` `{"email":...,"dailyLimit":N}`. Token hashes never
+leave the server, not even to the admin API.
+
+Re-approving an email deliberately regenerates its token (old one stops working);
+the "one per email ever" rule only constrains the public request endpoint.
+
+## Email delivery (optional)
+
+Set `RESEND_API_KEY` and `EMAIL_FROM` (a sender on a domain verified with
+[Resend](https://resend.com)) to have approved tokens emailed automatically.
+Without them, approvals still work and the dashboard shows each token once for
+manual delivery. Email sending is a single HTTPS call; no dependency is added.
+
+## Global stats
+
+MCP clients push a sanitized aggregate record after each tool call (default-on
+when the gateway is configured; users opt out with
+`LLM_GATEWAY_SHARE_ANALYTICS=off`). The gateway folds records into aggregate
+counters only — per-day buckets are kept for 180 days, tool/model breakdowns are
+capped, numbers are clamped — and persists them in `STATE_DIR/global-stats.json`.
+Point people at `https://<gateway-host>/stats` to showcase the tool's impact.
 
 ## Deploy to the droplet
 
@@ -104,6 +190,11 @@ next call; no client update needed.
 clients over, then drop the old one — all via the env file + a restart.
 
 ### Issuing a token to a person
+
+For most users, prefer the self-service flow: they `POST /v1/token-requests` with
+their email, you approve on `/admin`, and the daily-limited token is emailed to
+them — no redeploy needed. The manual `PROXY_TOKENS` flow below issues an
+**unlimited** shared-class token and requires a redeploy per change:
 
 1. Generate a token: `openssl rand -hex 32`.
 2. Add it to the comma-separated `PROXY_TOKENS` in `gateway/deploy/gateway.env`.

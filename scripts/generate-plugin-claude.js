@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { buildStartJs } = require("./launcher-template");
 
 /* Claude Code plugin flow.
    Generates a complete, installable, portable Claude Code plugin under
@@ -64,7 +65,7 @@ try {
   /* Bump this on every meaningful change. Claude only pulls plugin updates
      when the version changes; keeping it static pins installs to the commit
      they were first installed from and updates become silent no-ops. */
-  const VERSION = "1.7.0";
+  const VERSION = "1.10.0";
 
   /* Pin the runtime dep to the version this repo was built and tested against. */
   const sdkVersion = require(
@@ -129,8 +130,10 @@ try {
   const mcpJson = {
     mcpServers: {
       token_optimizer: {
-        command: "bash",
-        args: ["${CLAUDE_PLUGIN_ROOT}/server/start.sh"],
+        /* node, not bash: Windows has no usable bash on PATH (System32
+           bash.exe is WSL), and node is required by the server anyway. */
+        command: "node",
+        args: ["${CLAUDE_PLUGIN_ROOT}/server/start.js"],
         env: {
           LLM_GATEWAY_URL: "${LLM_GATEWAY_URL:-https://llm-proxy.lnf.gr/v1}",
           LLM_GATEWAY_TOKEN: "${LLM_GATEWAY_TOKEN:-}",
@@ -199,6 +202,12 @@ exec node "$ROOT/server/index.js"
   fs.writeFileSync(startShPath, startSh);
   fs.chmodSync(startShPath, 0o755);
 
+  /* Cross-platform launcher referenced by .mcp.json (start.sh stays for
+     POSIX scripting compatibility). */
+  const startJsPath = path.join(serverDir, "start.js");
+  fs.writeFileSync(startJsPath, buildStartJs());
+  fs.chmodSync(startJsPath, 0o755);
+
   const sourceSkill = path.join(rootDir, "skill", "skill-example.md");
   const destSkill = path.join(skillsDir, "SKILL.md");
   if (!fs.existsSync(sourceSkill)) {
@@ -219,12 +228,13 @@ regressions, and scout code without flooding chat context with raw logs.
 
 - \`.claude-plugin/plugin.json\` — plugin manifest (\`token-optimizer\` v${VERSION}).
 - \`.mcp.json\` — registers the \`token_optimizer\` stdio server (tools exposed as \`mcp__token_optimizer__*\`).
-- \`server/\` — the compiled MCP server plus a launcher (\`start.sh\`) and a minimal \`package.json\`.
+- \`server/\` — the compiled MCP server plus launchers (\`start.js\` cross-platform, \`start.sh\` POSIX) and a minimal \`package.json\`.
 - \`skills/${SKILL_NAME}/SKILL.md\` — usage guidance, copied from \`skill/skill-example.md\`.
 
 ## How the server runs (portable)
 
-\`.mcp.json\` launches \`\${CLAUDE_PLUGIN_ROOT}/server/start.sh\`. On first run the
+\`.mcp.json\` launches \`node \${CLAUDE_PLUGIN_ROOT}/server/start.js\` (cross-platform,
+works on Windows where bash is unavailable). On first run the
 launcher installs the single runtime dependency
 (\`@modelcontextprotocol/sdk\`) into the persistent \`\${CLAUDE_PLUGIN_DATA}\`
 directory, then starts the server. No absolute repo paths are baked in, so the

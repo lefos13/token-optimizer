@@ -13,6 +13,21 @@ export interface GatewayConfig {
   rateLimitPerMin: number;
   maxBodyBytes: number;
   upstreamTimeoutMs: number;
+  /* Persistent state (issued tokens + global stats) lives here. */
+  stateDir: string;
+  /* Bearer token protecting /admin/api/*; unset disables all admin routes. */
+  adminToken?: string;
+  /* Per-day call allowance for issued (email-approved) tokens. */
+  defaultDailyLimit: number;
+  /* Per-IP per-minute cap on public token requests. */
+  tokenRequestsPerMin: number;
+  /* Optional Resend email delivery for approved tokens. */
+  resendApiKey?: string;
+  emailFrom?: string;
+  /* Whether a caller-supplied X-OpenRouter-Key is honored (bring-your-own-key,
+     unlimited usage, no daily-limit consumption). Default on; operators can
+     disable per-caller upstream billing entirely with ALLOW_BYOK=false. */
+  allowByok: boolean;
 }
 
 const TASK_MODEL_ENV: Record<GatewayTaskType, string> = {
@@ -59,6 +74,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     taskModels,
     rateLimitPerMin: num(env.RATE_LIMIT_PER_MIN, 60),
     maxBodyBytes: num(env.MAX_BODY_BYTES, 256 * 1024),
-    upstreamTimeoutMs: num(env.UPSTREAM_TIMEOUT_MS, 60_000)
+    upstreamTimeoutMs: num(env.UPSTREAM_TIMEOUT_MS, 60_000),
+    stateDir: env.STATE_DIR || '.data',
+    adminToken: env.ADMIN_TOKEN || undefined,
+    defaultDailyLimit: num(env.DEFAULT_DAILY_LIMIT, 20),
+    tokenRequestsPerMin: num(env.TOKEN_REQUESTS_PER_MIN, 3),
+    resendApiKey: env.RESEND_API_KEY || undefined,
+    emailFrom: env.EMAIL_FROM || undefined,
+    allowByok: (env.ALLOW_BYOK || '').trim().toLowerCase() !== 'false'
   };
 }

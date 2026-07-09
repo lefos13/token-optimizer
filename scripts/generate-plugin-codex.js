@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { buildStartJs } = require("./launcher-template");
 
 /* Codex plugin flow.
    Generates a complete, installable, portable Codex plugin under plugin/codex/.
@@ -47,7 +48,7 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "1.7.0";
+  const VERSION = "1.10.0";
 
   const sdkVersion = require(
     path.join(
@@ -136,18 +137,23 @@ try {
      snake_case `mcp_servers` form too, but the Codex app's marketplace parser
      only recognizes `mcpServers` — with snake_case the plugin page shows zero
      MCP servers. */
-  const launcher =
-    'exec bash "${PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$PWD}}}/server/start.sh"';
   /* Codex passes `LLM_GATEWAY_TOKEN` through from the session via `env_vars`
      (the value that varies per person); `LLM_GATEWAY_URL` is baked as the
      default gateway address. If a session also provides `LLM_GATEWAY_URL`,
      precedence between the baked default and the passthrough depends on
-     Codex's env-merge behavior — not verified here. */
+     Codex's env-merge behavior — not verified here.
+
+     `node server/start.js` relies on the same `cwd: "."` anchor the previous
+     bash launcher used ($PWD == plugin root): node resolves the relative
+     script path against the cwd. Using node instead of bash makes the plugin
+     work on Windows, where no usable bash exists on PATH. */
   const mcpJson = {
     mcpServers: {
       token_optimizer: {
-        command: "bash",
-        args: ["-c", launcher],
+        command: "node",
+        /* Forward slash stays portable: node accepts it on Windows too, and
+           the committed output must not vary by the OS that generated it. */
+        args: ["server/start.js"],
         cwd: ".",
         env_vars: [
           "LLM_GATEWAY_TOKEN",
@@ -258,6 +264,12 @@ exec node "$ROOT/server/index.js"
   fs.writeFileSync(startShPath, startSh);
   fs.chmodSync(startShPath, 0o755);
 
+  /* Cross-platform launcher referenced by .mcp.json (start.sh stays for
+     POSIX scripting compatibility). */
+  const startJsPath = path.join(serverDir, "start.js");
+  fs.writeFileSync(startJsPath, buildStartJs());
+  fs.chmodSync(startJsPath, 0o755);
+
   const sourceSkill = path.join(rootDir, "skill", "skill-example.md");
   const destSkill = path.join(skillsDir, "SKILL.md");
   if (!fs.existsSync(sourceSkill)) {
@@ -278,19 +290,16 @@ with raw logs.
 ## Contents
 
 - \`.codex-plugin/plugin.json\` - plugin manifest (\`token-optimizer\` v${VERSION}).
-- \`.mcp.json\` - registers the \`token_optimizer\` stdio server via the \`mcpServers\` wrapper, launched via \`bash -c\` so the shell resolves the plugin root at runtime.
-- \`server/\` - the compiled MCP server plus a launcher (\`start.sh\`) and a minimal \`package.json\`.
+- \`.mcp.json\` - registers the \`token_optimizer\` stdio server via the \`mcpServers\` wrapper, launched with \`node server/start.js\` anchored at the plugin root via \`cwd: "."\`.
+- \`server/\` - the compiled MCP server plus launchers (\`start.js\` cross-platform, \`start.sh\` POSIX) and a minimal \`package.json\`.
 - \`skills/${SKILL_NAME}/SKILL.md\` - usage guidance, copied from \`skill/skill-example.md\`.
 
 ## How the server runs
 
 \`.mcp.json\` uses the top-level \`mcpServers\` object (the camelCase key the
-Codex app recognizes) and launches
-the bundled \`server/start.sh\` through \`bash -c\`, so the shell expands the
-plugin-root variable at runtime. Codex spawns MCP servers from the project
-working directory, not the plugin root, so the launcher resolves the path from
-whichever plugin-root variable is set (\`PLUGIN_ROOT\`, \`CODEX_PLUGIN_ROOT\`, or
-\`CLAUDE_PLUGIN_ROOT\`) rather than a fragile relative path. On first run the launcher installs
+Codex app recognizes) and launches the bundled \`server/start.js\` with \`node\`,
+anchored at the plugin root via \`cwd: "."\`. This works on Windows, macOS, and
+Linux — no bash required. On first run the launcher installs
 \`@modelcontextprotocol/sdk\` into the plugin data directory when Codex provides
 one, or into a local \`.data/\` fallback beside the plugin. No absolute repo paths
 are baked in, so the plugin remains portable after Codex installs it into its

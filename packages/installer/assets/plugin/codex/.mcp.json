@@ -1,10 +1,9 @@
 {
   "mcpServers": {
     "token_optimizer": {
-      "command": "bash",
+      "command": "node",
       "args": [
-        "-c",
-        "exec bash \"${PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$PWD}}}/server/start.sh\""
+        "server/start.js"
       ],
       "cwd": ".",
       "env_vars": [

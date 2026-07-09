@@ -4,7 +4,74 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 
 const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
-const GATEWAY_ENV_KEYS = ["LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN"];
+const DEFAULT_LOCAL_LLM_URL = "http://localhost:8080/v1";
+const DEFAULT_LOCAL_LLM_MODEL = "local-model";
+/* Every env key installers may write into a client's MCP config. A provider
+   mode (gateway / byok / local / skip) always yields a full values object
+   across all of these keys so registering the MCP server never requires
+   picking a provider, and switching providers later cleanly clears whatever
+   the previous choice left behind. */
+const MANAGED_ENV_KEYS = [
+  "LLM_GATEWAY_URL",
+  "LLM_GATEWAY_TOKEN",
+  "OPENROUTER_BYOK_KEY",
+  "LOCAL_LLM_API_URL",
+  "LOCAL_LLM_MODEL",
+];
+
+function emptyManagedValues() {
+  return Object.fromEntries(MANAGED_ENV_KEYS.map((key) => [key, ""]));
+}
+
+/* Resolves an install/config options object into the full managed values to
+   write.
+   - "gateway": shared infrastructure; requires gatewayToken.
+   - "byok": your own OpenRouter key via the gateway. Requires byokKey only —
+     NO gatewayToken is written or needed, because a BYOK caller isn't using
+     the operator's OpenRouter setup and the gateway does not authenticate a
+     BYOK-only request at all.
+   - "local": your own OpenAI-compatible endpoint; needs nothing.
+   - "skip"/unset provider: writes nothing but still returns the empty object
+     shape, so callers can still register the MCP server entry itself without
+     ever requiring a token. */
+function buildProviderValues(options) {
+  const provider = normalizeProviderChoice(options.provider) || inferProvider(options);
+  const values = emptyManagedValues();
+  if (provider === "gateway") {
+    if (!options.gatewayToken) {
+      throw new Error("gatewayToken is required for provider 'gateway'");
+    }
+    values.LLM_GATEWAY_URL = options.gatewayUrl || DEFAULT_GATEWAY_URL;
+    values.LLM_GATEWAY_TOKEN = options.gatewayToken;
+  } else if (provider === "byok") {
+    if (!options.byokKey) {
+      throw new Error("byokKey is required for provider 'byok'");
+    }
+    values.LLM_GATEWAY_URL = options.gatewayUrl || DEFAULT_GATEWAY_URL;
+    values.OPENROUTER_BYOK_KEY = options.byokKey;
+  } else if (provider === "local") {
+    values.LOCAL_LLM_API_URL = options.localApiUrl || "";
+    values.LOCAL_LLM_MODEL = options.localModel || "";
+  }
+  return values;
+}
+
+function normalizeProviderChoice(provider) {
+  if (!provider) {
+    return null;
+  }
+  const normalized = String(provider).trim().toLowerCase();
+  return ["gateway", "byok", "local", "skip"].includes(normalized) ? normalized : null;
+}
+
+/* Callers that don't pass an explicit provider get one inferred from which
+   values they supplied, so existing gatewayToken-only call sites keep working. */
+function inferProvider(options) {
+  if (options.byokKey) return "byok";
+  if (options.gatewayToken) return "gateway";
+  if (options.localApiUrl || options.localModel) return "local";
+  return "skip";
+}
 const CLAUDE_MARKETPLACE_NAME = "token-optimizer-marketplace";
 const CODEX_MARKETPLACE_NAME = "Softaware-marketplace";
 const DIRECTIVE_MARKER_START = "<!-- TOKEN_OPTIMIZER_START -->";
@@ -133,8 +200,17 @@ function installClaude(options) {
   if (fs.existsSync(marketplaceSrc)) {
     copyDirectory(marketplaceSrc, path.join(options.installRoot, ".claude-plugin"));
   }
-  tryClientCommand("claude", ["plugin", "marketplace", "add", options.installRoot], options);
-  tryClientCommand("claude", ["plugin", "install", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`], options);
+  /* Try the CLI route first. When the claude CLI is unavailable (desktop-app
+     installs, common on Windows), fall back to a skills-directory plugin:
+     Claude Code loads any folder under ~/.claude/skills/ that carries a
+     .claude-plugin/plugin.json as a full plugin (token-optimizer@skills-dir)
+     on the next session — MCP server and skill included, no CLI needed. */
+  const marketplaceAdded = tryClientCommand("claude", ["plugin", "marketplace", "add", options.installRoot], options);
+  const pluginInstalled = marketplaceAdded
+    && tryClientCommand("claude", ["plugin", "install", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`], options);
+  if (!pluginInstalled) {
+    copyDirectory(path.join(options.assetsRoot, "plugin", "claude"), path.join(options.home, ".claude", "skills", "token-optimizer"));
+  }
   applyGatewayConfig({ ...options, clients: ["claude"] });
   if (options.defaults !== false) {
     applyDefaultDirectives({ ...options, clients: ["claude"] });
@@ -149,8 +225,27 @@ function installCodex(options) {
   if (fs.existsSync(marketplaceSrc)) {
     copyFile(marketplaceSrc, path.join(options.installRoot, ".agents", "plugins", "marketplace.json"));
   }
-  tryClientCommand("codex", ["plugin", "marketplace", "add", options.installRoot], options);
-  tryClientCommand("codex", ["plugin", "add", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options);
+  /* Try the CLI route first. When the codex CLI is unavailable (desktop-app
+     installs, common on Windows), fall back to registering the bundled server
+     directly in ~/.codex/config.toml and copying the skill into
+     ~/.codex/skills/, which Codex reads without any plugin machinery. */
+  const marketplaceAdded = tryClientCommand("codex", ["plugin", "marketplace", "add", options.installRoot], options);
+  const pluginInstalled = marketplaceAdded
+    && tryClientCommand("codex", ["plugin", "add", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options);
+  if (!pluginInstalled) {
+    const startJs = path.join(pluginDest, "server", "start.js");
+    const configPath = path.join(options.home, ".codex", "config.toml");
+    ensureDirectory(path.dirname(configPath));
+    const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
+    if (existing) {
+      backupFile(configPath, installerPaths(options).backupRoot);
+    }
+    fs.writeFileSync(configPath, upsertCodexTomlServer(existing, startJs, buildProviderValues(options)));
+    const skillSrc = path.join(options.assetsRoot, "plugin", "codex", "skills", "token-optimizer");
+    if (fs.existsSync(skillSrc)) {
+      copyDirectory(skillSrc, path.join(options.home, ".codex", "skills", "token-optimizer"));
+    }
+  }
   applyGatewayConfig({ ...options, clients: ["codex"] });
   if (options.defaults !== false) {
     applyDefaultDirectives({ ...options, clients: ["codex"] });
@@ -159,19 +254,18 @@ function installCodex(options) {
 
 function applyGatewayConfig(options) {
   const paths = installerPaths(options);
-  const values = {
-    LLM_GATEWAY_URL: options.gatewayUrl || DEFAULT_GATEWAY_URL,
-    LLM_GATEWAY_TOKEN: options.gatewayToken || "",
-  };
-  if (!values.LLM_GATEWAY_TOKEN) {
-    throw new Error("gatewayToken is required");
-  }
+  const values = buildProviderValues(options);
   for (const target of getGatewayTargets(paths.home)) {
     if (!target.matches(options.clients)) {
       continue;
     }
     const config = safeReadConfig(target);
-    writeConfigTarget(target, target.applyValues(config, values), paths.backupRoot);
+    const nextConfig = target.applyValues(config, values);
+    /* A target may return null to signal "nothing to write" (e.g. the codex
+       config.toml target when no token_optimizer section exists). */
+    if (nextConfig != null) {
+      writeConfigTarget(target, nextConfig, paths.backupRoot);
+    }
   }
   applyLaunchctlValues(values, options);
 }
@@ -192,10 +286,33 @@ function applyDefaultDirectives(options) {
 }
 
 function getGatewayTargets(home) {
-  const localTesterServerArgs = [path.join(home, ".gemini", "config", "plugins", "token-optimizer", "server", "start.sh")];
-  const opencodeServerCommand = ["bash", path.join(home, ".config", "opencode", "token-optimizer-server", "start.sh")];
-  const cursorServerArgs = [path.join(home, ".cursor", "token-optimizer-server", "start.sh")];
+  /* All launch commands use `node` + the cross-platform start.js launcher —
+     Windows has no usable bash on PATH (System32 bash.exe is WSL). Command and
+     args are overwritten on every write so stale bash/start.sh entries from
+     older installs are repaired in place. */
+  const localTesterServerArgs = [path.join(home, ".gemini", "config", "plugins", "token-optimizer", "server", "start.js")];
+  const opencodeServerCommand = ["node", path.join(home, ".config", "opencode", "token-optimizer-server", "start.js")];
+  const cursorServerArgs = [path.join(home, ".cursor", "token-optimizer-server", "start.js")];
+  const codexInstallRoot = path.join(home, ".token-optimizer");
+  const codexStartJs = path.join(codexInstallRoot, "plugin", "codex", "server", "start.js");
   return [
+    {
+      /* Codex CLI-free installs keep their server in ~/.codex/config.toml.
+         Only update env values when the token_optimizer section already
+         exists — plugin-based installs must not gain a duplicate server. */
+      clients: ["codex"],
+      filePath: path.join(home, ".codex", "config.toml"),
+      readConfig: (filePath) => fs.readFileSync(filePath, "utf8"),
+      writeConfig: (filePath, content) => fs.writeFileSync(filePath, content),
+      matches: matchesClient,
+      applyValues(config, values) {
+        const content = typeof config === "string" ? config : "";
+        if (!content.includes("[mcp_servers.token_optimizer]")) {
+          return null;
+        }
+        return upsertCodexTomlServer(content, codexStartJs, values);
+      },
+    },
     {
       clients: ["claude"],
       filePath: path.join(home, ".claude", "settings.json"),
@@ -217,10 +334,9 @@ function getGatewayTargets(home) {
       applyValues(config, values) {
         const next = config;
         next.mcpServers = next.mcpServers || {};
-        next.mcpServers.token_optimizer = next.mcpServers.token_optimizer || { command: "bash", args: localTesterServerArgs };
-        next.mcpServers.token_optimizer.command = next.mcpServers.token_optimizer.command || "bash";
-        next.mcpServers.token_optimizer.args = Array.isArray(next.mcpServers.token_optimizer.args) && next.mcpServers.token_optimizer.args.length > 0
-          ? next.mcpServers.token_optimizer.args : localTesterServerArgs;
+        next.mcpServers.token_optimizer = next.mcpServers.token_optimizer || {};
+        next.mcpServers.token_optimizer.command = "node";
+        next.mcpServers.token_optimizer.args = localTesterServerArgs;
         next.mcpServers.token_optimizer.env = mergeManagedEnvValues(next.mcpServers.token_optimizer.env || {}, values);
         return next;
       },
@@ -234,7 +350,9 @@ function getGatewayTargets(home) {
       applyValues(config, values) {
         const next = config;
         next.mcpServers = next.mcpServers || {};
-        next.mcpServers.token_optimizer = next.mcpServers.token_optimizer || { command: "bash", args: localTesterServerArgs };
+        next.mcpServers.token_optimizer = next.mcpServers.token_optimizer || {};
+        next.mcpServers.token_optimizer.command = "node";
+        next.mcpServers.token_optimizer.args = localTesterServerArgs;
         next.mcpServers.token_optimizer.env = mergeManagedEnvValues(next.mcpServers.token_optimizer.env || {}, values);
         return next;
       },
@@ -249,10 +367,9 @@ function getGatewayTargets(home) {
         const next = config;
         next.mcp = next.mcp || {};
         delete next.mcp.local_tester;
-        next.mcp.token_optimizer = next.mcp.token_optimizer || { type: "local", command: opencodeServerCommand, enabled: true };
+        next.mcp.token_optimizer = next.mcp.token_optimizer || {};
         next.mcp.token_optimizer.type = next.mcp.token_optimizer.type || "local";
-        next.mcp.token_optimizer.command = Array.isArray(next.mcp.token_optimizer.command) && next.mcp.token_optimizer.command.length > 0
-          ? next.mcp.token_optimizer.command : opencodeServerCommand;
+        next.mcp.token_optimizer.command = opencodeServerCommand;
         next.mcp.token_optimizer.enabled = next.mcp.token_optimizer.enabled !== false;
         next.mcp.token_optimizer.environment = mergeManagedEnvValues(next.mcp.token_optimizer.environment || {}, values);
         return next;
@@ -267,10 +384,9 @@ function getGatewayTargets(home) {
       applyValues(config, values) {
         const next = config;
         next.mcpServers = next.mcpServers || {};
-        next.mcpServers.token_optimizer = next.mcpServers.token_optimizer || { command: "bash", args: cursorServerArgs };
-        next.mcpServers.token_optimizer.command = next.mcpServers.token_optimizer.command || "bash";
-        next.mcpServers.token_optimizer.args = Array.isArray(next.mcpServers.token_optimizer.args) && next.mcpServers.token_optimizer.args.length > 0
-          ? next.mcpServers.token_optimizer.args : cursorServerArgs;
+        next.mcpServers.token_optimizer = next.mcpServers.token_optimizer || {};
+        next.mcpServers.token_optimizer.command = "node";
+        next.mcpServers.token_optimizer.args = cursorServerArgs;
         next.mcpServers.token_optimizer.env = mergeManagedEnvValues(next.mcpServers.token_optimizer.env || {}, values);
         return next;
       },
@@ -323,7 +439,7 @@ function writeJsonFile(filePath, config) {
 
 function mergeManagedEnvValues(existingEnv, incomingValues) {
   const next = { ...existingEnv };
-  for (const envKey of GATEWAY_ENV_KEYS) {
+  for (const envKey of MANAGED_ENV_KEYS) {
     const value = incomingValues[envKey];
     if (value) {
       next[envKey] = value;
@@ -442,7 +558,7 @@ function applyLaunchctlValues(values, options = {}) {
   if (options.skipLaunchctl) {
     return;
   }
-  for (const envKey of GATEWAY_ENV_KEYS) {
+  for (const envKey of MANAGED_ENV_KEYS) {
     if (values[envKey]) {
       runLaunchctl(["setenv", envKey, values[envKey]], options);
     }
@@ -470,6 +586,10 @@ function runLaunchctl(args, options = {}) {
   execFileSync("launchctl", args, { stdio: "ignore" });
 }
 
+/* Runs a client CLI, returning whether it succeeded. On Windows, npm-installed
+   client CLIs are .cmd shims that cannot be spawned directly by name (and
+   recent Node throws EINVAL for .cmd without a shell), so failures are retried
+   through cmd.exe. A false return triggers each client's CLI-free fallback. */
 function tryClientCommand(command, args, options) {
   if (options.skipClientCommands) {
     return false;
@@ -478,17 +598,54 @@ function tryClientCommand(command, args, options) {
     execFileSync(command, args, { stdio: "ignore" });
     return true;
   } catch {
+    if (process.platform === "win32") {
+      try {
+        execFileSync("cmd.exe", ["/c", command, ...args], { stdio: "ignore" });
+        return true;
+      } catch {
+        return false;
+      }
+    }
     return false;
   }
 }
 
 function commandExists(command) {
+  const [probe, probeArgs] = process.platform === "win32"
+    ? ["where", [command]]
+    : ["sh", ["-lc", `command -v ${command}`]];
   try {
-    execFileSync("sh", ["-lc", `command -v ${command}`], { stdio: "ignore" });
+    execFileSync(probe, probeArgs, { stdio: "ignore" });
     return true;
   } catch {
     return false;
   }
+}
+
+/* Replaces (or appends) the [mcp_servers.token_optimizer] section — including
+   its .env subtable — in a Codex config.toml, leaving all other content
+   untouched. Used by CLI-free Codex installs. Paths are written as TOML
+   literal strings so Windows backslashes need no escaping. */
+function upsertCodexTomlServer(content, startJsPath, values) {
+  const sectionPattern = /^\[mcp_servers\.token_optimizer(?:\.[A-Za-z0-9_.]+)?\][^\S\r\n]*\r?\n(?:(?!^\[).*(?:\r?\n|$))*/gm;
+  let base = String(content || "").replace(sectionPattern, "");
+  if (base && !base.endsWith("\n")) {
+    base += "\n";
+  }
+  const env = mergeManagedEnvValues({}, values);
+  const tomlString = (value) => (value.includes("'") ? JSON.stringify(value) : `'${value}'`);
+  const lines = [
+    "[mcp_servers.token_optimizer]",
+    "command = 'node'",
+    `args = [${tomlString(startJsPath)}]`,
+    /* First launch runs npm install; give it headroom beyond Codex's default. */
+    "startup_timeout_sec = 120",
+    "",
+    "[mcp_servers.token_optimizer.env]",
+    ...Object.entries(env).map(([key, value]) => `${key} = ${tomlString(value)}`),
+  ];
+  const separator = base ? "\n" : "";
+  return `${base}${separator}${lines.join("\n")}\n`;
 }
 
 function copyDirectory(src, dest) {
@@ -520,6 +677,12 @@ function ensureDirectory(dirPath) {
 
 module.exports = {
   DEFAULT_GATEWAY_URL,
+  DEFAULT_LOCAL_LLM_URL,
+  DEFAULT_LOCAL_LLM_MODEL,
+  MANAGED_ENV_KEYS,
+  emptyManagedValues,
+  buildProviderValues,
+  normalizeProviderChoice,
   DIRECTIVE_MARKER_START,
   installerPaths,
   detectClients,
@@ -533,4 +696,5 @@ module.exports = {
   applyDefaultDirectives,
   applyDirectiveBlock,
   stripJsonCommentsAndTrailingCommas,
+  upsertCodexTomlServer,
 };

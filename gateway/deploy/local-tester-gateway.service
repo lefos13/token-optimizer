@@ -5,6 +5,11 @@ After=network.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/local-tester-gateway.env
+WorkingDirectory=/opt/local-tester-gateway
+# Creates /var/lib/local-tester-gateway, the only writable path under
+# ProtectSystem=strict. Set STATE_DIR=/var/lib/local-tester-gateway in the env
+# file when using systemd so issued tokens and global stats persist.
+StateDirectory=local-tester-gateway
 ExecStart=/usr/bin/node /opt/local-tester-gateway/dist/index.js
 Restart=always
 RestartSec=2

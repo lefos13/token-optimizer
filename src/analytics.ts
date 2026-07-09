@@ -176,11 +176,78 @@ export function buildAnalyticsRecord(input: {
   };
 }
 
+/* Sanitized subset of a local analytics record shared with the gateway's global
+   aggregate stats. Deliberately excludes everything identifying or contextual:
+   workspace paths, run ids, log paths, commands, exit codes, and error/fallback
+   text. Only counts, percentages, model/task names, and latency are sent. */
+export interface SharedAnalyticsRecord {
+  toolName: string;
+  rawSourceTokens: number;
+  returnedToMainTokens: number;
+  estimatedTokensSaved: number;
+  savingsPercentage: number;
+  localLlmTotalTokens: number;
+  llmModel?: string;
+  llmTaskType?: string;
+  llmLatencyMs?: number;
+  usedFallback?: boolean;
+}
+
+export function buildSharedAnalyticsRecord(record: AnalyticsRecord): SharedAnalyticsRecord {
+  return {
+    toolName: record.toolName,
+    rawSourceTokens: record.rawSourceTokens,
+    returnedToMainTokens: record.returnedToMainTokens,
+    estimatedTokensSaved: record.estimatedTokensSaved,
+    savingsPercentage: record.savingsPercentage,
+    localLlmTotalTokens: record.localLlmTotalTokens,
+    llmModel: record.llmModel,
+    llmTaskType: record.llmTaskType,
+    llmLatencyMs: record.llmLatencyMs,
+    usedFallback: Boolean(record.fallbackReason)
+  };
+}
+
+const SHARE_OPT_OUT_VALUES = new Set(['off', 'false', '0', 'no']);
+const SHARE_TIMEOUT_MS = 3000;
+
+export function isAnalyticsSharingEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!env.LLM_GATEWAY_URL || !env.LLM_GATEWAY_TOKEN) {
+    return false;
+  }
+  return !SHARE_OPT_OUT_VALUES.has((env.LLM_GATEWAY_SHARE_ANALYTICS || '').trim().toLowerCase());
+}
+
+/* Best-effort fire-and-forget push to the gateway's POST /v1/analytics. Enabled
+   by default whenever the gateway is configured; LLM_GATEWAY_SHARE_ANALYTICS=off
+   disables it. Failures are swallowed — global stats must never affect a tool
+   call — and the push does not count against a token's daily usage limit. */
+function shareAnalyticsRecord(record: AnalyticsRecord): void {
+  if (!isAnalyticsSharingEnabled()) {
+    return;
+  }
+  const base = (process.env.LLM_GATEWAY_URL as string).replace(/\/+$/, '');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SHARE_TIMEOUT_MS);
+  fetch(`${base}/analytics`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.LLM_GATEWAY_TOKEN}`
+    },
+    body: JSON.stringify(buildSharedAnalyticsRecord(record)),
+    signal: controller.signal
+  })
+    .catch(() => { /* ignore sharing failures */ })
+    .finally(() => clearTimeout(timer));
+}
+
 /* Analytics are operational evidence, not part of the MCP contract. Each workspace
    keeps its own analytics under its .codex-local-test-runs/ directory (next to its
    raw logs and baseline), so they remain readable from the workspace itself and
    the analytics UI can be pointed at any number of workspaces to report on them. */
 export function recordAnalytics(targetWorkspacePath: string, record: AnalyticsRecord): void {
+  shareAnalyticsRecord(record);
   try {
     const dir = analyticsDir(targetWorkspacePath);
     if (!fs.existsSync(dir)) {

@@ -53,7 +53,7 @@ this bundle is installed by copying files and running the repo config manager.
 4. Restart Cursor (or reload the window) so it picks up the new MCP server
    and rule.
 
-**Requirements:** `node`, `npm`, and `bash` on `PATH`; network access on
+**Requirements:** `node` and `npm` on `PATH`; network access on
 first run only.
 
 To pick up changes, re-run `npm run build:plugin:cursor`, re-copy the

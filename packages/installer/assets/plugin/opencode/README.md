@@ -57,7 +57,7 @@ running the repo config manager.
 
 5. Restart opencode so it picks up the new MCP server and skill.
 
-**Requirements:** `node`, `npm`, and `bash` on `PATH`; network access on
+**Requirements:** `node` and `npm` on `PATH`; network access on
 first run only (to install the bundled server's single runtime dependency into
 a `.data/` directory next to itself).
 
