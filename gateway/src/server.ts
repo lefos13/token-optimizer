@@ -7,7 +7,7 @@ import { createRateLimiter, RateLimiter } from './rate-limit';
 import { TokenStore, createTokenStore, normalizeEmail } from './tokens';
 import { StatsStore, createStatsStore } from './stats';
 import { sendTokenEmail, EmailResult } from './email';
-import { renderStatsPage, renderAdminPage } from './pages';
+import { renderAccessRequestPage, renderStatsPage, renderAdminPage } from './pages';
 
 export interface ServerDeps {
   fetchImpl?: typeof fetch;
@@ -380,6 +380,9 @@ export function createGatewayServer(config: GatewayConfig, deps: ServerDeps = {}
 
   return httpCreateServer(async (req, res) => {
     try {
+      if (req.method === 'GET' && req.url === '/') {
+        return sendHtml(res, 200, renderAccessRequestPage());
+      }
       if (req.method === 'GET' && req.url === '/health') {
         return handleHealth(req, res, config, tokenStore);
       }

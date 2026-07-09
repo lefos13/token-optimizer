@@ -30,8 +30,9 @@ checks for a proxy token at all — it just proxies your request to OpenRouter
 for the shared-quota path, because that's the only path where the operator's
 own OpenRouter account is paying for your calls.
 
-- **Gateway access token:** request one from the gateway with your email (one
-  request per email, ever):
+- **Gateway access token:** visit [the access-request portal](https://llm-proxy.lnf.gr/)
+  and submit your email (one request per email, ever). API clients can use the
+  same flow directly:
 
   ```bash
   curl -X POST https://llm-proxy.lnf.gr/v1/token-requests \

@@ -53,6 +53,9 @@ Writes are atomic; deleting the directory resets the registry and the stats.
   counters, percentages, model/tool breakdowns, and per-day buckets — never
   emails, tokens, workspace paths, commands, or log content.
 - `GET /stats` → public HTML showcase page rendering the same aggregates.
+- `GET /` → public browser portal for requesting a gateway access token. It
+  submits to the existing token-request API and shows submission, validation,
+  duplicate-request, and rate-limit feedback.
 - `POST /v1/token-requests` `{"email":"you@example.com"}` → public self-service
   token request. **One request per email, ever** — any existing record (pending,
   approved, denied, or revoked) returns `409`. Per-IP rate-limited
@@ -191,9 +194,10 @@ clients over, then drop the old one — all via the env file + a restart.
 
 ### Issuing a token to a person
 
-For most users, prefer the self-service flow: they `POST /v1/token-requests` with
-their email, you approve on `/admin`, and the daily-limited token is emailed to
-them — no redeploy needed. The manual `PROXY_TOKENS` flow below issues an
+For most users, send them to `https://<gateway-host>/` to submit their email in
+the self-service portal (or have an API client `POST /v1/token-requests`), then
+approve on `/admin`. The daily-limited token is emailed to them — no redeploy
+needed. The manual `PROXY_TOKENS` flow below issues an
 **unlimited** shared-class token and requires a redeploy per change:
 
 1. Generate a token: `openssl rand -hex 32`.

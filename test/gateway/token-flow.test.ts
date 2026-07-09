@@ -133,6 +133,19 @@ test('analytics ingest feeds the public stats JSON and showcase page', async () 
   });
 });
 
+test('root serves the public access request portal', async () => {
+  await withServer(async (base) => {
+    const page = await fetch(`${base}/`);
+    assert.equal(page.status, 200);
+    assert.match(page.headers.get('content-type') || '', /text\/html/);
+    const html = await page.text();
+    assert.ok(html.includes('Request access'));
+    assert.ok(html.includes('/v1/token-requests'));
+    assert.ok(html.includes('type="email"'));
+    assert.ok(html.includes('You will receive your token after approval.'));
+  });
+});
+
 test('admin routes are disabled entirely without ADMIN_TOKEN', async () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-noadmin-'));
   const config = loadConfig({
