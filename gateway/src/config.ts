@@ -21,9 +21,17 @@ export interface GatewayConfig {
   defaultDailyLimit: number;
   /* Per-IP per-minute cap on public token requests. */
   tokenRequestsPerMin: number;
-  /* Optional Resend email delivery for approved tokens. */
-  resendApiKey?: string;
+  /* Optional Nodemailer delivery for approved tokens. */
+  emailProvider: 'gmail' | 'smtp';
+  gmailUser?: string;
+  gmailAppPassword?: string;
+  smtpHost?: string;
+  smtpPort: number;
+  smtpSecure: boolean;
+  smtpUser?: string;
+  smtpPass?: string;
   emailFrom?: string;
+  emailReplyTo?: string;
   /* Whether a caller-supplied X-OpenRouter-Key is honored (bring-your-own-key,
      unlimited usage, no daily-limit consumption). Default on; operators can
      disable per-caller upstream billing entirely with ALLOW_BYOK=false. */
@@ -42,6 +50,13 @@ const TASK_MODEL_ENV: Record<GatewayTaskType, string> = {
 function num(value: string | undefined, fallback: number): number {
   const n = Number(value);
   return Number.isFinite(n) && value !== undefined && value !== '' ? n : fallback;
+}
+
+function bool(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined || value === '') {
+    return fallback;
+  }
+  return value.trim().toLowerCase() === 'true';
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
@@ -79,8 +94,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     adminToken: env.ADMIN_TOKEN || undefined,
     defaultDailyLimit: num(env.DEFAULT_DAILY_LIMIT, 20),
     tokenRequestsPerMin: num(env.TOKEN_REQUESTS_PER_MIN, 3),
-    resendApiKey: env.RESEND_API_KEY || undefined,
+    /* Gateway email settings match softaware-apis so Gmail app-password and
+       generic SMTP operators can reuse their established credentials. */
+    emailProvider: (env.EMAIL_PROVIDER || 'smtp').trim().toLowerCase() === 'gmail' ? 'gmail' : 'smtp',
+    gmailUser: env.GMAIL_USER || undefined,
+    gmailAppPassword: env.GMAIL_APP_PASSWORD || undefined,
+    smtpHost: env.SMTP_HOST || undefined,
+    smtpPort: num(env.SMTP_PORT, 587),
+    smtpSecure: bool(env.SMTP_SECURE, false),
+    smtpUser: env.SMTP_USER || undefined,
+    smtpPass: env.SMTP_PASS || undefined,
     emailFrom: env.EMAIL_FROM || undefined,
+    emailReplyTo: env.EMAIL_REPLY_TO || undefined,
     allowByok: (env.ALLOW_BYOK || '').trim().toLowerCase() !== 'false'
   };
 }

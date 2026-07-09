@@ -2,6 +2,14 @@
 
 Optional one-command installer for Token Optimizer.
 
+Run it from outside a Token Optimizer source checkout so `npx` cannot prefer a
+stale local development dependency:
+
+```powershell
+cd $HOME
+npx --yes @softawarest/token-optimizer-installer
+```
+
 ```bash
 npx @softawarest/token-optimizer-installer
 ```

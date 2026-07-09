@@ -2,7 +2,7 @@
 
 A tiny Node HTTP service that holds the shared OpenRouter API key, authenticates
 clients with bearer tokens, pins the model per task type, and forwards to
-OpenRouter. Zero runtime dependencies (Node 18+ built-ins only). Fronted by Caddy
+OpenRouter. It uses Nodemailer for optional approval email delivery. Fronted by Caddy
 for automatic HTTPS.
 
 Three ways to authenticate a `POST /v1/chat/completions` call:
@@ -47,8 +47,9 @@ Writes are atomic; deleting the directory resets the registry and the stats.
     tokenless path.
 - `POST /v1/analytics` → sanitized aggregate analytics ingest from MCP clients.
   Requires a valid bearer token but never consumes a daily use. The payload is
-  re-sanitized server-side (name whitelisting, numeric clamping); everything else
-  is discarded. Returns `202 {"ok":true}`.
+  re-sanitized server-side (name whitelisting, numeric clamping); records with
+  fewer than 1,000 raw-source tokens are accepted but intentionally excluded
+  from public aggregates. Returns `202 {"ok":true}`.
 - `GET /v1/stats` → public aggregate-only global stats JSON (no auth). Contains
   counters, percentages, model/tool breakdowns, and per-day buckets — never
   emails, tokens, workspace paths, commands, or log content.
@@ -87,18 +88,29 @@ the "one per email ever" rule only constrains the public request endpoint.
 
 ## Email delivery (optional)
 
-Set `RESEND_API_KEY` and `EMAIL_FROM` (a sender on a domain verified with
-[Resend](https://resend.com)) to have approved tokens emailed automatically.
-Without them, approvals still work and the dashboard shows each token once for
-manual delivery. Email sending is a single HTTPS call; no dependency is added.
+Set `EMAIL_FROM` plus one Nodemailer provider configuration to have approved
+tokens emailed automatically. The gateway uses the same names as
+`softaware-apis`:
+
+- Gmail app password: `EMAIL_PROVIDER=gmail`, `GMAIL_USER`, and
+  `GMAIL_APP_PASSWORD`.
+- Generic SMTP: `EMAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_PORT`,
+  `SMTP_SECURE`, and optional `SMTP_USER`/`SMTP_PASS`.
+
+Set `EMAIL_REPLY_TO` when replies should go somewhere other than the sender.
+Without a complete mail configuration, or when delivery fails, approvals still
+work and the dashboard shows each token once for manual delivery.
 
 ## Global stats
 
 MCP clients push a sanitized aggregate record after each tool call (default-on
 when the gateway is configured; users opt out with
-`LLM_GATEWAY_SHARE_ANALYTICS=off`). The gateway folds records into aggregate
-counters only — per-day buckets are kept for 180 days, tool/model breakdowns are
-capped, numbers are clamped — and persists them in `STATE_DIR/global-stats.json`.
+`LLM_GATEWAY_SHARE_ANALYTICS=off`). Only records with at least 1,000 raw-source
+tokens qualify for the gateway's aggregate counters. Per-day buckets are kept
+for 180 days, tool/model breakdowns are capped, numbers are clamped, and state
+is persisted in `STATE_DIR/global-stats.json`. This release resets existing
+aggregate statistics once through the v2 stats schema; issued-token records are
+not affected.
 Point people at `https://<gateway-host>/stats` to showcase the tool's impact.
 
 ## Deploy to the droplet

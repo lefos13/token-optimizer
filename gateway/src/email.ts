@@ -1,3 +1,4 @@
+import nodemailer from 'nodemailer';
 import { GatewayConfig } from './config';
 
 export interface EmailResult {
@@ -5,17 +6,39 @@ export interface EmailResult {
   error?: string;
 }
 
-/* Token delivery via the Resend HTTP API (a single fetch; keeps the gateway
-   zero-dependency). When RESEND_API_KEY / EMAIL_FROM are not configured the
-   caller falls back to manual delivery: the admin dashboard shows the plaintext
-   token once so the operator can send it themselves. */
-export async function sendTokenEmail(
-  config: GatewayConfig,
-  to: string,
-  token: string,
-  doFetch: typeof fetch = fetch
-): Promise<EmailResult> {
-  if (!config.resendApiKey || !config.emailFrom) {
+/* Nodemailer transport selection mirrors softaware-apis so the gateway can
+   reuse the same Gmail app-password or generic SMTP credentials. */
+export function buildTransportOptions(config: Pick<GatewayConfig,
+  'emailProvider' | 'gmailUser' | 'gmailAppPassword' | 'smtpHost' | 'smtpPort' | 'smtpSecure' | 'smtpUser' | 'smtpPass'
+>) {
+  if (config.emailProvider === 'gmail') {
+    return {
+      service: 'gmail',
+      auth: { user: config.gmailUser, pass: config.gmailAppPassword }
+    };
+  }
+  return {
+    host: config.smtpHost,
+    port: config.smtpPort,
+    secure: config.smtpSecure,
+    auth: config.smtpUser || config.smtpPass ? { user: config.smtpUser, pass: config.smtpPass } : undefined
+  };
+}
+
+function hasEmailConfig(config: GatewayConfig): boolean {
+  if (!config.emailFrom) {
+    return false;
+  }
+  return config.emailProvider === 'gmail'
+    ? Boolean(config.gmailUser && config.gmailAppPassword)
+    : Boolean(config.smtpHost);
+}
+
+/* Approved tokens are sent only through configured transports. Delivery
+   failures return a safe status so the admin response can show its existing
+   one-time manual-token fallback without exposing credentials. */
+export async function sendTokenEmail(config: GatewayConfig, to: string, token: string): Promise<EmailResult> {
+  if (!hasEmailConfig(config)) {
     return { sent: false, error: 'email delivery not configured' };
   }
   const text = [
@@ -30,24 +53,16 @@ export async function sendTokenEmail(
     'Keep this token secret. It can be revoked by the gateway operator.'
   ].join('\n');
   try {
-    const response = await doFetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.resendApiKey}`
-      },
-      body: JSON.stringify({
-        from: config.emailFrom,
-        to: [to],
-        subject: 'Your token-optimizer access token',
-        text
-      })
+    const transporter = nodemailer.createTransport(buildTransportOptions(config));
+    await transporter.sendMail({
+      from: config.emailFrom,
+      replyTo: config.emailReplyTo,
+      to,
+      subject: 'Your token-optimizer access token',
+      text
     });
-    if (!response.ok) {
-      return { sent: false, error: `email provider responded ${response.status}` };
-    }
     return { sent: true };
   } catch (err) {
-    return { sent: false, error: err instanceof Error ? err.message : String(err) };
+    return { sent: false, error: err instanceof Error ? err.message : 'email delivery failed' };
   }
 }

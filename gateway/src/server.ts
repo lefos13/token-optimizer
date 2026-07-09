@@ -376,7 +376,7 @@ export function createGatewayServer(config: GatewayConfig, deps: ServerDeps = {}
   const requestLimiter = createRateLimiter(config.tokenRequestsPerMin);
   const tokenStore = deps.tokenStore || createTokenStore(config.stateDir, config.defaultDailyLimit);
   const statsStore = deps.statsStore || createStatsStore(config.stateDir);
-  const emailSender = deps.emailSender || ((cfg, to, token) => sendTokenEmail(cfg, to, token, doFetch));
+  const emailSender = deps.emailSender || ((cfg, to, token) => sendTokenEmail(cfg, to, token));
 
   return httpCreateServer(async (req, res) => {
     try {

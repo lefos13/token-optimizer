@@ -1,6 +1,6 @@
 {
   "name": "@softawarest/token-optimizer-installer",
-  "version": "1.9.2",
+  "version": "1.9.3",
   "description": "One-command installer for the Token Optimizer MCP server, skills, plugins, gateway config, and default-on instructions.",
   "bin": {
     "token-optimizer": "bin/token-optimizer.js",

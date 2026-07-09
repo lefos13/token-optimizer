@@ -28,6 +28,7 @@ interface DayBucket {
 }
 
 interface StatsState {
+  schemaVersion: number;
   totals: {
     calls: number;
     rawSourceTokens: number;
@@ -67,9 +68,12 @@ const MAX_DAYS = 180;
 const MAX_MODELS = 50;
 const MAX_TOOLS = 50;
 const NAME_RE = /^[a-z0-9_]{1,48}$/;
+const STATS_SCHEMA_VERSION = 2;
+const MIN_SHARED_ANALYTICS_RAW_TOKENS = 1_000;
 
 function emptyState(): StatsState {
   return {
+    schemaVersion: STATS_SCHEMA_VERSION,
     totals: {
       calls: 0,
       rawSourceTokens: 0,
@@ -124,7 +128,11 @@ export function sanitizeSharedRecord(raw: unknown): SharedAnalyticsRecord | null
 
 export function createStatsStore(stateDir: string, now: () => number = () => Date.now()): StatsStore {
   const filePath = path.join(stateDir, 'global-stats.json');
-  const state = { ...emptyState(), ...loadJsonFile<Partial<StatsState>>(filePath, {}) } as StatsState;
+  const persisted = loadJsonFile<Partial<StatsState>>(filePath, {});
+  const resetLegacyState = persisted.schemaVersion !== STATS_SCHEMA_VERSION;
+  const state = resetLegacyState
+    ? emptyState()
+    : { ...emptyState(), ...persisted } as StatsState;
   state.totals = { ...emptyState().totals, ...state.totals };
 
   function persist(): void {
@@ -142,11 +150,23 @@ export function createStatsStore(stateDir: string, now: () => number = () => Dat
     }
   }
 
+  /* Statistics are aggregate-only and must remain comparable over time. A
+     schema change discards legacy counters before the public portal can serve
+     them, while preserving unrelated issued-token state in its own file. */
+  if (resetLegacyState) {
+    persist();
+  }
+
   return {
     ingest(raw: unknown): boolean {
       const record = sanitizeSharedRecord(raw);
       if (!record) {
         return false;
+      }
+      /* Small tool calls do not produce a meaningful context-savings signal.
+         They are accepted as telemetry no-ops so clients do not retry them. */
+      if (record.rawSourceTokens < MIN_SHARED_ANALYTICS_RAW_TOKENS) {
+        return true;
       }
       const t = state.totals;
       t.calls += 1;

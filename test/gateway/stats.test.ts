@@ -56,7 +56,7 @@ test('ingest aggregates totals, per-tool, per-model, and per-day buckets', () =>
   }), true);
   clock = Date.parse('2026-07-10T10:00:00Z');
   assert.equal(store.ingest({
-    toolName: 'scout_codebase', rawSourceTokens: 500, returnedToMainTokens: 250,
+    toolName: 'scout_codebase', rawSourceTokens: 1000, returnedToMainTokens: 250,
     estimatedTokensSaved: 250, savingsPercentage: 0.5, localLlmTotalTokens: 200,
     llmModel: 'm/one', llmLatencyMs: 300, usedFallback: true
   }), true);
@@ -78,4 +78,25 @@ test('ingest aggregates totals, per-tool, per-model, and per-day buckets', () =>
   assert.equal(reloaded.publicStats().totalCalls, 2);
   const persisted = fs.readFileSync(path.join(dir, 'global-stats.json'), 'utf8');
   assert.ok(!persisted.includes('workspace'));
+});
+
+test('ingest ignores sub-threshold records and resets legacy aggregate state', () => {
+  const dir = tmpDir();
+  const store = createStatsStore(dir);
+
+  assert.equal(store.ingest({
+    toolName: 'run_command_digest', rawSourceTokens: 999, returnedToMainTokens: 100,
+    estimatedTokensSaved: 899, savingsPercentage: 0.9, localLlmTotalTokens: 400
+  }), true);
+  assert.equal(store.ingest({
+    toolName: 'run_command_digest', rawSourceTokens: 1000, returnedToMainTokens: 100,
+    estimatedTokensSaved: 900, savingsPercentage: 0.9, localLlmTotalTokens: 400
+  }), true);
+  assert.equal(store.publicStats().totalCalls, 1);
+
+  fs.writeFileSync(path.join(dir, 'global-stats.json'), JSON.stringify({
+    totals: { calls: 99, tokensSaved: 99 }, byTool: {}, byModel: {}, days: {}
+  }));
+  const restarted = createStatsStore(dir);
+  assert.equal(restarted.publicStats().totalCalls, 0);
 });
