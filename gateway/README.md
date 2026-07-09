@@ -122,7 +122,9 @@ Point people at `https://<gateway-host>/stats` to showcase the tool's impact.
    npm run build:gateway
    ssh droplet 'sudo mkdir -p /opt/local-tester-gateway'
    scp -r gateway/dist droplet:/tmp/gateway-dist
+   scp gateway/package.json gateway/package-lock.json droplet:/tmp/
    ssh droplet 'sudo mv /tmp/gateway-dist /opt/local-tester-gateway/dist'
+   ssh droplet 'sudo mv /tmp/package.json /tmp/package-lock.json /opt/local-tester-gateway/ && cd /opt/local-tester-gateway && sudo npm ci --omit=dev --ignore-scripts'
    ```
 4. **Create a service user and the env file:**
    ```bash
@@ -161,10 +163,11 @@ above and instead:
    e.g. `scp -r gateway droplet:/tmp/gateway`.
 2. On the droplet: `cd /tmp/gateway/deploy && ./deploy-pm2.sh`.
 
-That script installs pm2 if missing, syncs `dist/` and `gateway/deploy/ecosystem.config.js`
-into `/opt/local-tester-gateway`, seeds `/etc/local-tester-gateway.env` from the example
-on first run (edit it with your real key + token before relying on it), starts/reloads
-the process under pm2, and runs `pm2 save`. It prints a one-time `pm2 startup` command
+That script installs pm2 if missing, syncs `dist/`, the runtime manifests, and
+`gateway/deploy/ecosystem.config.js` into `/opt/local-tester-gateway`, installs
+production dependencies with `npm ci`, seeds `/etc/local-tester-gateway.env` from
+the example on first run (edit it with your real key + token before relying on it),
+starts/reloads the process under pm2, and runs `pm2 save`. It prints a one-time `pm2 startup` command
 you copy/run once so pm2 itself resurrects the gateway after a droplet reboot. Steps
 1, 2 (Node/Caddy install), 6 (Caddy config), 7 (ufw), and 8 (verify) above are unchanged
 — only the process supervisor differs.

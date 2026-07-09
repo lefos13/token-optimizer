@@ -38,6 +38,11 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v npm >/dev/null 2>&1; then
+  echo "ERROR: npm is not installed. Install npm alongside Node.js first." >&2
+  exit 1
+fi
+
 NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]')
 if [ "$NODE_MAJOR" -lt 18 ]; then
   echo "ERROR: Node 18+ required, found $(node --version)." >&2
@@ -48,7 +53,7 @@ echo "==> Node $(node --version) OK"
 
 if ! command -v pm2 >/dev/null 2>&1; then
   echo "==> Installing pm2 globally"
-  sudo npm install -g pm2
+  sudo env "PATH=$PATH" npm install -g pm2
 else
   echo "==> pm2 already installed ($(pm2 --version))"
 fi
@@ -56,9 +61,19 @@ fi
 echo "==> Ensuring $APP_DIR exists"
 sudo mkdir -p "$APP_DIR"
 
-echo "==> Syncing dist/ and ecosystem.config.js into $APP_DIR"
+if [ ! -f "$SOURCE_GATEWAY_DIR/package.json" ] || [ ! -f "$SOURCE_GATEWAY_DIR/package-lock.json" ]; then
+  echo "ERROR: gateway/package.json and gateway/package-lock.json are required beside dist/." >&2
+  exit 1
+fi
+
+echo "==> Syncing dist/, runtime manifest, and ecosystem.config.js into $APP_DIR"
 sudo rsync -a --delete "$SOURCE_GATEWAY_DIR/dist/" "$APP_DIR/dist/"
+sudo cp "$SOURCE_GATEWAY_DIR/package.json" "$APP_DIR/package.json"
+sudo cp "$SOURCE_GATEWAY_DIR/package-lock.json" "$APP_DIR/package-lock.json"
 sudo cp "$SOURCE_GATEWAY_DIR/deploy/ecosystem.config.js" "$APP_DIR/ecosystem.config.js"
+
+echo "==> Installing gateway production dependencies"
+sudo env "PATH=$PATH" npm ci --omit=dev --ignore-scripts --no-audit --no-fund --prefix "$APP_DIR"
 
 if [ -f "$SOURCE_GATEWAY_DIR/deploy/gateway.env" ]; then
   # A real, filled-in env file was staged locally (gateway/deploy/gateway.env,

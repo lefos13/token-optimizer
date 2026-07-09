@@ -1,0 +1,9 @@
+{
+  "name": "token-optimizer-gateway-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Runtime dependencies for the Token Optimizer gateway deployment.",
+  "dependencies": {
+    "nodemailer": "^8.0.10"
+  }
+}
