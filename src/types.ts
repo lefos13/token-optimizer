@@ -78,3 +78,38 @@ export interface RunScoutArgs {
   maxCandidates?: number;
   contextLines?: number;
 }
+
+export type ProviderMode = 'local' | 'gateway-token' | 'gateway-byok' | 'openrouter-direct';
+export type ExecutionProfile = 'safe' | 'standard' | 'unrestricted';
+
+export interface TokenOptimizerConfig {
+  provider?: Partial<{
+    mode: ProviderMode;
+    apiUrl: string;
+    model: string;
+  }>;
+  execution?: Partial<{
+    profile: ExecutionProfile;
+    allowedCommandPrefixes: string[];
+  }>;
+  logs?: Partial<{
+    retentionDays: number;
+    maxDiskMb: number;
+    storageMode: 'raw-local' | 'redacted-local';
+  }>;
+}
+
+export interface ConfigLayers {
+  env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
+  user?: TokenOptimizerConfig;
+  project?: TokenOptimizerConfig;
+  tool?: TokenOptimizerConfig;
+  workspacePath?: string;
+}
+
+export interface EffectiveConfig {
+  provider: { mode: ProviderMode; apiUrl: string; model: string; credentialEnv?: string };
+  execution: { profile: ExecutionProfile; allowedCommandPrefixes: string[] };
+  logs: { retentionDays: number; maxDiskMb: number; storageMode: 'raw-local' | 'redacted-local' };
+  warnings: string[];
+}
