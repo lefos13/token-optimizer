@@ -176,6 +176,8 @@ export interface RunSuiteOptions {
   parallel?: boolean;
   execution?: EffectiveConfig['execution'];
   storageMode?: 'raw-local' | 'redacted-local';
+  retentionDays?: number;
+  maxDiskMb?: number;
 }
 
 function formatCommandLog(res: RunCommandResult): string {
@@ -202,7 +204,7 @@ async function appendFileStream(destination: fs.WriteStream, sourcePath: string)
  * emitted in command order regardless of execution mode.
  */
 export async function runSuite(commands: string[], workspacePath: string, options: RunSuiteOptions = {}): Promise<ExecutedSuiteResult> {
-  const { maxOutputLines, timeoutMs, parallel, execution, storageMode = 'raw-local' } = options;
+  const { maxOutputLines, timeoutMs, parallel, execution, storageMode = 'raw-local', retentionDays, maxDiskMb } = options;
   const logDir = path.join(workspacePath, '.codex-local-test-runs');
 
   // Ensure log directory exists
@@ -298,7 +300,7 @@ export async function runSuite(commands: string[], workspacePath: string, option
     rawSourceTokens: Math.ceil(rawSourceBytes / 4)
   };
   fs.rmSync(tempDir, { recursive: true, force: true });
-  await pruneLogs(workspacePath, { storageMode });
+  await pruneLogs(workspacePath, { storageMode, retentionDays, maxDiskMb });
   return result;
 }
 
