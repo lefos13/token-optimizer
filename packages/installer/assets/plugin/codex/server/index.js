@@ -47,9 +47,10 @@ const analytics_1 = require("./analytics");
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const execution_metadata_1 = require("./execution-metadata");
+const log_store_1 = require("./log-store");
 const server = new index_js_1.Server({
     name: 'token-optimizer-mcp',
-    version: '2.0.0-alpha.2',
+    version: '2.0.0-alpha.3',
 }, {
     capabilities: {
         tools: {},
@@ -149,9 +150,10 @@ server.setRequestHandler(types_js_1.ListToolsRequestSchema, async () => {
                 inputSchema: {
                     type: 'object',
                     properties: {
+                        workspacePath: { type: 'string', description: 'Workspace containing the managed log store.' },
                         logPath: { type: 'string', description: 'Path to log file.' }
                     },
-                    required: ['logPath']
+                    required: ['workspacePath', 'logPath']
                 }
             },
             {
@@ -493,9 +495,14 @@ async function handleToolCall(request) {
     }
     // Implement actual tool handlers
     if (name === 'run_failure_triage') {
-        const { logPath } = args;
+        const { workspacePath, logPath, runId } = args;
         try {
-            const resolvedPath = path.resolve(logPath);
+            const resolvedPath = (0, registry_1.resolveLogPath)(workspacePath, { logPath, runId });
+            if (!resolvedPath || !path.resolve(resolvedPath).startsWith(path.resolve(workspacePath, '.codex-local-test-runs') + path.sep))
+                throw new Error('Log path must be inside the managed workspace log directory.');
+            const st = fs.lstatSync(resolvedPath);
+            if (st.isSymbolicLink() || !st.isFile())
+                throw new Error('Log path must be a regular file.');
             if (!fs.existsSync(resolvedPath)) {
                 return {
                     content: [
@@ -509,7 +516,7 @@ async function handleToolCall(request) {
             }
             const logContent = fs.readFileSync(resolvedPath, 'utf8');
             const trimmed = (0, runner_1.trimLog)(logContent);
-            const workspaceForAnalytics = (0, analytics_1.inferWorkspaceFromLogPath)(resolvedPath);
+            const workspaceForAnalytics = workspacePath;
             const triage = await (0, llm_1.queryLocalLLM)("Triage request for log file", [], {}, [], trimmed, 'triage', workspaceForAnalytics);
             const output = {
                 verdict: triage.verdict,
@@ -694,7 +701,8 @@ async function handleToolCall(request) {
                 }
             }
             // Save current run as baseline for future checks
-            fs.writeFileSync(baselinePath, JSON.stringify(currentRunData, null, 2), 'utf8');
+            await (0, log_store_1.ensureSafeRoot)(workspacePath);
+            await (0, log_store_1.atomicWriteJson)(baselinePath, currentRunData);
             const runId = path.basename(suiteResult.rawLogPath).replace(/\.log$/, '');
             const output = {
                 isRegression,

@@ -30,6 +30,7 @@ function safePath(workspacePath: string, candidate: string): string {
 }
 export async function atomicWriteJson(filePath: string, value: unknown): Promise<void> {
   await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+  try { const st = await fs.promises.lstat(filePath); if (st.isSymbolicLink() || !st.isFile()) throw new Error('managed metadata target must be a regular file'); } catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
   const temp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   await fs.promises.writeFile(temp, JSON.stringify(value, null, 2), { mode: 0o600 });
   await fs.promises.rename(temp, filePath);

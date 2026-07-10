@@ -69,7 +69,7 @@ try {
   /* Bump this on every meaningful change. Claude only pulls plugin updates
      when the version changes; keeping it static pins installs to the commit
      they were first installed from and updates become silent no-ops. */
-  const VERSION = "2.0.0-alpha.2";
+  const VERSION = "2.0.0-alpha.3";
 
   /* Pin the runtime dep to the version this repo was built and tested against. */
   const sdkVersion = require(

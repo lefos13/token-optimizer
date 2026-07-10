@@ -14,11 +14,12 @@ import { buildAnalyticsRecord, inferWorkspaceFromLogPath, recordAnalytics } from
 import * as fs from 'fs';
 import * as path from 'path';
 import { buildExecutionMetadata } from './execution-metadata';
+import { ensureSafeRoot, atomicWriteJson } from './log-store';
 
 const server = new Server(
   {
     name: 'token-optimizer-mcp',
-    version: '2.0.0-alpha.2',
+    version: '2.0.0-alpha.3',
   },
   {
     capabilities: {
@@ -138,9 +139,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: 'object',
           properties: {
+            workspacePath: { type: 'string', description: 'Workspace containing the managed log store.' },
             logPath: { type: 'string', description: 'Path to log file.' }
           },
-          required: ['logPath']
+          required: ['workspacePath', 'logPath']
         }
       },
       {
@@ -513,9 +515,11 @@ export async function handleToolCall(request: any) {
 
   // Implement actual tool handlers
   if (name === 'run_failure_triage') {
-    const { logPath } = args as { logPath: string };
+    const { workspacePath, logPath, runId } = args as { workspacePath: string; logPath?: string; runId?: string };
     try {
-      const resolvedPath = path.resolve(logPath);
+      const resolvedPath = resolveLogPath(workspacePath, { logPath, runId });
+      if (!resolvedPath || !path.resolve(resolvedPath).startsWith(path.resolve(workspacePath, '.codex-local-test-runs') + path.sep)) throw new Error('Log path must be inside the managed workspace log directory.');
+      const st = fs.lstatSync(resolvedPath); if (st.isSymbolicLink() || !st.isFile()) throw new Error('Log path must be a regular file.');
       if (!fs.existsSync(resolvedPath)) {
         return {
           content: [
@@ -530,7 +534,7 @@ export async function handleToolCall(request: any) {
 
       const logContent = fs.readFileSync(resolvedPath, 'utf8');
       const trimmed = trimLog(logContent);
-      const workspaceForAnalytics = inferWorkspaceFromLogPath(resolvedPath);
+      const workspaceForAnalytics = workspacePath;
 
       const triage = await queryLocalLLM(
         "Triage request for log file",
@@ -719,7 +723,9 @@ export async function handleToolCall(request: any) {
         success: !hasFailures
       };
 
-      if (fs.existsSync(baselinePath)) {
+      let baselineIsSafe = false;
+      try { const st = fs.lstatSync(baselinePath); baselineIsSafe = st.isFile() && !st.isSymbolicLink(); } catch (e: any) { if (e?.code !== 'ENOENT') throw e; }
+      if (baselineIsSafe) {
         try {
           const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
           isRegression = hasFailures && baseline.success;
@@ -730,7 +736,8 @@ export async function handleToolCall(request: any) {
       }
 
       // Save current run as baseline for future checks
-      fs.writeFileSync(baselinePath, JSON.stringify(currentRunData, null, 2), 'utf8');
+      await ensureSafeRoot(workspacePath);
+      await atomicWriteJson(baselinePath, currentRunData);
       const runId = path.basename(suiteResult.rawLogPath).replace(/\.log$/, '');
       const output = {
         isRegression,

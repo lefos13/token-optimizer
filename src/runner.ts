@@ -7,6 +7,7 @@ import { terminateProcessTree, type TerminationResult } from './process-tree';
 import type { EffectiveConfig, ExecutionProfile } from './types';
 import { createRunLog, ensureLogGitignore, pruneLogs, ensureSafeRoot } from './log-store';
 import { redactText } from './redaction';
+import { LogExcerptCollector } from './log-excerpt';
 
 export interface RunCommandResult {
   command: string;
@@ -60,13 +61,14 @@ export function runCommand(command: string, workspacePath: string, timeoutMs: nu
       return;
     }
     const child = spawn(command, { cwd: workspacePath, shell: true, detached: process.platform !== 'win32' });
-    const out: string[] = [], err: string[] = [], interleaved: string[] = [];
+    const outCollector = new LogExcerptCollector();
+    const errCollector = new LogExcerptCollector();
+    const interleavedCollector = new LogExcerptCollector();
     let outBytes = 0, errBytes = 0;
-    const MAX_EXCERPT = 100_000;
     let fileStream: fs.WriteStream | undefined;
     let fileCarry = '';
     try { if (logFilePath) fileStream = fs.createWriteStream(logFilePath, { flags: 'w' }); } catch { /* best effort */ }
-    const collect = (target: string[], chunk: Buffer, stream: 'stdout' | 'stderr') => {
+    const collect = (chunk: Buffer, stream: 'stdout' | 'stderr') => {
       const bytes = chunk.byteLength;
       if (stream === 'stdout') outBytes += bytes; else errBytes += bytes;
       fileStream?.write(`[${stream}] `);
@@ -74,23 +76,19 @@ export function runCommand(command: string, workspacePath: string, timeoutMs: nu
         if (storageMode === 'redacted-local') { const text = fileCarry + chunk.toString(); const cut = Math.max(0, text.length - 128); fileStream.write(redactText(text.slice(0, cut)).text); fileCarry = text.slice(cut); }
         else fileStream.write(chunk);
       }
-      const text = chunk.toString();
-      const current = target.join('');
-      if (current.length < MAX_EXCERPT) target.push(text.slice(0, MAX_EXCERPT - current.length));
-      const tagged = `[${stream}] ${text}`;
-      const combinedLength = interleaved.join('').length;
-      if (combinedLength < MAX_EXCERPT) interleaved.push(tagged.slice(0, MAX_EXCERPT - combinedLength));
+      (stream === 'stdout' ? outCollector : errCollector).push(stream, chunk);
+      interleavedCollector.push(stream, chunk);
     };
-    child.stdout?.on('data', (c: Buffer) => collect(out, c, 'stdout'));
-    child.stderr?.on('data', (c: Buffer) => collect(err, c, 'stderr'));
+    child.stdout?.on('data', (c: Buffer) => collect(c, 'stdout'));
+    child.stderr?.on('data', (c: Buffer) => collect(c, 'stderr'));
     const closeFile = () => { if (fileStream) { if (storageMode === 'redacted-local' && fileCarry) fileStream.write(redactText(fileCarry).text); fileCarry = ''; fileStream.end(); fileStream = undefined; } };
     const finish = (result: RunCommandResult) => {
       if (settled) return;
       settled = true;
       if (timeout) clearTimeout(timeout);
       closeFile();
-      result.stdout = out.join(''); result.stderr = result.stderr || err.join('');
-      (result as RunCommandResult & { interleaved?: string }).interleaved = interleaved.join('');
+      result.stdout = result.stdout || outCollector.finish().text; result.stderr = result.stderr || errCollector.finish().text;
+      (result as RunCommandResult & { interleaved?: string }).interleaved = interleavedCollector.finish().text;
       result.rawSourceBytes = outBytes + errBytes;
       result.rawSourceTokens = Math.ceil((result.rawSourceBytes || 0) / 4);
       resolve(result);

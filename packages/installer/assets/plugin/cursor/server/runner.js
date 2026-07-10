@@ -48,6 +48,7 @@ const command_policy_1 = require("./command-policy");
 const process_tree_1 = require("./process-tree");
 const log_store_1 = require("./log-store");
 const redaction_1 = require("./redaction");
+const log_excerpt_1 = require("./log-excerpt");
 /**
  * Runs a single shell command inside the workspacePath, capturing all stdout and stderr.
  */
@@ -83,9 +84,10 @@ function runCommand(command, workspacePath, timeoutMs = 300000, execution, logFi
             return;
         }
         const child = (0, child_process_1.spawn)(command, { cwd: workspacePath, shell: true, detached: process.platform !== 'win32' });
-        const out = [], err = [], interleaved = [];
+        const outCollector = new log_excerpt_1.LogExcerptCollector();
+        const errCollector = new log_excerpt_1.LogExcerptCollector();
+        const interleavedCollector = new log_excerpt_1.LogExcerptCollector();
         let outBytes = 0, errBytes = 0;
-        const MAX_EXCERPT = 100_000;
         let fileStream;
         let fileCarry = '';
         try {
@@ -93,7 +95,7 @@ function runCommand(command, workspacePath, timeoutMs = 300000, execution, logFi
                 fileStream = fs.createWriteStream(logFilePath, { flags: 'w' });
         }
         catch { /* best effort */ }
-        const collect = (target, chunk, stream) => {
+        const collect = (chunk, stream) => {
             const bytes = chunk.byteLength;
             if (stream === 'stdout')
                 outBytes += bytes;
@@ -110,17 +112,11 @@ function runCommand(command, workspacePath, timeoutMs = 300000, execution, logFi
                 else
                     fileStream.write(chunk);
             }
-            const text = chunk.toString();
-            const current = target.join('');
-            if (current.length < MAX_EXCERPT)
-                target.push(text.slice(0, MAX_EXCERPT - current.length));
-            const tagged = `[${stream}] ${text}`;
-            const combinedLength = interleaved.join('').length;
-            if (combinedLength < MAX_EXCERPT)
-                interleaved.push(tagged.slice(0, MAX_EXCERPT - combinedLength));
+            (stream === 'stdout' ? outCollector : errCollector).push(stream, chunk);
+            interleavedCollector.push(stream, chunk);
         };
-        child.stdout?.on('data', (c) => collect(out, c, 'stdout'));
-        child.stderr?.on('data', (c) => collect(err, c, 'stderr'));
+        child.stdout?.on('data', (c) => collect(c, 'stdout'));
+        child.stderr?.on('data', (c) => collect(c, 'stderr'));
         const closeFile = () => { if (fileStream) {
             if (storageMode === 'redacted-local' && fileCarry)
                 fileStream.write((0, redaction_1.redactText)(fileCarry).text);
@@ -135,9 +131,9 @@ function runCommand(command, workspacePath, timeoutMs = 300000, execution, logFi
             if (timeout)
                 clearTimeout(timeout);
             closeFile();
-            result.stdout = out.join('');
-            result.stderr = result.stderr || err.join('');
-            result.interleaved = interleaved.join('');
+            result.stdout = result.stdout || outCollector.finish().text;
+            result.stderr = result.stderr || errCollector.finish().text;
+            result.interleaved = interleavedCollector.finish().text;
             result.rawSourceBytes = outBytes + errBytes;
             result.rawSourceTokens = Math.ceil((result.rawSourceBytes || 0) / 4);
             resolve(result);

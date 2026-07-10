@@ -65,6 +65,9 @@ codebase, validate a change, or diagnose a failure. The main tools are:
   compact verdict.
 - `run_failure_triage`, `query_log`, and `grep_log` — investigate stored logs
   without pasting them into the conversation.
+
+`run_failure_triage` requires `workspacePath` and only reads regular log files
+under that workspace's `.codex-local-test-runs` managed directory.
 - `run_command_digest` — summarizes noisy commands such as builds or installs.
 - `run_regression_check` — compares auto-detected validation with a local
   baseline when baseline updates are intended.

@@ -83,11 +83,12 @@ Call `run_failure_triage` only for an existing log path, usually after `run_test
 
 ```json
 {
+  "workspacePath": "/absolute/path/to/workspace",
   "logPath": "/absolute/path/to/workspace/.codex-local-test-runs/example.log"
 }
 ```
 
-If `rawLogPath` is relative, resolve it against `workspacePath` before calling `run_failure_triage`.
+`workspacePath` is required. The log must resolve beneath that workspace's `.codex-local-test-runs` directory; use a returned `runId` instead of arbitrary absolute paths when possible.
 
 Call `run_regression_check` only when the project has a meaningful auto-detected test/build command and baseline mutation is intended:
 

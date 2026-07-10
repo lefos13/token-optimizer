@@ -3,6 +3,7 @@ import type { ChildProcess } from 'node:child_process';
 
 export interface TerminationResult {
   terminated: boolean;
+  guarantee?: boolean;
   method: 'already-exited' | 'sigterm-group' | 'sigkill-group' | 'taskkill-tree' | 'taskkill-force' | 'error';
   error?: string;
 }
@@ -52,10 +53,10 @@ async function terminateUnixGroup(child: ChildProcess, graceMs: number, platform
   } catch (error) {
     if (!isAlive(pid)) return { terminated: true, method: 'already-exited' };
     child.kill('SIGTERM');
-    if (await waitForExit(pid, graceMs, platform)) return { terminated: true, method: 'sigterm-group' };
+    if (await waitForExit(pid, graceMs, platform)) return { terminated: true, guarantee: false, method: 'sigterm-group' };
     try {
       child.kill('SIGKILL');
-      return { terminated: await waitForExit(pid, graceMs, platform), method: 'sigkill-group' };
+      return { terminated: await waitForExit(pid, graceMs, platform), guarantee: false, method: 'sigkill-group' };
     } catch {
       return { terminated: false, method: 'error', error: error instanceof Error ? error.message : String(error) };
     }

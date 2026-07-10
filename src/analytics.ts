@@ -75,6 +75,13 @@ function readRecords(filePath: string): AnalyticsRecord[] {
   }
 }
 
+function safeAtomicWrite(filePath: string, value: unknown): void {
+  try { const st = fs.lstatSync(filePath); if (st.isSymbolicLink() || !st.isFile()) throw new Error('analytics target is not a regular file'); } catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
+  const temp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(temp, filePath);
+}
+
 function summarize(records: AnalyticsRecord[]): AnalyticsSummary {
   const summary: AnalyticsSummary = {
     updatedAt: new Date().toISOString(),
@@ -261,8 +268,8 @@ export function recordAnalytics(targetWorkspacePath: string, record: AnalyticsRe
     records.push(record);
     const trimmed = records.length > MAX_RECORDS ? records.slice(records.length - MAX_RECORDS) : records;
 
-    fs.writeFileSync(analyticsPath, JSON.stringify(trimmed, null, 2), 'utf8');
-    fs.writeFileSync(path.join(dir, SUMMARY_FILE), JSON.stringify(summarize(trimmed), null, 2), 'utf8');
+    safeAtomicWrite(analyticsPath, trimmed);
+    safeAtomicWrite(path.join(dir, SUMMARY_FILE), summarize(trimmed));
   } catch {
     /* ignore analytics write failures */
   }

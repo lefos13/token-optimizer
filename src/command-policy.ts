@@ -83,6 +83,7 @@ function isWithin(candidate: string, workspace: string): boolean {
 /* This is a deny-first command policy, not an operating-system sandbox. It
    rejects dangerous syntax and paths before evaluating a profile allow rule. */
 async function pathDenial(command: string, workspacePath: string): Promise<PolicyReasonCode | undefined> {
+  if (/(?:\$HOME|\$\{HOME\}|\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})/.test(command)) return 'SENSITIVE_PATH';
   if (/(^|[\s"'])~\/(?:\.ssh|\.aws|\.config|\.gnupg)/i.test(command)) return 'SENSITIVE_PATH';
   const workspace = await canonicalPath(workspacePath);
   const candidateTokens = tokens(command).filter((token) => token !== '>' && token !== '>>' && token !== '<').concat(redirectionTargets(command));

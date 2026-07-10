@@ -8,7 +8,7 @@ regressions, and scout code without flooding chat context with raw logs.
 
 ## Contents
 
-- `.claude-plugin/plugin.json` — plugin manifest (`token-optimizer` v2.0.0-alpha.2).
+- `.claude-plugin/plugin.json` — plugin manifest (`token-optimizer` v2.0.0-alpha.3).
 - `.mcp.json` — registers the `token_optimizer` stdio server (tools exposed as `mcp__token_optimizer__*`).
 - `server/` — the compiled MCP server plus launchers (`start.js` cross-platform, `start.sh` POSIX) and a minimal `package.json`.
 - `skills/token-optimizer/SKILL.md` — usage guidance, copied from `skill/skill-example.md`.
