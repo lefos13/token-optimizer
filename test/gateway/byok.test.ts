@@ -61,7 +61,7 @@ function chat(
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(byokKey ? { 'X-OpenRouter-Key': byokKey } : {}),
-      ...(byokModel ? { 'X-OpenRouter-Model': byokModel } : {}),
+      ...(byokModel !== undefined ? { 'X-OpenRouter-Model': byokModel } : {}),
       ...(taskType ? { 'X-Task-Type': taskType } : {})
     },
     body: JSON.stringify({ messages: [] })
@@ -86,17 +86,19 @@ test('a valid BYOK model overrides the gateway model for every task', async () =
   assert.deepEqual(seenModels, ['openai/gpt-4o-mini', 'openai/gpt-4o-mini']);
 });
 
-test('missing override keeps gateway selection and non-BYOK callers cannot override it', async () => {
+test('missing or explicitly empty override keeps gateway selection and non-BYOK callers cannot override it', async () => {
   const seenModels: string[] = [];
   const spyUpstream: typeof fetch = async (_url, init) => {
     seenModels.push(JSON.parse(String(init?.body)).model);
     return okUpstream(_url as any, init as any);
   };
   await withServer(spyUpstream, async (base) => {
+    assert.equal((await chat(base, undefined, VALID_BYOK, '')).status, 200);
+    assert.equal((await chat(base, undefined, VALID_BYOK, '', 'triage')).status, 200);
     assert.equal((await chat(base, undefined, VALID_BYOK, undefined, 'triage')).status, 200);
     assert.equal((await chat(base, 'shared-token', undefined, 'openai/gpt-4o-mini', 'triage')).status, 200);
   }, { MODEL_TRIAGE: 'gateway/triage' });
-  assert.deepEqual(seenModels, ['gateway/triage', 'gateway/triage']);
+  assert.deepEqual(seenModels, ['default/model', 'gateway/triage', 'gateway/triage', 'gateway/triage']);
 });
 
 test('an invalid BYOK model returns 400 without calling OpenRouter', async () => {

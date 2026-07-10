@@ -4,6 +4,7 @@ import { parseByokModelHeader } from '../../gateway/src/byok-model';
 
 test('parseByokModelHeader distinguishes absent, valid, and invalid values', () => {
   assert.deepEqual(parseByokModelHeader(undefined), { kind: 'absent' });
+  assert.deepEqual(parseByokModelHeader(''), { kind: 'absent' });
   assert.deepEqual(parseByokModelHeader('openai/gpt-4o-mini'), {
     kind: 'valid', model: 'openai/gpt-4o-mini'
   });
@@ -12,8 +13,8 @@ test('parseByokModelHeader distinguishes absent, valid, and invalid values', () 
   });
 
   for (const value of [
-    '',
     'openai',
+    '   ',
     ' openai/gpt-4o-mini',
     'openai/gpt 4o',
     'openai/gpt-4o\nmini',

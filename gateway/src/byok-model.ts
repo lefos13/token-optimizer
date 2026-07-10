@@ -6,14 +6,14 @@ export type ByokModelOverride =
 const MAX_BYOK_MODEL_LENGTH = 199;
 const OPENROUTER_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
-/* Keep caller-controlled model selection narrow and deterministic. OpenRouter
-   IDs use provider/model form; arrays, whitespace, controls, and oversized
-   values are rejected before any upstream request is made. */
+/* Keep caller-controlled model selection narrow and deterministic. An empty
+   header opts out, while arrays, whitespace, controls, oversized values, and
+   malformed OpenRouter provider/model IDs are rejected before upstream use. */
 export function parseByokModelHeader(raw: string | string[] | undefined): ByokModelOverride {
-  if (raw === undefined) {
+  if (raw === undefined || raw === '') {
     return { kind: 'absent' };
   }
-  if (Array.isArray(raw) || raw.length === 0 || raw.length > MAX_BYOK_MODEL_LENGTH) {
+  if (Array.isArray(raw) || raw.length > MAX_BYOK_MODEL_LENGTH) {
     return { kind: 'invalid' };
   }
   if (raw !== raw.trim() || !OPENROUTER_MODEL_RE.test(raw)) {
