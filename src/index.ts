@@ -34,6 +34,7 @@ function jsonText(value: unknown): string {
 function recordToolAnalytics(workspacePath: string, input: {
   toolName: string;
   rawSourceText: string;
+  rawSourceBytes?: number;
   llmInputText?: string;
   responseText: string;
   llmResult?: unknown;
@@ -49,6 +50,7 @@ function recordToolAnalytics(workspacePath: string, input: {
   recordAnalytics(workspacePath, buildAnalyticsRecord({
     toolName: input.toolName,
     rawSourceText: input.rawSourceText,
+    rawSourceBytes: input.rawSourceBytes,
     llmInputText: input.llmInputText,
     responseText: input.responseText,
     llmUsage: getLLMUsage(input.llmResult),
@@ -405,7 +407,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       let triageResult: any = undefined;
       if (autoTriage && (finalVerdict === 'fail' || finalVerdict === 'uncertain')) {
         const question = "which tests failed, on which lines, and what is the error message?";
-        const numbered = numberLines(suiteResult.rawLogContent);
+        const numbered = numberLines(fs.readFileSync(path.resolve(workspacePath, suiteResult.rawLogPath), 'utf8'));
         // Default log query budget is 1200 lines
         const budget = 1200;
         const startBudget = Math.max(1, Math.floor(budget / 3));
@@ -454,7 +456,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const text = jsonText(output);
       recordToolAnalytics(workspacePath, {
         toolName: 'run_test_verdict',
-        rawSourceText: suiteResult.rawLogContent,
+        rawSourceText: '',
+        rawSourceBytes: suiteResult.rawSourceBytes,
         llmInputText: suiteResult.trimmedLogContent,
         responseText: text,
         llmResult: triage,
@@ -718,7 +721,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const text = jsonText(output);
       recordToolAnalytics(workspacePath, {
         toolName: 'run_regression_check',
-        rawSourceText: suiteResult.rawLogContent,
+        rawSourceText: '',
+        rawSourceBytes: suiteResult.rawSourceBytes,
         responseText: text,
         runId,
         rawLogPath: suiteResult.rawLogPath,
@@ -795,7 +799,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const text = jsonText(output);
       recordToolAnalytics(workspacePath, {
         toolName: 'run_command_digest',
-        rawSourceText: suiteResult.rawLogContent,
+        rawSourceText: '',
+        rawSourceBytes: suiteResult.rawSourceBytes,
         llmInputText: suiteResult.trimmedLogContent,
         responseText: text,
         llmResult: digest,

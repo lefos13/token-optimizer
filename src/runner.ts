@@ -1,4 +1,4 @@
-import { exec } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { appendRun } from './registry';
@@ -15,22 +15,28 @@ export interface RunCommandResult {
   error?: string;
   termination?: TerminationResult;
   policyReasonCode?: string;
+  executionStatus?: 'completed' | 'timed_out' | 'blocked' | 'spawn_failed';
+  rawSourceBytes?: number;
+  rawSourceTokens?: number;
+  interleaved?: string;
 }
 
 export interface ExecutedSuiteResult {
   results: RunCommandResult[];
   rawLogPath: string;
-  rawLogContent: string;
   trimmedLogContent: string;
+  rawSourceBytes: number;
+  rawSourceTokens: number;
 }
 
 /**
  * Runs a single shell command inside the workspacePath, capturing all stdout and stderr.
  */
-export function runCommand(command: string, workspacePath: string, timeoutMs: number = 300000, execution?: EffectiveConfig['execution']): Promise<RunCommandResult> {
+export function runCommand(command: string, workspacePath: string, timeoutMs: number = 300000, execution?: EffectiveConfig['execution'], logFilePath?: string): Promise<RunCommandResult> {
   const startTime = Date.now();
   return new Promise(async (resolve) => {
     let settled = false;
+    let timingOut = false;
     let timeout: NodeJS.Timeout | undefined;
     const policy = await evaluateCommand({
       command,
@@ -40,36 +46,53 @@ export function runCommand(command: string, workspacePath: string, timeoutMs: nu
       autoDetectedCommands: execution?.autoDetectedCommands,
     });
     if (!policy.allowed) {
-      resolve({ command, exitCode: -1, stdout: '', stderr: policy.message, durationMs: Date.now() - startTime, error: 'Command rejected by execution policy', policyReasonCode: policy.reasonCode });
+      resolve({ command, exitCode: -1, stdout: '', stderr: policy.message, durationMs: Date.now() - startTime, error: 'Command rejected by execution policy', policyReasonCode: policy.reasonCode, executionStatus: 'blocked', rawSourceBytes: Buffer.byteLength(policy.message) });
       return;
     }
-    const child = exec(command, {
-      cwd: workspacePath,
-      maxBuffer: 50 * 1024 * 1024, // 50MB buffer to prevent overflow
-      detached: process.platform !== 'win32',
-    } as any, ((error: any, stdout: any, stderr: any) => {
+    const child = spawn(command, { cwd: workspacePath, shell: true, detached: process.platform !== 'win32' });
+    const out: string[] = [], err: string[] = [], interleaved: string[] = [];
+    let outBytes = 0, errBytes = 0;
+    const MAX_EXCERPT = 100_000;
+    let fileStream: fs.WriteStream | undefined;
+    try { if (logFilePath) fileStream = fs.createWriteStream(logFilePath, { flags: 'w' }); } catch { /* best effort */ }
+    const collect = (target: string[], chunk: Buffer, stream: 'stdout' | 'stderr') => {
+      const bytes = chunk.byteLength;
+      if (stream === 'stdout') outBytes += bytes; else errBytes += bytes;
+      fileStream?.write(`[${stream}] `);
+      fileStream?.write(chunk);
+      const text = chunk.toString();
+      const current = target.join('');
+      if (current.length < MAX_EXCERPT) target.push(text.slice(0, MAX_EXCERPT - current.length));
+      const tagged = `[${stream}] ${text}`;
+      const combinedLength = interleaved.join('').length;
+      if (combinedLength < MAX_EXCERPT) interleaved.push(tagged.slice(0, MAX_EXCERPT - combinedLength));
+    };
+    child.stdout?.on('data', (c: Buffer) => collect(out, c, 'stdout'));
+    child.stderr?.on('data', (c: Buffer) => collect(err, c, 'stderr'));
+    const closeFile = () => { if (fileStream) { fileStream.end(); fileStream = undefined; } };
+    const finish = (result: RunCommandResult) => {
       if (settled) return;
       settled = true;
       if (timeout) clearTimeout(timeout);
-      const durationMs = Date.now() - startTime;
-      const exitCode = error ? (error.code ?? 1) : 0;
-      
-      resolve({
-        command,
-        exitCode,
-        stdout,
-        stderr,
-        durationMs,
-        error: error ? error.message : undefined
-      });
-    }) as any);
+      closeFile();
+      result.stdout = out.join(''); result.stderr = result.stderr || err.join('');
+      (result as RunCommandResult & { interleaved?: string }).interleaved = interleaved.join('');
+      result.rawSourceBytes = outBytes + errBytes;
+      result.rawSourceTokens = Math.ceil((result.rawSourceBytes || 0) / 4);
+      resolve(result);
+    };
+    child.once('error', (error) => finish({ command, exitCode: -1, stdout: '', stderr: error.message, durationMs: Date.now() - startTime, error: error.message, executionStatus: 'spawn_failed' }));
+    child.once('close', (code, signal) => {
+      if (timingOut) return;
+      finish({ command, exitCode: code ?? (signal ? -1 : 1), stdout: '', stderr: '', durationMs: Date.now() - startTime, error: signal ? `Process terminated by ${signal}` : undefined, executionStatus: 'completed' });
+    });
 
     // Handle timeout
     timeout = setTimeout(async () => {
       if (settled) return;
-      settled = true;
+      timingOut = true;
       const termination = await terminateProcessTree(child, process.platform, 250);
-      resolve({
+      finish({
         command,
         exitCode: -1,
         stdout: '',
@@ -77,12 +100,9 @@ export function runCommand(command: string, workspacePath: string, timeoutMs: nu
         durationMs: Date.now() - startTime,
         error: 'Timeout',
         termination,
+        executionStatus: 'timed_out'
       });
     }, timeoutMs);
-
-    child.on('exit', () => {
-      if (timeout) clearTimeout(timeout);
-    });
   });
 }
 
@@ -159,12 +179,18 @@ function formatCommandLog(res: RunCommandResult): string {
   let block = `========================================================\n`;
   block += `COMMAND: ${res.command}\n`;
   block += `========================================================\n\n`;
-  block += `--- STDOUT ---\n${res.stdout}\n`;
-  if (res.stderr) {
-    block += `--- STDERR ---\n${res.stderr}\n`;
-  }
+  block += `${res.interleaved || `--- STDOUT ---\n${res.stdout}\n${res.stderr ? `--- STDERR ---\n${res.stderr}\n` : ''}`}`;
   block += `\n--- EXIT CODE: ${res.exitCode} (Duration: ${res.durationMs}ms) ---\n\n`;
   return block;
+}
+
+async function appendFileStream(destination: fs.WriteStream, sourcePath: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const source = fs.createReadStream(sourcePath);
+    source.on('error', reject);
+    source.on('end', () => resolve());
+    source.pipe(destination, { end: false });
+  });
 }
 
 /**
@@ -185,32 +211,58 @@ export async function runSuite(commands: string[], workspacePath: string, option
   const logFileName = `${timestamp}.log`;
   const rawLogPath = path.join(logDir, logFileName);
 
-  const runOne = (cmd: string) =>
-    timeoutMs ? runCommand(cmd, workspacePath, timeoutMs, execution) : runCommand(cmd, workspacePath, 300000, execution);
+  const tempDir = path.join(logDir, `.stream-${process.pid}-${Date.now()}`);
+  fs.mkdirSync(tempDir, { recursive: true });
+  const runOne = (cmd: string, index: number) =>
+    timeoutMs ? runCommand(cmd, workspacePath, timeoutMs, execution, path.join(tempDir, `${index}.out`)) : runCommand(cmd, workspacePath, 300000, execution, path.join(tempDir, `${index}.out`));
 
   let results: RunCommandResult[];
-  if (parallel) {
-    results = await Promise.all(commands.map(runOne));
-  } else {
-    results = [];
-    for (const cmd of commands) {
-      results.push(await runOne(cmd));
+  try {
+    if (parallel) {
+      results = await Promise.all(commands.map(runOne));
+    } else {
+      results = [];
+      for (const cmd of commands) {
+        results.push(await runOne(cmd, results.length));
+      }
     }
+  } catch (error) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    throw error;
   }
 
-  const fullLogAccumulator = results.map(formatCommandLog).join('');
-
-  // Write log to workspace file
-  fs.writeFileSync(rawLogPath, fullLogAccumulator, 'utf8');
+  const rawWriter = fs.createWriteStream(rawLogPath, { flags: 'w' });
+  try {
+    for (let i = 0; i < results.length; i++) {
+      const header = `========================================================\nCOMMAND: ${results[i].command}\n========================================================\n\n`;
+      rawWriter.write(header);
+      const commandOutputPath = path.join(tempDir, `${i}.out`);
+      if (fs.existsSync(commandOutputPath)) await appendFileStream(rawWriter, commandOutputPath);
+      rawWriter.write(`\n--- EXIT CODE: ${results[i].exitCode} (Duration: ${results[i].durationMs}ms) ---\n\n`);
+    }
+    await new Promise<void>((resolve) => rawWriter.end(resolve));
+  } catch (error) {
+    rawWriter.destroy();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    throw error;
+  }
+  const rawSourceBytes = results.reduce((sum, result) => sum + (result.rawSourceBytes || 0), 0);
+  /* Keep the model-facing excerpt bounded by construction; the complete source remains only on disk. */
+  const excerptBudget = 300_000;
+  let boundedExcerpt = '';
+  for (const result of results) {
+    if (boundedExcerpt.length >= excerptBudget) break;
+    boundedExcerpt += formatCommandLog(result).slice(0, excerptBudget - boundedExcerpt.length);
+  }
 
   /* Honor an optional caller-supplied line budget. Preserve the default 1:2 start:end split so error traces near the end stay intact. */
   let trimmedLogContent: string;
   if (maxOutputLines && maxOutputLines > 0) {
     const startBudget = Math.max(1, Math.floor(maxOutputLines / 3));
     const endBudget = Math.max(1, maxOutputLines - startBudget);
-    trimmedLogContent = trimLog(fullLogAccumulator, startBudget, endBudget);
+    trimmedLogContent = trimLog(boundedExcerpt, startBudget, endBudget);
   } else {
-    trimmedLogContent = trimLog(fullLogAccumulator);
+    trimmedLogContent = trimLog(boundedExcerpt);
   }
 
   // Return path relative to the workspace path for the client
@@ -228,18 +280,21 @@ export async function runSuite(commands: string[], workspacePath: string, option
       exitCodes,
       timestamp: new Date().toISOString(),
       rawLogPath: relativeLogPath,
-      lineCount: fullLogAccumulator.split('\n').length
+      lineCount: trimmedLogContent.split('\n').length
     });
   } catch {
     /* ignore registry write failures */
   }
 
-  return {
+  const result = {
     results,
     rawLogPath: relativeLogPath,
-    rawLogContent: fullLogAccumulator,
-    trimmedLogContent
+    trimmedLogContent,
+    rawSourceBytes,
+    rawSourceTokens: Math.ceil(rawSourceBytes / 4)
   };
+  fs.rmSync(tempDir, { recursive: true, force: true });
+  return result;
 }
 
 /* Prefix every line with its 1-based line number so a model (query_log) can cite exact line ranges back to the caller. */

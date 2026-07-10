@@ -116,6 +116,8 @@ export function inferWorkspaceFromLogPath(absLogPath: string): string {
 export function buildAnalyticsRecord(input: {
   toolName: string;
   rawSourceText: string;
+  rawSourceBytes?: number;
+  rawSourceTokens?: number;
   llmInputText?: string;
   responseText: string;
   llmUsage?: LLMUsage;
@@ -129,7 +131,7 @@ export function buildAnalyticsRecord(input: {
   commands?: string[];
   exitCodes?: Record<string, number>;
 }): AnalyticsRecord {
-  const rawSourceTokens = estimateTokens(input.rawSourceText);
+  const rawSourceTokens = input.rawSourceTokens ?? (input.rawSourceBytes !== undefined ? Math.ceil(input.rawSourceBytes / 4) : estimateTokens(input.rawSourceText));
   const returnedToMainTokens = estimateTokens(input.responseText);
   const estimatedInputTokens = estimateTokens(input.llmInputText || '');
   const usage = input.llmUsage;
