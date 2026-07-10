@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
 const readline = require("readline");
+const https = require("https");
+const { spawnSync } = require("child_process");
+const pkg = require("../package.json");
 const {
   DEFAULT_GATEWAY_URL,
   DEFAULT_LOCAL_LLM_URL,
@@ -26,6 +29,7 @@ async function main() {
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
+    await checkForUpdate(rl, args);
     const clients = parseList(args.clients || args.client || "detected");
     const providerOptions = await resolveProviderOptions(args, rl);
     const defaults = args.defaults !== "false" && args["no-defaults"] !== true;
@@ -151,6 +155,85 @@ async function promptForProviderInteractive(args, rl) {
   return { provider: "gateway", gatewayToken, gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL };
 }
 
+/* Checks npm for a newer installer version and, when the session is
+   interactive, offers to re-run the latest release before proceeding.
+   npx can serve a cached build, so an up-to-date install is not guaranteed
+   without this check. The check is best-effort: any network/registry error,
+   a non-TTY session, or `--skip-update-check` skips it silently and lets the
+   current version run. Choosing to update re-execs `npx <name>@latest` with
+   the original arguments and exits with that process's status. */
+async function checkForUpdate(rl, args) {
+  if (args["skip-update-check"] === true || process.env.TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK === "1") {
+    return;
+  }
+  const current = pkg.version;
+  const latest = await fetchLatestVersion(pkg.name).catch(() => null);
+  if (!latest || compareVersions(latest, current) <= 0) {
+    return;
+  }
+  console.log(`A newer Token Optimizer installer is available: ${latest} (you have ${current}).`);
+  if (!process.stdin.isTTY) {
+    console.log(`Run \`npx --yes ${pkg.name}@latest\` to update. Continuing with ${current}.`);
+    return;
+  }
+  const answer = (await ask(rl, "Update to the latest version now? [Y/n]: ")).trim().toLowerCase();
+  if (answer === "n" || answer === "no") {
+    console.log(`Continuing with ${current}.`);
+    return;
+  }
+  console.log(`Updating to ${pkg.name}@${latest}...`);
+  rl.close();
+  const npx = process.platform === "win32" ? "npx.cmd" : "npx";
+  const result = spawnSync(npx, ["--yes", `${pkg.name}@latest`, ...process.argv.slice(2)], {
+    stdio: "inherit",
+  });
+  process.exit(result.status === null ? 1 : result.status);
+}
+
+/* Fetches the `latest` dist-tag manifest from the npm registry and returns its
+   version string, or null on any non-200/parse/network failure. */
+function fetchLatestVersion(name) {
+  return new Promise((resolve, reject) => {
+    const url = `https://registry.npmjs.org/${encodeURIComponent(name)}/latest`;
+    const request = https.get(url, { timeout: 4000 }, (response) => {
+      if (response.statusCode !== 200) {
+        response.resume();
+        reject(new Error(`registry status ${response.statusCode}`));
+        return;
+      }
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        body += chunk;
+      });
+      response.on("end", () => {
+        try {
+          resolve(JSON.parse(body).version || null);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    request.on("timeout", () => request.destroy(new Error("registry timeout")));
+    request.on("error", reject);
+  });
+}
+
+/* Numeric semver comparison of the major.minor.patch core, ignoring any
+   prerelease/build suffix. Returns 1 if a > b, -1 if a < b, 0 if equal. */
+function compareVersions(a, b) {
+  const parse = (value) => String(value).split("-")[0].split(".").map((part) => parseInt(part, 10) || 0);
+  const left = parse(a);
+  const right = parse(b);
+  for (let i = 0; i < 3; i += 1) {
+    const diff = (left[i] || 0) - (right[i] || 0);
+    if (diff !== 0) {
+      return diff > 0 ? 1 : -1;
+    }
+  }
+  return 0;
+}
+
 function parseArgs(argv) {
   const out = { _: [] };
   for (let i = 0; i < argv.length; i += 1) {
@@ -241,6 +324,7 @@ Options:
   --no-defaults                Skip global default-on instruction writes.
   --skip-client-commands       Copy marketplace/plugin assets but do not invoke client CLIs.
   --skip-launchctl             Do not write macOS GUI-session gateway env values.
+  --skip-update-check          Do not check npm for a newer installer version.
 `);
 }
 
@@ -255,4 +339,7 @@ module.exports = {
   resolveProviderOptions,
   promptForProviderInteractive,
   parseArgs,
+  checkForUpdate,
+  fetchLatestVersion,
+  compareVersions,
 };

@@ -14,6 +14,14 @@ npx --yes @softawarest/token-optimizer-installer
 npx @softawarest/token-optimizer-installer
 ```
 
+On every run the installer first checks npm for a newer installer release. If
+one exists and the session is interactive, it prints the available version and
+offers to re-run `npx --yes @softawarest/token-optimizer-installer@latest` with
+your original arguments so you always install the latest build (npx can
+otherwise serve a cached version). The check is best-effort: network or
+registry errors, a non-interactive session, `--skip-update-check`, or
+`TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK=1` skip it and let the current version run.
+
 The installer copies packaged MCP server/plugin assets into stable user-owned
 locations, prompts for how to configure the LLM provider, writes supported
 client MCP config, and applies default-on global instructions where the client
@@ -36,6 +44,7 @@ flags, the installer prompts for one of three providers, plus a skip option:
 | `local` | **No, none at all** | Nobody — your own hardware | Unlimited |
 
 1. **Gateway access token** — shared infrastructure, requires an approved token.
+   Request one at [https://llm-proxy.lnf.gr/](https://llm-proxy.lnf.gr/).
 2. **Your own OpenRouter key (`byok`)** — get a key from
    [openrouter.ai](https://openrouter.ai), no request or approval needed. The
    gateway does not authenticate a BYOK-only caller at all: since you aren't

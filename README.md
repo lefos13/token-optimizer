@@ -17,7 +17,8 @@ npx --yes @softawarest/token-optimizer-installer
 
 Choose one provider when prompted:
 
-1. **Gateway token** — request access in the installer, then use the emailed
+1. **Gateway token** — request an access token at
+   [https://llm-proxy.lnf.gr/](https://llm-proxy.lnf.gr/), then use the emailed
    token after approval.
 2. **Your own OpenRouter key** — unlimited usage billed to your account; no
    gateway token is needed.
@@ -77,8 +78,9 @@ gateway keeps its task-specific/default model selection. Shared gateway-token
 callers cannot override the gateway's model. The installer prompts for this
 optional value after the BYOK key, or accepts `--byok-model <model-id>`.
 
-The gateway's public token-request portal uses a honeypot and completion-time
-check in addition to its existing rate limit. Operators with email delivery
+The gateway's public token-request portal is at
+[https://llm-proxy.lnf.gr/](https://llm-proxy.lnf.gr/) and uses a honeypot and
+completion-time check in addition to its existing rate limit. Operators with email delivery
 configured receive a best-effort alert at `GMAIL_USER` for each accepted request.
 
 If a local or gateway provider is unavailable, validation command exit codes
