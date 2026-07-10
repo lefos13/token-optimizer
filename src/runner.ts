@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { appendRun } from './registry';
 import { evaluateCommand } from './command-policy';
+import { terminateProcessTree, type TerminationResult } from './process-tree';
 import type { EffectiveConfig, ExecutionProfile } from './types';
 
 export interface RunCommandResult {
@@ -12,6 +13,7 @@ export interface RunCommandResult {
   stderr: string;
   durationMs: number;
   error?: string;
+  termination?: TerminationResult;
   policyReasonCode?: string;
 }
 
@@ -28,6 +30,8 @@ export interface ExecutedSuiteResult {
 export function runCommand(command: string, workspacePath: string, timeoutMs: number = 300000, execution?: EffectiveConfig['execution']): Promise<RunCommandResult> {
   const startTime = Date.now();
   return new Promise(async (resolve) => {
+    let settled = false;
+    let timeout: NodeJS.Timeout | undefined;
     const policy = await evaluateCommand({
       command,
       workspacePath,
@@ -42,7 +46,11 @@ export function runCommand(command: string, workspacePath: string, timeoutMs: nu
     const child = exec(command, {
       cwd: workspacePath,
       maxBuffer: 50 * 1024 * 1024, // 50MB buffer to prevent overflow
-    }, (error, stdout, stderr) => {
+      detached: process.platform !== 'win32',
+    } as any, ((error: any, stdout: any, stderr: any) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
       const durationMs = Date.now() - startTime;
       const exitCode = error ? (error.code ?? 1) : 0;
       
@@ -54,24 +62,26 @@ export function runCommand(command: string, workspacePath: string, timeoutMs: nu
         durationMs,
         error: error ? error.message : undefined
       });
-    });
+    }) as any);
 
     // Handle timeout
-    const timeout = setTimeout(() => {
-      child.kill('SIGTERM');
-      const durationMs = Date.now() - startTime;
+    timeout = setTimeout(async () => {
+      if (settled) return;
+      settled = true;
+      const termination = await terminateProcessTree(child, process.platform, 250);
       resolve({
         command,
         exitCode: -1,
         stdout: '',
         stderr: `Command timed out after ${timeoutMs / 1000}s.`,
-        durationMs,
-        error: 'Timeout'
+        durationMs: Date.now() - startTime,
+        error: 'Timeout',
+        termination,
       });
     }, timeoutMs);
 
     child.on('exit', () => {
-      clearTimeout(timeout);
+      if (timeout) clearTimeout(timeout);
     });
   });
 }
