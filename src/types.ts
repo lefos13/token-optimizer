@@ -34,6 +34,12 @@ export interface VerdictResult extends LLMResponseMetadata {
   needsRawLogs?: boolean;
   likelyRelevantToRecentChanges?: boolean;
   triage?: LogQueryResponse;
+  executionStatus?: 'completed' | 'timed_out' | 'blocked' | 'spawn_failed';
+  signal?: string | null;
+  policyDecision?: string;
+  logTruncated?: boolean;
+  providerStatus?: 'available' | 'unavailable' | 'fallback' | 'unknown';
+  warnings?: string[];
 }
 
 export interface RunTestVerdictArgs {
@@ -45,6 +51,8 @@ export interface RunTestVerdictArgs {
   timeoutMs?: number;
   parallel?: boolean;
   autoTriage?: boolean;
+  executionProfile?: ExecutionProfile;
+  allowedCommandPrefixes?: string[];
 }
 
 export interface RunCommandDigestArgs {
@@ -53,6 +61,8 @@ export interface RunCommandDigestArgs {
   intent: string;
   timeoutMs?: number;
   maxOutputLines?: number;
+  executionProfile?: ExecutionProfile;
+  allowedCommandPrefixes?: string[];
 }
 
 export interface ScoutPointer {

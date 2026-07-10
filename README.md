@@ -1,5 +1,13 @@
 # Token Optimizer
 
+Execution metadata uses `signal: null` when no OS signal was observed; a signal value is populated only for signal-terminated processes.
+
+## Execution profiles and log lifecycle
+
+Command tools accept `executionProfile` (`safe`, `standard`, or `unrestricted`) and optional `allowedCommandPrefixes`; lower-trust project/tool settings can only narrow the user's ceiling. Safe requires an allowlist, standard permits explicitly auto-detected validation commands, and unrestricted permits commands not denied by policy. This is deny-first policy enforcement, not an operating-system sandbox.
+
+Responses add `executionStatus` (`completed`, `blocked`, `timed_out`, or `spawn_failed`), `policyDecision`, `autoDetected`, `logTruncated`, `providerStatus`, and `warnings`. Logs default to raw-local storage for 7 days with a 500 MB quota; pruning removes expired logs then oldest quota victims within the target workspace's `.codex-local-test-runs/`. Raw-local logs may contain secrets; remote requests are redacted and report `redactionSummary` and provider warnings.
+
 Token Optimizer is an MCP server that runs local validation commands and turns
 large build, lint, test, and smoke-check logs into compact, actionable results.
 Raw logs stay in your workspace while your coding agent receives a verdict,
@@ -146,3 +154,8 @@ Any change that affects the installed server, a plugin, skill instructions, or
 the installer must receive a new aligned release version. Keep the root package,
 installer package, MCP server metadata, and all plugin generators on that same
 version, then run `npm run build:installer` before publishing.
+### Execution profiles and log lifecycle
+
+Command tools accept `executionProfile` (`safe`, `standard`, or `unrestricted`) and optional `allowedCommandPrefixes`; lower-trust project/tool settings can only narrow the user's ceiling. Safe requires an allowlist, standard additionally permits explicitly auto-detected validation commands, and unrestricted permits commands not denied by policy. This is deny-first policy enforcement, not an operating-system sandbox: commands run with the host user's permissions.
+
+Responses add `executionStatus` (`completed`, `blocked`, `timed_out`, or `spawn_failed`), `policyDecision`, `autoDetected`, `logTruncated`, `providerStatus`, and `warnings`. Logs default to raw-local storage for 7 days with a 500 MB quota; pruning removes expired logs then oldest quota victims, scoped to the target workspace's `.codex-local-test-runs/`. Raw-local logs may contain command secrets; remote requests are redacted and expose only `redactionSummary` and provider warnings.

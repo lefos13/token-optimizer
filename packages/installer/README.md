@@ -1,5 +1,9 @@
 # Token Optimizer Installer
 
+Execution `signal` is `null` when no OS signal was observed and is populated only for signal-terminated processes.
+
+Execution profiles (`safe`, `standard`, `unrestricted`) are deny-first policy controls, not an operating-system sandbox; lower-trust settings cannot elevate the user's ceiling. Logs default to 7-day retention and a 500 MB per-workspace quota, with expired/oldest logs pruned under `.codex-local-test-runs/`. Responses expose completed/blocked/timed_out/spawn_failed statuses, policy and auto-detection metadata, truncation, provider status, warnings, and redaction summaries.
+
 Optional one-command installer for Token Optimizer.
 
 Run it from outside a Token Optimizer source checkout so `npx` cannot prefer a

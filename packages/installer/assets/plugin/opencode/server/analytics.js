@@ -103,7 +103,7 @@ function inferWorkspaceFromLogPath(absLogPath) {
     return path.dirname(absLogPath);
 }
 function buildAnalyticsRecord(input) {
-    const rawSourceTokens = (0, runner_1.estimateTokens)(input.rawSourceText);
+    const rawSourceTokens = input.rawSourceTokens ?? (input.rawSourceBytes !== undefined ? Math.ceil(input.rawSourceBytes / 4) : (0, runner_1.estimateTokens)(input.rawSourceText));
     const returnedToMainTokens = (0, runner_1.estimateTokens)(input.responseText);
     const estimatedInputTokens = (0, runner_1.estimateTokens)(input.llmInputText || '');
     const usage = input.llmUsage;

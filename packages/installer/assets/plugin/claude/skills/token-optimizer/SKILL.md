@@ -1,9 +1,14 @@
 ---
+
 name: token-optimizer
 description: Use this MCP server to scout codebases, validate code changes, review changed files, triage failures, check regressions, classify command output, and keep raw logs out of context. Trigger when starting scouting a codebase, implementing code changes, fixing bugs, touching tests/build/lint behavior, preparing final verification, triaging failures, reviewing changed files, checking regressions, or when the user asks to use Token Optimizer or avoid reading raw logs.
 ---
 
+Execution profiles are `safe`, `standard`, and `unrestricted`; tool/project requests may only narrow the user ceiling. This is deny-first policy, not an OS sandbox. Responses expose execution statuses, policy/auto-detection metadata, truncation, provider status, warnings, and redaction summaries. Logs default to a 7-day retention and 500 MB workspace quota, with workspace-scoped pruning.
+
 # Token Optimizer
+
+Execution metadata uses `signal: null` when no OS signal was observed; a value appears only for signal-terminated processes.
 
 ## Overview
 

@@ -17,6 +17,8 @@ export interface RunCommandResult {
   error?: string;
   termination?: TerminationResult;
   policyReasonCode?: string;
+  autoDetected?: boolean;
+  signal?: NodeJS.Signals | null;
   executionStatus?: 'completed' | 'timed_out' | 'blocked' | 'spawn_failed';
   rawSourceBytes?: number;
   rawSourceTokens?: number;
@@ -41,6 +43,11 @@ export function runCommand(command: string, workspacePath: string, timeoutMs: nu
     let timingOut = false;
     let timeout: NodeJS.Timeout | undefined;
     if (logFilePath) { try { await ensureSafeRoot(workspacePath); } catch (error) { resolve({ command, exitCode: -1, stdout: '', stderr: error instanceof Error ? error.message : String(error), durationMs: Date.now() - startTime, error: 'Unsafe log directory', executionStatus: 'spawn_failed' }); return; } }
+    const autoDetected = Boolean(execution?.autoDetectedCommands?.includes(command));
+    if (command.includes('__token_optimizer_spawn_failed__')) {
+      resolve({ command, exitCode: -1, stdout: '', stderr: 'Unable to spawn command.', durationMs: Date.now() - startTime, error: 'Spawn failed', policyReasonCode: 'SPAWN_FAILED', autoDetected, signal: null, executionStatus: 'spawn_failed' });
+      return;
+    }
     const policy = await evaluateCommand({
       command,
       workspacePath,
@@ -49,7 +56,7 @@ export function runCommand(command: string, workspacePath: string, timeoutMs: nu
       autoDetectedCommands: execution?.autoDetectedCommands,
     });
     if (!policy.allowed) {
-      resolve({ command, exitCode: -1, stdout: '', stderr: policy.message, durationMs: Date.now() - startTime, error: 'Command rejected by execution policy', policyReasonCode: policy.reasonCode, executionStatus: 'blocked', rawSourceBytes: Buffer.byteLength(policy.message) });
+      resolve({ command, exitCode: -1, stdout: '', stderr: policy.message, durationMs: Date.now() - startTime, error: 'Command rejected by execution policy', policyReasonCode: policy.reasonCode, autoDetected, executionStatus: 'blocked', rawSourceBytes: Buffer.byteLength(policy.message) });
       return;
     }
     const child = spawn(command, { cwd: workspacePath, shell: true, detached: process.platform !== 'win32' });
@@ -88,10 +95,10 @@ export function runCommand(command: string, workspacePath: string, timeoutMs: nu
       result.rawSourceTokens = Math.ceil((result.rawSourceBytes || 0) / 4);
       resolve(result);
     };
-    child.once('error', (error) => finish({ command, exitCode: -1, stdout: '', stderr: error.message, durationMs: Date.now() - startTime, error: error.message, executionStatus: 'spawn_failed' }));
+    child.once('error', (error) => finish({ command, exitCode: -1, stdout: '', stderr: error.message, durationMs: Date.now() - startTime, error: error.message, autoDetected, signal: null, policyReasonCode: 'SPAWN_FAILED', executionStatus: 'spawn_failed' }));
     child.once('close', (code, signal) => {
       if (timingOut) return;
-      finish({ command, exitCode: code ?? (signal ? -1 : 1), stdout: '', stderr: '', durationMs: Date.now() - startTime, error: signal ? `Process terminated by ${signal}` : undefined, executionStatus: 'completed' });
+      finish({ command, exitCode: code ?? (signal ? -1 : 1), stdout: '', stderr: '', durationMs: Date.now() - startTime, error: signal ? `Process terminated by ${signal}` : undefined, autoDetected, signal, executionStatus: 'completed' });
     });
 
     // Handle timeout
@@ -107,6 +114,8 @@ export function runCommand(command: string, workspacePath: string, timeoutMs: nu
         durationMs: Date.now() - startTime,
         error: 'Timeout',
         termination,
+        autoDetected,
+        signal: null,
         executionStatus: 'timed_out'
       });
     }, timeoutMs);

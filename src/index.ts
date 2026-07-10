@@ -13,11 +13,12 @@ import { resolveEffectiveConfig } from './config';
 import { buildAnalyticsRecord, inferWorkspaceFromLogPath, recordAnalytics } from './analytics';
 import * as fs from 'fs';
 import * as path from 'path';
+import { buildExecutionMetadata } from './execution-metadata';
 
 const server = new Server(
   {
     name: 'token-optimizer-mcp',
-    version: '2.0.0-alpha.1',
+    version: '2.0.0-alpha.2',
   },
   {
     capabilities: {
@@ -29,6 +30,9 @@ const server = new Server(
 function jsonText(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
+
+/* Normalize execution outcomes into additive metadata while keeping legacy fields stable. */
+const executionMetadata = buildExecutionMetadata;
 
 /* Tool handlers build the exact MCP response text first, then persist separate analytics from that text and the local source material. */
 function recordToolAnalytics(workspacePath: string, input: {
@@ -115,6 +119,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             autoTriage: {
               type: 'boolean',
               description: 'Optional. When true, automatically triage failures/uncertainties internally and attach the results.'
+            },
+            executionProfile: {
+              type: 'string', enum: ['safe', 'standard', 'unrestricted'],
+              description: 'Optional execution profile; may narrow the configured user ceiling.'
+            },
+            allowedCommandPrefixes: {
+              type: 'array', items: { type: 'string' },
+              description: 'Optional command-prefix allowlist; may narrow the configured user allowlist.'
             }
           },
           required: ['workspacePath', 'taskSummary']
@@ -153,7 +165,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: 'object',
           properties: {
-            workspacePath: { type: 'string' }
+            workspacePath: { type: 'string' },
+            executionProfile: { type: 'string', enum: ['safe', 'standard', 'unrestricted'] },
+            allowedCommandPrefixes: { type: 'array', items: { type: 'string' } }
           },
           required: ['workspacePath']
         }
@@ -186,7 +200,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             maxOutputLines: {
               type: 'number',
               description: 'Optional cap on how many log lines are sent to the local model.'
-            }
+            },
+            executionProfile: { type: 'string', enum: ['safe', 'standard', 'unrestricted'] },
+            allowedCommandPrefixes: { type: 'array', items: { type: 'string' } }
           },
           required: ['workspacePath', 'command', 'intent']
         }
@@ -295,7 +311,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   };
 });
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+export async function handleToolCall(request: any) {
   const { name, arguments: args } = request.params;
 
   if (name === 'check_local_llm_health') {
@@ -330,7 +346,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       maxOutputLines,
       timeoutMs,
       parallel,
-      autoTriage
+      autoTriage,
+      executionProfile,
+      allowedCommandPrefixes
     } = args as unknown as RunTestVerdictArgs;
 
     try {
@@ -370,7 +388,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // 2. Run commands
-      const effective = resolveEffectiveConfig({ workspacePath, env: process.env });
+      const effective = resolveEffectiveConfig({ workspacePath, env: process.env, tool: { execution: { profile: executionProfile, allowedCommandPrefixes } } });
       const execution = { ...effective.execution, autoDetectedCommands: testCommand ? [] : commandsToRun };
       const suiteResult = await runSuite(commandsToRun, workspacePath, { maxOutputLines, timeoutMs, parallel, execution, storageMode: effective.logs.storageMode, retentionDays: effective.logs.retentionDays, maxDiskMb: effective.logs.maxDiskMb });
 
@@ -446,7 +464,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         rawLogPath: suiteResult.rawLogPath,
         needsRawLogs: triage.needsRawLogs,
         likelyRelevantToRecentChanges: triage.likelyRelevantToRecentChanges,
-        ...getLLMMetadata(triage)
+        ...getLLMMetadata(triage),
+        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, effective.warnings),
+        providerStatus: triage.llmAvailable === false ? 'unavailable' : (triage.fallbackReason ? 'fallback' : 'available')
       };
 
       if (triageResult) {
@@ -652,7 +672,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   if (name === 'run_regression_check') {
-    const { workspacePath } = args as { workspacePath: string };
+    const { workspacePath, executionProfile, allowedCommandPrefixes } = args as { workspacePath: string; executionProfile?: any; allowedCommandPrefixes?: string[] };
     try {
       const commandsToRun = await detectCommands(workspacePath);
       if (commandsToRun.length === 0) {
@@ -678,7 +698,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      const effective = resolveEffectiveConfig({ workspacePath, env: process.env });
+      const effective = resolveEffectiveConfig({ workspacePath, env: process.env, tool: { execution: { profile: executionProfile, allowedCommandPrefixes } } });
       const suiteResult = await runSuite(commandsToRun, workspacePath, { execution: { ...effective.execution, autoDetectedCommands: commandsToRun }, storageMode: effective.logs.storageMode, retentionDays: effective.logs.retentionDays, maxDiskMb: effective.logs.maxDiskMb });
       const exitCodes: Record<string, number> = {};
       let hasFailures = false;
@@ -716,7 +736,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         isRegression,
         comparison,
         currentRun: currentRunData,
-        rawLogPath: suiteResult.rawLogPath
+        rawLogPath: suiteResult.rawLogPath,
+        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, effective.warnings),
+        providerStatus: 'unknown'
       };
       const text = jsonText(output);
       recordToolAnalytics(workspacePath, {
@@ -753,7 +775,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   if (name === 'run_command_digest') {
-    const { workspacePath, command, intent, timeoutMs, maxOutputLines } = args as unknown as RunCommandDigestArgs;
+    const { workspacePath, command, intent, timeoutMs, maxOutputLines, executionProfile, allowedCommandPrefixes } = args as unknown as RunCommandDigestArgs;
     try {
       const commandsToRun = Array.isArray(command) ? command : [command];
       if (commandsToRun.length === 0 || commandsToRun.some((c) => typeof c !== 'string' || c.trim() === '')) {
@@ -763,7 +785,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      const effective = resolveEffectiveConfig({ workspacePath, env: process.env });
+      const effective = resolveEffectiveConfig({ workspacePath, env: process.env, tool: { execution: { profile: executionProfile, allowedCommandPrefixes } } });
       const suiteResult = await runSuite(commandsToRun, workspacePath, { maxOutputLines, timeoutMs, execution: effective.execution, storageMode: effective.logs.storageMode, retentionDays: effective.logs.retentionDays, maxDiskMb: effective.logs.maxDiskMb });
 
       /* Exit codes stay authoritative: report them verbatim and derive an effective code (non-zero if any command failed). The LLM only describes the output. */
@@ -794,7 +816,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         runId,
         rawLogPath: suiteResult.rawLogPath,
         needsRawLogs: digest.needsRawLogs,
-        ...getLLMMetadata(digest)
+        ...getLLMMetadata(digest),
+        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, effective.warnings),
+        providerStatus: digest.llmAvailable === false ? 'unavailable' : (digest.fallbackReason ? 'fallback' : 'available')
       };
       const text = jsonText(output);
       recordToolAnalytics(workspacePath, {
@@ -1006,7 +1030,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   throw new Error(`Unknown tool: ${name}`);
-});
+}
+
+server.setRequestHandler(CallToolRequestSchema, handleToolCall);
 
 const STOP_WORDS = new Set([
   'the', 'and', 'for', 'with', 'where', 'what', 'which', 'how', 'does', 'this', 'that',
@@ -1033,7 +1059,11 @@ async function main() {
   await server.connect(transport);
 }
 
-main().catch((error) => {
-  console.error('Server execution error:', error);
-  process.exit(1);
-});
+if (process.env.TOKEN_OPTIMIZER_NO_AUTOSTART !== '1') {
+  main().catch((error) => {
+    console.error('Server execution error:', error);
+    process.exit(1);
+  });
+}
+
+export { server };

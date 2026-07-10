@@ -23,6 +23,7 @@ const configSchema = zod_1.z.object({
     execution: zod_1.z.object({
         profile: zod_1.z.enum(['safe', 'standard', 'unrestricted']).optional(),
         allowedCommandPrefixes: zod_1.z.array(zod_1.z.string().min(1)).optional(),
+        autoDetectedCommands: zod_1.z.array(zod_1.z.string().min(1)).optional(),
     }).partial().optional(),
     logs: zod_1.z.object({
         retentionDays: zod_1.z.number().int().nonnegative().optional(),
@@ -128,10 +129,14 @@ function resolveEffectiveConfig(input = {}) {
         warnings.push(`project/tool execution profile cannot elevate user ceiling (${ceiling})`);
     return {
         provider: resolveProviderConfig(layers, warnings),
-        execution: { profile: narrowerProfile(ceiling, requested), allowedCommandPrefixes: resolveAllowlist(layers) },
+        execution: {
+            profile: narrowerProfile(ceiling, requested),
+            allowedCommandPrefixes: resolveAllowlist(layers),
+            autoDetectedCommands: layers.tool?.execution?.autoDetectedCommands || layers.project?.execution?.autoDetectedCommands || [],
+        },
         logs: {
-            retentionDays: layers.tool?.logs?.retentionDays ?? layers.project?.logs?.retentionDays ?? layers.user?.logs?.retentionDays ?? 30,
-            maxDiskMb: layers.tool?.logs?.maxDiskMb ?? layers.project?.logs?.maxDiskMb ?? layers.user?.logs?.maxDiskMb ?? 1024,
+            retentionDays: layers.tool?.logs?.retentionDays ?? layers.project?.logs?.retentionDays ?? layers.user?.logs?.retentionDays ?? 7,
+            maxDiskMb: layers.tool?.logs?.maxDiskMb ?? layers.project?.logs?.maxDiskMb ?? layers.user?.logs?.maxDiskMb ?? 500,
             storageMode: layers.tool?.logs?.storageMode ?? layers.project?.logs?.storageMode ?? layers.user?.logs?.storageMode ?? 'raw-local',
         },
         warnings,
