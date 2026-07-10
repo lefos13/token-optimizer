@@ -130,8 +130,8 @@ export function resolveEffectiveConfig(input: ConfigLayers = {}): EffectiveConfi
       autoDetectedCommands: layers.tool?.execution?.autoDetectedCommands || layers.project?.execution?.autoDetectedCommands || [],
     },
     logs: {
-      retentionDays: layers.tool?.logs?.retentionDays ?? layers.project?.logs?.retentionDays ?? layers.user?.logs?.retentionDays ?? 30,
-      maxDiskMb: layers.tool?.logs?.maxDiskMb ?? layers.project?.logs?.maxDiskMb ?? layers.user?.logs?.maxDiskMb ?? 1024,
+      retentionDays: layers.tool?.logs?.retentionDays ?? layers.project?.logs?.retentionDays ?? layers.user?.logs?.retentionDays ?? 7,
+      maxDiskMb: layers.tool?.logs?.maxDiskMb ?? layers.project?.logs?.maxDiskMb ?? layers.user?.logs?.maxDiskMb ?? 500,
       storageMode: layers.tool?.logs?.storageMode ?? layers.project?.logs?.storageMode ?? layers.user?.logs?.storageMode ?? 'raw-local',
     },
     warnings,

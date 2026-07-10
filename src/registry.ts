@@ -18,6 +18,13 @@ function indexPath(workspacePath: string): string {
   return path.join(workspacePath, LOG_DIR, INDEX_FILE);
 }
 
+function writeIndexAtomic(file: string, records: RunRecord[]): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(records, null, 2), { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(temp, file);
+}
+
 function readRecords(workspacePath: string): RunRecord[] {
   const file = indexPath(workspacePath);
   if (!fs.existsSync(file)) {
@@ -37,7 +44,7 @@ export function appendRun(workspacePath: string, record: RunRecord): void {
   const records = readRecords(workspacePath);
   records.push(record);
   const trimmed = records.length > MAX_RECORDS ? records.slice(records.length - MAX_RECORDS) : records;
-  fs.writeFileSync(indexPath(workspacePath), JSON.stringify(trimmed, null, 2), 'utf8');
+  writeIndexAtomic(indexPath(workspacePath), trimmed);
 }
 
 export function loadRun(workspacePath: string, runId: string): RunRecord | null {
@@ -53,12 +60,17 @@ export function loadRun(workspacePath: string, runId: string): RunRecord | null 
 /* Resolve an absolute log path from either an explicit logPath (absolute or workspace-relative) or a runId looked up in the index. Returns null when neither resolves. */
 export function resolveLogPath(workspacePath: string, opts: { runId?: string; logPath?: string }): string | null {
   if (opts.logPath) {
-    return path.isAbsolute(opts.logPath) ? opts.logPath : path.resolve(workspacePath, opts.logPath);
+    const candidate = path.isAbsolute(opts.logPath) ? path.resolve(opts.logPath) : path.resolve(workspacePath, opts.logPath);
+    const root = path.resolve(workspacePath, LOG_DIR);
+    if (candidate !== root && !candidate.startsWith(`${root}${path.sep}`)) return null;
+    return candidate;
   }
   if (opts.runId) {
     const rec = loadRun(workspacePath, opts.runId);
     if (rec) {
-      return path.resolve(workspacePath, rec.rawLogPath);
+      const candidate = path.resolve(workspacePath, rec.rawLogPath);
+      const root = path.resolve(workspacePath, LOG_DIR);
+      return candidate === root || candidate.startsWith(`${root}${path.sep}`) ? candidate : null;
     }
   }
   return null;

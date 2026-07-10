@@ -5,6 +5,8 @@ import { appendRun } from './registry';
 import { evaluateCommand } from './command-policy';
 import { terminateProcessTree, type TerminationResult } from './process-tree';
 import type { EffectiveConfig, ExecutionProfile } from './types';
+import { createRunLog, ensureLogGitignore, pruneLogs } from './log-store';
+import { redactText } from './redaction';
 
 export interface RunCommandResult {
   command: string;
@@ -32,7 +34,7 @@ export interface ExecutedSuiteResult {
 /**
  * Runs a single shell command inside the workspacePath, capturing all stdout and stderr.
  */
-export function runCommand(command: string, workspacePath: string, timeoutMs: number = 300000, execution?: EffectiveConfig['execution'], logFilePath?: string): Promise<RunCommandResult> {
+export function runCommand(command: string, workspacePath: string, timeoutMs: number = 300000, execution?: EffectiveConfig['execution'], logFilePath?: string, storageMode: 'raw-local' | 'redacted-local' = 'raw-local'): Promise<RunCommandResult> {
   const startTime = Date.now();
   return new Promise(async (resolve) => {
     let settled = false;
@@ -59,7 +61,7 @@ export function runCommand(command: string, workspacePath: string, timeoutMs: nu
       const bytes = chunk.byteLength;
       if (stream === 'stdout') outBytes += bytes; else errBytes += bytes;
       fileStream?.write(`[${stream}] `);
-      fileStream?.write(chunk);
+      fileStream?.write(storageMode === 'redacted-local' ? redactText(chunk.toString()).text : chunk);
       const text = chunk.toString();
       const current = target.join('');
       if (current.length < MAX_EXCERPT) target.push(text.slice(0, MAX_EXCERPT - current.length));
@@ -173,6 +175,7 @@ export interface RunSuiteOptions {
   /* When true, independent commands run concurrently; logs are still assembled in the original command order so the output stays deterministic. */
   parallel?: boolean;
   execution?: EffectiveConfig['execution'];
+  storageMode?: 'raw-local' | 'redacted-local';
 }
 
 function formatCommandLog(res: RunCommandResult): string {
@@ -199,7 +202,7 @@ async function appendFileStream(destination: fs.WriteStream, sourcePath: string)
  * emitted in command order regardless of execution mode.
  */
 export async function runSuite(commands: string[], workspacePath: string, options: RunSuiteOptions = {}): Promise<ExecutedSuiteResult> {
-  const { maxOutputLines, timeoutMs, parallel, execution } = options;
+  const { maxOutputLines, timeoutMs, parallel, execution, storageMode = 'raw-local' } = options;
   const logDir = path.join(workspacePath, '.codex-local-test-runs');
 
   // Ensure log directory exists
@@ -214,7 +217,7 @@ export async function runSuite(commands: string[], workspacePath: string, option
   const tempDir = path.join(logDir, `.stream-${process.pid}-${Date.now()}`);
   fs.mkdirSync(tempDir, { recursive: true });
   const runOne = (cmd: string, index: number) =>
-    timeoutMs ? runCommand(cmd, workspacePath, timeoutMs, execution, path.join(tempDir, `${index}.out`)) : runCommand(cmd, workspacePath, 300000, execution, path.join(tempDir, `${index}.out`));
+    timeoutMs ? runCommand(cmd, workspacePath, timeoutMs, execution, path.join(tempDir, `${index}.out`), storageMode) : runCommand(cmd, workspacePath, 300000, execution, path.join(tempDir, `${index}.out`), storageMode);
 
   let results: RunCommandResult[];
   try {
@@ -231,18 +234,19 @@ export async function runSuite(commands: string[], workspacePath: string, option
     throw error;
   }
 
-  const rawWriter = fs.createWriteStream(rawLogPath, { flags: 'w' });
+  await ensureLogGitignore(workspacePath);
+  const managedLog = await createRunLog(workspacePath, { runId: logFileName.replace(/\.log$/, ''), storageMode });
   try {
     for (let i = 0; i < results.length; i++) {
       const header = `========================================================\nCOMMAND: ${results[i].command}\n========================================================\n\n`;
-      rawWriter.write(header);
+      await managedLog.write(header);
       const commandOutputPath = path.join(tempDir, `${i}.out`);
-      if (fs.existsSync(commandOutputPath)) await appendFileStream(rawWriter, commandOutputPath);
-      rawWriter.write(`\n--- EXIT CODE: ${results[i].exitCode} (Duration: ${results[i].durationMs}ms) ---\n\n`);
+      if (fs.existsSync(commandOutputPath)) await managedLog.write(await fs.promises.readFile(commandOutputPath));
+      await managedLog.write(`\n--- EXIT CODE: ${results[i].exitCode} (Duration: ${results[i].durationMs}ms) ---\n\n`);
     }
-    await new Promise<void>((resolve) => rawWriter.end(resolve));
+    await managedLog.close();
   } catch (error) {
-    rawWriter.destroy();
+    await managedLog.close().catch(() => undefined);
     fs.rmSync(tempDir, { recursive: true, force: true });
     throw error;
   }
@@ -294,6 +298,7 @@ export async function runSuite(commands: string[], workspacePath: string, option
     rawSourceTokens: Math.ceil(rawSourceBytes / 4)
   };
   fs.rmSync(tempDir, { recursive: true, force: true });
+  await pruneLogs(workspacePath, { storageMode });
   return result;
 }
 
