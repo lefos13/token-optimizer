@@ -70,6 +70,13 @@ export interface ScoutResponse extends LLMResponseMetadata {
   note?: string;
 }
 
+export type LLMResponseTask = 'verdict' | 'triage' | 'review' | 'digest' | 'scout' | 'query';
+
+export interface LLMValidationError {
+  path: (string | number)[];
+  message: string;
+}
+
 export interface RunScoutArgs {
   workspacePath: string;
   goal: string;

@@ -1,6 +1,7 @@
 import { FailureDetail, LogQueryResponse, ScoutResponse, ScoutPointer, LLMResponseMetadata } from './types';
 import { FileCandidate } from './runner';
 import { LLMProvider, LLMHealthResponse, LLMTaskType, resolveProvider, providerHealth } from './providers';
+import { parseLLMResponse } from './llm-schemas';
 export { resolveProvider, providerHealth } from './providers';
 export type { LLMProvider, LLMHealthResponse, LLMTaskType } from './providers';
 
@@ -320,23 +321,9 @@ ${trimmedLogs}`;
   try {
     const completion = await callWithFallback(taskType, systemPrompt, userPrompt);
     const jsonString = extractJSON(completion.content);
-    const parsed = JSON.parse(jsonString) as Partial<LLMVerdictResponse>;
-    const result: LLMVerdictResponse = {
-      verdict: parsed.verdict || 'uncertain',
-      confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0,
-      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
-      likelyRelevantToRecentChanges: typeof parsed.likelyRelevantToRecentChanges === 'boolean' ? parsed.likelyRelevantToRecentChanges : false,
-      failures: Array.isArray(parsed.failures) ? parsed.failures : [],
-      needsRawLogs: typeof parsed.needsRawLogs === 'boolean' ? parsed.needsRawLogs : false
-    };
-
-    // Validate verdict values
-    if (!['pass', 'fail', 'uncertain'].includes(result.verdict)) {
-      result.verdict = 'uncertain';
-    }
-    if (typeof result.confidence !== 'number' || !Number.isFinite(result.confidence)) {
-      result.confidence = 0;
-    }
+    const parsed = parseLLMResponse(taskType, jsonString);
+    if (!parsed.success) throw new Error(`Invalid ${taskType} response: ${parsed.validationErrors.map((issue) => issue.message).join('; ')}`);
+    const result: LLMVerdictResponse = parsed.data as LLMVerdictResponse;
     if (result.confidence < VERDICT_CONFIDENCE_FLOOR) {
       result.verdict = 'uncertain';
       result.needsRawLogs = true;
@@ -415,13 +402,9 @@ Schema:
   try {
     const completion = await callWithFallback('review', systemPrompt, userPrompt);
     const jsonString = extractJSON(completion.content);
-    const parsed = JSON.parse(jsonString) as Partial<CodeReviewResponse>;
-    const result: CodeReviewResponse = {
-      hasIssues: typeof parsed.hasIssues === 'boolean' ? parsed.hasIssues : false,
-      issues: Array.isArray(parsed.issues) ? parsed.issues : [],
-      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
-      reviewAvailable: true
-    };
+    const parsed = parseLLMResponse('review', jsonString);
+    if (!parsed.success) throw new Error(`Invalid review response: ${parsed.validationErrors.map((issue) => issue.message).join('; ')}`);
+    const result: CodeReviewResponse = { ...(parsed.data as Omit<CodeReviewResponse, 'reviewAvailable'>), reviewAvailable: true };
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
     /* The local LLM is offline or returned unparseable output. Stay conservative: report no issues rather than a phantom warning, and flag that the review did not actually run. */
@@ -475,13 +458,9 @@ ${trimmedLogs}`;
   const start = Date.now();
   try {
     const completion = await callWithFallback('digest', systemPrompt, userPrompt);
-    const parsed = JSON.parse(extractJSON(completion.content)) as CommandDigestResponse;
-    const result: CommandDigestResponse = {
-      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
-      keyFindings: Array.isArray(parsed.keyFindings) ? parsed.keyFindings : [],
-      digest: typeof parsed.digest === 'string' ? parsed.digest : '',
-      needsRawLogs: typeof parsed.needsRawLogs === 'boolean' ? parsed.needsRawLogs : false
-    };
+    const parsed = parseLLMResponse('digest', extractJSON(completion.content));
+    if (!parsed.success) throw new Error(`Invalid digest response: ${parsed.validationErrors.map((issue) => issue.message).join('; ')}`);
+    const result: CommandDigestResponse = parsed.data as CommandDigestResponse;
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
     /* Local model offline or unparseable output: stay conservative and tell the caller to fall back to the raw log rather than inventing a digest. */
@@ -536,14 +515,9 @@ Schema:
   const start = Date.now();
   try {
     const completion = await callWithFallback('scout', systemPrompt, userPrompt);
-    const parsed = JSON.parse(extractJSON(completion.content)) as ScoutResponse;
-    const result: ScoutResponse = {
-      pointers: Array.isArray(parsed.pointers) ? parsed.pointers.filter(isValidPointer) : [],
-      suggestedNextSearches: Array.isArray(parsed.suggestedNextSearches) ? parsed.suggestedNextSearches : [],
-      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
-      needsDeeperLook: typeof parsed.needsDeeperLook === 'boolean' ? parsed.needsDeeperLook : false,
-      scoutAvailable: true
-    };
+    const parsed = parseLLMResponse('scout', extractJSON(completion.content));
+    if (!parsed.success) throw new Error(`Invalid scout response: ${parsed.validationErrors.map((issue) => issue.message).join('; ')}`);
+    const result: ScoutResponse = { ...(parsed.data as Omit<ScoutResponse, 'scoutAvailable'>), scoutAvailable: true };
     if (result.pointers.length === 0 || result.pointers.every((p) => p.confidence < SCOUT_POINTER_CONFIDENCE_FLOOR)) {
       result.needsDeeperLook = true;
       completion.metadata = {
@@ -594,13 +568,9 @@ ${numberedLog}`;
   const start = Date.now();
   try {
     const completion = await callWithFallback('query', systemPrompt, userPrompt);
-    const parsed = JSON.parse(extractJSON(completion.content)) as LogQueryResponse;
-    const result: LogQueryResponse = {
-      answer: typeof parsed.answer === 'string' ? parsed.answer : '',
-      relevantExcerpt: typeof parsed.relevantExcerpt === 'string' ? parsed.relevantExcerpt : '',
-      lineRange: typeof parsed.lineRange === 'string' ? parsed.lineRange : '',
-      available: true
-    };
+    const parsed = parseLLMResponse('query', extractJSON(completion.content));
+    if (!parsed.success) throw new Error(`Invalid query response: ${parsed.validationErrors.map((issue) => issue.message).join('; ')}`);
+    const result: LogQueryResponse = { ...(parsed.data as Omit<LogQueryResponse, 'available'>), available: true };
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
     /* Model offline or unparseable: signal unavailability so the caller can fall back to grep_log or a raw-log slice. */
