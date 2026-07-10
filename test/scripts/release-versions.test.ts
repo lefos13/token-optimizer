@@ -11,6 +11,7 @@ const RELEASE_VERSION = JSON.parse(
 /* Every installable artifact needs the same release version so marketplace and
    npm users receive the server build that was tested for that release. */
 test('all distributable package and plugin version sources are aligned', () => {
+  assert.equal(RELEASE_VERSION, '2.0.0-alpha.1');
   const installerPackage = JSON.parse(fs.readFileSync(path.join(root, 'packages', 'installer', 'package.json'), 'utf8'));
   assert.equal(installerPackage.version, RELEASE_VERSION);
   const serverSource = fs.readFileSync(path.join(root, 'src', 'index.ts'), 'utf8');
@@ -26,4 +27,10 @@ test('all distributable package and plugin version sources are aligned', () => {
     const source = fs.readFileSync(path.join(root, 'scripts', name), 'utf8');
     assert.match(source, new RegExp(`const VERSION = "${RELEASE_VERSION.replace(/\./g, '\\.')}"`));
   }
+});
+
+test('agent-facing skill documents both remote provider paths', () => {
+  const generatedSkill = fs.readFileSync(path.join(root, 'skill', 'skill-example.md'), 'utf8');
+  assert.match(generatedSkill, /openrouter-direct/);
+  assert.match(generatedSkill, /gateway-byok/);
 });

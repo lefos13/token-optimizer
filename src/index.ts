@@ -16,7 +16,7 @@ import * as path from 'path';
 const server = new Server(
   {
     name: 'token-optimizer-mcp',
-    version: '1.12.1',
+    version: '2.0.0-alpha.1',
   },
   {
     capabilities: {

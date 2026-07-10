@@ -67,6 +67,29 @@ of this repository if you want a local multi-workspace analytics dashboard.
 
 ## Provider notes
 
+### Provider privacy matrix
+
+| Provider mode | Inference destination | Data sent remotely | Credential boundary |
+| --- | --- | --- | --- |
+| `local` | Your configured local OpenAI-compatible endpoint | None outside the endpoint you run | No Token Optimizer credential required |
+| `openrouter-direct` | OpenRouter directly | Redacted, bounded excerpts | Your OpenRouter key goes directly to OpenRouter |
+| `gateway-token` | Softaware gateway | Redacted, bounded excerpts | Gateway access token; the gateway selects the model |
+| `gateway-byok` | Softaware gateway, which proxies OpenRouter | Redacted, bounded excerpts and the BYOK key | Your OpenRouter key crosses the Softaware gateway |
+
+Remote inference always receives redacted excerpts. `redactionSummary` reports the
+count and categories removed from a remote request; it never contains the secret
+values. `providerWarnings` reports trust or compatibility warnings returned by
+provider resolution. Raw-local logs can still contain secrets printed by a
+command, so protect `.codex-local-test-runs/` like any other diagnostic data.
+
+The v1 configuration using `LLM_GATEWAY_URL` with `OPENROUTER_BYOK_KEY` remains
+supported as `gateway-byok` and emits a legacy compatibility warning. This keeps
+the old gateway destination instead of silently moving requests to OpenRouter
+direct. New installations should choose `openrouter-direct` when direct BYOK
+privacy is preferred. If structured model output is malformed, or a provider is
+unavailable, validation command exit codes remain authoritative and the result is
+`uncertain` with validation/provider metadata rather than an invented pass.
+
 Gateway calls use an approved access token and have the gateway's configured
 daily allowance. A BYOK OpenRouter key is independent of the shared gateway
 quota. A local provider keeps inference on your machine.

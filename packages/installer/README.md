@@ -43,6 +43,23 @@ flags, the installer prompts for one of three providers, plus a skip option:
 | `byok` | **No, none at all** | You, via your own OpenRouter account | Unlimited |
 | `local` | **No, none at all** | Nobody — your own hardware | Unlimited |
 
+Provider privacy at inference time is explicit:
+
+| Provider mode | Inference destination | Remote payload | Credential boundary |
+| --- | --- | --- | --- |
+| `local` | Your local OpenAI-compatible endpoint | Nothing beyond that endpoint | No Token Optimizer credential |
+| `openrouter-direct` | OpenRouter | Redacted, bounded excerpts | OpenRouter key goes directly to OpenRouter |
+| `gateway-token` | Softaware gateway | Redacted, bounded excerpts | Gateway token; gateway-managed model |
+| `gateway-byok` | Softaware gateway → OpenRouter | Redacted, bounded excerpts plus BYOK key | BYOK key is visible to the Softaware gateway |
+
+Legacy v1 gateway + BYOK environment variables remain mapped to `gateway-byok`
+and produce a compatibility warning; migration does not silently change the
+destination. Remote results may include `redactionSummary` and
+`providerWarnings` metadata (never secret values). `raw-local` diagnostics can
+still contain secrets printed by commands. If inference is unavailable or model
+output fails schema validation, command exit codes remain authoritative and the
+installer-connected tools report a conservative `uncertain` result.
+
 1. **Gateway access token** — shared infrastructure, requires an approved token.
    Request one at [https://llm-proxy.lnf.gr/](https://llm-proxy.lnf.gr/).
 2. **Your own OpenRouter key (`byok`)** — get a key from

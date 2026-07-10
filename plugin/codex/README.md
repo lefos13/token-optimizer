@@ -9,7 +9,7 @@ with raw logs.
 
 ## Contents
 
-- `.codex-plugin/plugin.json` - plugin manifest (`token-optimizer` v1.12.1).
+- `.codex-plugin/plugin.json` - plugin manifest (`token-optimizer` v2.0.0-alpha.1).
 - `.mcp.json` - registers the `token_optimizer` stdio server via the `mcpServers` wrapper, launched with `node server/start.js` anchored at the plugin root via `cwd: "."`.
 - `server/` - the compiled MCP server plus launchers (`start.js` cross-platform, `start.sh` POSIX) and a minimal `package.json`.
 - `skills/token-optimizer/SKILL.md` - usage guidance, copied from `skill/skill-example.md`.
@@ -54,5 +54,5 @@ install or enable the `token-optimizer` plugin from Codex.
 codex plugin marketplace add /path/to/token-optimizer-mcp
 ```
 
-For local development without marketplace installation, load `/Users/eevangelinos/.gemini/antigravity/scratch/local-tester-mcp/plugin/codex`
+For local development without marketplace installation, load `/Users/eevangelinos/.gemini/antigravity/scratch/local-tester-mcp-v2-correct/plugin/codex`
 directly if your Codex surface supports direct plugin paths.
