@@ -9,6 +9,9 @@ const {
   DEFAULT_LOCAL_LLM_URL,
   DEFAULT_LOCAL_LLM_MODEL,
   normalizeProviderChoice,
+  planInstallation,
+  applyChangePlan,
+  formatChangePlan,
   installSelectedClients,
   applyGatewayConfig,
   applyDefaultDirectives,
@@ -43,7 +46,21 @@ async function main() {
     };
 
     if (command === "install") {
-      const installed = installSelectedClients(options);
+      const plan = planInstallation(options);
+      if (args["dry-run"] === true) {
+        console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
+        return;
+      }
+      const applyResult = applyChangePlan(plan);
+      if (applyResult.error) {
+        const rolled = applyResult.rolledBack.length;
+        const manual = applyResult.manualRemediation.length;
+        console.error(`Installation failed: ${applyResult.error.message}`);
+        console.error(`Rollback applied to ${rolled} operation(s); manual remediation required for ${manual}.`);
+        process.exitCode = 1;
+        return;
+      }
+      const installed = applyResult.installedClients;
       console.log(`Installed Token Optimizer for: ${installed.join(", ")}`);
       if (clients.includes("all") || clients.includes("cursor")) {
         console.log("Cursor MCP is configured globally; copy the generated Cursor rule into projects or pass --cursor-project for project rules.");

@@ -2,6 +2,8 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { createChangePlan, formatChangePlan } = require("./change-plan");
+const { registerPlan, applyChangePlan, defaultAdapters } = require("./apply-plan");
 
 const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
 const DEFAULT_LOCAL_LLM_URL = "http://localhost:8080/v1";
@@ -111,31 +113,61 @@ function installerPaths(options = {}) {
   };
 }
 
-function installSelectedClients(options) {
+function planInstallation(options = {}) {
   const paths = installerPaths(options);
   const clients = normalizeClients(options.clients, paths.home);
-  const installed = [];
-  for (const client of clients) {
-    if (client === "opencode") {
-      installOpenCode({ ...options, ...paths });
-      installed.push(client);
-    } else if (client === "cursor") {
-      installCursor({ ...options, ...paths });
-      installed.push(client);
-    } else if (client === "antigravity") {
-      installAntigravity({ ...options, ...paths });
-      installed.push(client);
-    } else if (client === "claude") {
-      installClaude({ ...options, ...paths });
-      installed.push(client);
-    } else if (client === "codex") {
-      installCodex({ ...options, ...paths });
-      installed.push(client);
-    } else {
-      throw new Error(`Unsupported client: ${client}`);
-    }
-  }
-  return installed;
+  const operations = clients.flatMap((client) => [
+    { id: `install:${client}:copy`, kind: "copy-tree", phase: "copy", client, path: paths.home, targets: clientTargets(client, paths) },
+    { id: `install:${client}:config`, kind: "managed-block", phase: "config", client, path: paths.home },
+    { id: `install:${client}:credentials`, kind: "credential", phase: "credentials", client, reference: `${client}/provider-env` },
+    { id: `install:${client}:service`, kind: "platform-service", phase: "service", client, platform: process.platform },
+    { id: `install:${client}:command`, kind: "client-command", phase: "command", client, command: "register" },
+  ]);
+  const plan = createChangePlan({ action: "install", version: options.version || require("../package.json").version, clients }, operations);
+  registerPlan(plan, (operation) => {
+    if (operation.phase !== "copy") return;
+    const installOptions = { ...options, ...paths };
+    if (operation.client === "opencode") installOpenCode(installOptions);
+    else if (operation.client === "cursor") installCursor(installOptions);
+    else if (operation.client === "antigravity") installAntigravity(installOptions);
+    else if (operation.client === "claude") installClaude(installOptions);
+    else if (operation.client === "codex") installCodex(installOptions);
+    else throw new Error(`Unsupported client: ${operation.client}`);
+  }, (operation) => {
+    const before = snapshotDirectory(paths.home);
+    return { inverse: () => restoreDirectory(paths.home, before) };
+  });
+  return plan;
+}
+
+function installSelectedClients(options) {
+  const result = applyChangePlan(planInstallation(options), defaultAdapters());
+  if (result.error) throw result.error;
+  return result.installedClients;
+}
+
+function clientTargets(client, paths) {
+  const roots = {
+    opencode: [path.join(paths.home, ".config", "opencode")],
+    cursor: [path.join(paths.home, ".cursor")],
+    antigravity: [path.join(paths.home, ".gemini")],
+    claude: [path.join(paths.home, ".claude"), paths.installRoot],
+    codex: [path.join(paths.home, ".codex"), paths.installRoot],
+  };
+  return roots[client] || [];
+}
+
+function snapshotDirectory(source) {
+  const snapshot = fs.mkdtempSync(path.join(os.tmpdir(), "token-optimizer-plan-"));
+  if (fs.existsSync(source)) fs.cpSync(source, path.join(snapshot, "tree"), { recursive: true });
+  return snapshot;
+}
+
+function restoreDirectory(target, snapshot) {
+  fs.rmSync(target, { recursive: true, force: true });
+  const source = path.join(snapshot, "tree");
+  if (fs.existsSync(source)) fs.cpSync(source, target, { recursive: true });
+  fs.rmSync(snapshot, { recursive: true, force: true });
 }
 
 function normalizeClients(clients, home = process.env.HOME || os.homedir()) {
@@ -784,6 +816,9 @@ module.exports = {
   normalizeProviderChoice,
   DIRECTIVE_MARKER_START,
   installerPaths,
+  planInstallation,
+  applyChangePlan,
+  formatChangePlan,
   detectClients,
   installSelectedClients,
   installOpenCode,

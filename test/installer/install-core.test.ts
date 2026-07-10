@@ -504,3 +504,17 @@ test('upsertCodexTomlServer replaces an existing section without touching other 
   assert.ok(next.includes("LLM_GATEWAY_TOKEN = 'tok'"));
   assert.equal((next.match(/\[mcp_servers\.token_optimizer\]/g) || []).length, 1);
 });
+
+test('plan preview is mutation-free and a later client failure restores prior writes', () => {
+  const home = tmpDir('to-installer-home-');
+  const assetsRoot = tmpDir('to-installer-assets-');
+  writeFixtureAssets(assetsRoot);
+  const before = fs.readdirSync(home);
+  const plan = installer.planInstallation({ home, assetsRoot, clients: ['opencode', 'unsupported'], provider: 'skip', skipLaunchctl: true });
+  assert.deepEqual(fs.readdirSync(home), before);
+  assert.ok(plan.operations.length >= 6);
+  const result = installer.applyChangePlan(plan);
+  assert.ok(result.error);
+  assert.ok(result.rolledBack.length > 0);
+  assert.deepEqual(fs.readdirSync(home), before);
+});

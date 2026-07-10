@@ -18,7 +18,7 @@ function safeOperation(operation) {
   const copy = sanitizeObject(operation, operation.kind === "credential");
   if (operation.kind === "credential") {
     for (const key of Object.keys(copy)) {
-      if (!["kind", "provider", "reference", "fingerprint"].includes(key)) delete copy[key];
+      if (!["kind", "provider", "reference", "fingerprint", "id", "client", "phase"].includes(key)) delete copy[key];
     }
   }
   return copy;
@@ -47,8 +47,8 @@ function formatChangePlan(plan, format = "human") {
   if (!plan || plan.schemaVersion !== 2 || !Array.isArray(plan.operations)) throw new TypeError("invalid change plan");
   if (format === "json" || format === "JSON") return JSON.stringify(plan, null, 2);
   const header = `Change plan v${plan.schemaVersion}${plan.version ? ` (${plan.version})` : ""}`;
-  const lines = plan.operations.map((operation, index) => `${index + 1}. ${operation.kind}${operation.path ? `: ${operation.path}` : ""}`);
-  return [header, ...lines].join("\n");
+  const lines = plan.operations.map((operation, index) => `${index + 1}. ${operation.id || operation.kind}${operation.path ? `: ${operation.path}` : ""}`);
+  return [header, "Will modify:", ...lines].join("\n");
 }
 
 function operation(kind, fields = {}) { return safeOperation({ kind, ...fields }); }
