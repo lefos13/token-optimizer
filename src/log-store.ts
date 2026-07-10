@@ -13,7 +13,7 @@ export interface LogLifecycleResult { removed: RemovedLog[]; freedBytes: number;
 export interface RunLog { absolutePath: string; relativePath: string; write(chunk: string | Buffer): Promise<void>; close(): Promise<void> }
 
 function canonicalDir(workspacePath: string): string { return path.resolve(workspacePath, LOG_DIR); }
-async function ensureSafeRoot(workspacePath: string): Promise<string> {
+export async function ensureSafeRoot(workspacePath: string): Promise<string> {
   const root = canonicalDir(workspacePath);
   await fs.promises.mkdir(root, { recursive: true });
   const st = await fs.promises.lstat(root);

@@ -5,7 +5,7 @@ import { appendRun } from './registry';
 import { evaluateCommand } from './command-policy';
 import { terminateProcessTree, type TerminationResult } from './process-tree';
 import type { EffectiveConfig, ExecutionProfile } from './types';
-import { createRunLog, ensureLogGitignore, pruneLogs } from './log-store';
+import { createRunLog, ensureLogGitignore, pruneLogs, ensureSafeRoot } from './log-store';
 import { redactText } from './redaction';
 
 export interface RunCommandResult {
@@ -40,6 +40,7 @@ export function runCommand(command: string, workspacePath: string, timeoutMs: nu
     let settled = false;
     let timingOut = false;
     let timeout: NodeJS.Timeout | undefined;
+    if (logFilePath) { try { await ensureSafeRoot(workspacePath); } catch (error) { resolve({ command, exitCode: -1, stdout: '', stderr: error instanceof Error ? error.message : String(error), durationMs: Date.now() - startTime, error: 'Unsafe log directory', executionStatus: 'spawn_failed' }); return; } }
     const policy = await evaluateCommand({
       command,
       workspacePath,
@@ -209,7 +210,7 @@ async function appendFileStream(destination: fs.WriteStream, sourcePath: string)
  */
 export async function runSuite(commands: string[], workspacePath: string, options: RunSuiteOptions = {}): Promise<ExecutedSuiteResult> {
   const { maxOutputLines, timeoutMs, parallel, execution, storageMode = 'raw-local', retentionDays, maxDiskMb } = options;
-  const logDir = path.join(workspacePath, '.codex-local-test-runs');
+  const logDir = await ensureSafeRoot(workspacePath);
 
   // Ensure log directory exists
   if (!fs.existsSync(logDir)) {
