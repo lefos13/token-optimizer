@@ -7,7 +7,7 @@ const root = path.resolve(__dirname, '..', '..', '..');
 const releaseVersion = JSON.parse(
   fs.readFileSync(path.join(root, 'package.json'), 'utf8'),
 ).version;
-assert.equal(releaseVersion, '2.0.0-alpha.2');
+assert.equal(releaseVersion, '2.0.0-alpha.3');
 const generators = [
   'generate-plugin-antigravity.js',
   'generate-plugin-claude.js',
@@ -53,5 +53,17 @@ test('generated server bundles include every runtime module required by llm.js',
       assert.ok(fs.existsSync(installer), `installer ${bundle} missing ${file}`);
       assert.doesNotThrow(() => require(installer), `installer ${bundle} cannot load ${file}`);
     }
+  }
+});
+
+test('generated plugin and installer server entrypoints load successfully', () => {
+  const bundles = ['antigravity', 'claude', 'codex', 'opencode', 'cursor'];
+  for (const bundle of bundles) {
+    const generated = path.join(root, 'plugin', bundle, 'server', 'index.js');
+    const installer = path.join(root, 'packages', 'installer', 'assets', 'plugin', bundle, 'server', 'index.js');
+    assert.ok(fs.existsSync(generated), `${bundle} missing plugin index.js`);
+    assert.ok(fs.existsSync(installer), `${bundle} missing installer index.js`);
+    assert.doesNotThrow(() => require(generated), `${bundle} plugin index.js cannot load`);
+    assert.doesNotThrow(() => require(installer), `${bundle} installer index.js cannot load`);
   }
 });

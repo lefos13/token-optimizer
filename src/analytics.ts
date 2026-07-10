@@ -59,10 +59,6 @@ export function analyticsStoreRoot(targetWorkspacePath: string): string {
   return targetWorkspacePath;
 }
 
-function analyticsDir(targetWorkspacePath: string): string {
-  return path.join(analyticsStoreRoot(targetWorkspacePath), LOG_DIR);
-}
-
 function readRecords(filePath: string): AnalyticsRecord[] {
   if (!fs.existsSync(filePath)) {
     return [];
@@ -75,11 +71,35 @@ function readRecords(filePath: string): AnalyticsRecord[] {
   }
 }
 
+/* Metadata writes stay within a canonical, non-symlinked directory. The target
+   is checked before replacement and the temporary file is created beside it so
+   rename remains atomic without following an attacker-controlled link. */
 function safeAtomicWrite(filePath: string, value: unknown): void {
-  try { const st = fs.lstatSync(filePath); if (st.isSymbolicLink() || !st.isFile()) throw new Error('analytics target is not a regular file'); } catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
+  const parent = path.dirname(filePath);
+  const parentStat = fs.lstatSync(parent);
+  if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) throw new Error('unsafe analytics directory');
+  try {
+    const target = fs.lstatSync(filePath);
+    if (target.isSymbolicLink() || !target.isFile()) throw new Error('unsafe analytics target');
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
   const temp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   fs.writeFileSync(temp, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(temp, filePath);
+}
+
+function ensureSafeRoot(targetWorkspacePath: string): string {
+  const workspace = fs.realpathSync(targetWorkspacePath);
+  const root = path.resolve(targetWorkspacePath, LOG_DIR);
+  fs.mkdirSync(root, { recursive: true });
+  const stat = fs.lstatSync(root);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('managed analytics directory must be a real directory');
+  const realRoot = fs.realpathSync(root);
+  if (!(realRoot === workspace || realRoot.startsWith(`${workspace}${path.sep}`))) {
+    throw new Error('managed analytics directory escapes workspace');
+  }
+  return realRoot;
 }
 
 function summarize(records: AnalyticsRecord[]): AnalyticsSummary {
@@ -258,10 +278,7 @@ function shareAnalyticsRecord(record: AnalyticsRecord): void {
 export function recordAnalytics(targetWorkspacePath: string, record: AnalyticsRecord): void {
   shareAnalyticsRecord(record);
   try {
-    const dir = analyticsDir(targetWorkspacePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
+    const dir = ensureSafeRoot(targetWorkspacePath);
 
     const analyticsPath = path.join(dir, ANALYTICS_FILE);
     const records = readRecords(analyticsPath);

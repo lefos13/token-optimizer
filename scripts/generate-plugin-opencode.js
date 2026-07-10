@@ -36,6 +36,11 @@ const distDir = path.join(rootDir, "dist");
 const SERVER_FILES = [
   "index.js",
   "analytics.js",
+  "command-policy.js",
+  "execution-metadata.js",
+  "log-excerpt.js",
+  "log-store.js",
+  "process-tree.js",
   "detector.js",
   "llm.js",
   "providers.js",

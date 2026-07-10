@@ -690,7 +690,16 @@ async function handleToolCall(request) {
                 timestamp: new Date().toISOString(),
                 success: !hasFailures
             };
-            if (fs.existsSync(baselinePath)) {
+            let baselineIsSafe = false;
+            try {
+                const st = fs.lstatSync(baselinePath);
+                baselineIsSafe = st.isFile() && !st.isSymbolicLink();
+            }
+            catch (e) {
+                if (e?.code !== 'ENOENT')
+                    throw e;
+            }
+            if (baselineIsSafe) {
                 try {
                     const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
                     isRegression = hasFailures && baseline.success;
