@@ -2,6 +2,8 @@ import { exec } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { appendRun } from './registry';
+import { evaluateCommand } from './command-policy';
+import type { EffectiveConfig, ExecutionProfile } from './types';
 
 export interface RunCommandResult {
   command: string;
@@ -10,6 +12,7 @@ export interface RunCommandResult {
   stderr: string;
   durationMs: number;
   error?: string;
+  policyReasonCode?: string;
 }
 
 export interface ExecutedSuiteResult {
@@ -22,9 +25,20 @@ export interface ExecutedSuiteResult {
 /**
  * Runs a single shell command inside the workspacePath, capturing all stdout and stderr.
  */
-export function runCommand(command: string, workspacePath: string, timeoutMs: number = 300000): Promise<RunCommandResult> {
+export function runCommand(command: string, workspacePath: string, timeoutMs: number = 300000, execution?: EffectiveConfig['execution']): Promise<RunCommandResult> {
   const startTime = Date.now();
-  return new Promise((resolve) => {
+  return new Promise(async (resolve) => {
+    const policy = await evaluateCommand({
+      command,
+      workspacePath,
+      profile: execution?.profile || 'unrestricted' as ExecutionProfile,
+      allowedCommandPrefixes: execution?.allowedCommandPrefixes,
+      autoDetectedCommands: execution?.autoDetectedCommands,
+    });
+    if (!policy.allowed) {
+      resolve({ command, exitCode: -1, stdout: '', stderr: policy.message, durationMs: Date.now() - startTime, error: 'Command rejected by execution policy', policyReasonCode: policy.reasonCode });
+      return;
+    }
     const child = exec(command, {
       cwd: workspacePath,
       maxBuffer: 50 * 1024 * 1024, // 50MB buffer to prevent overflow
@@ -128,6 +142,7 @@ export interface RunSuiteOptions {
   timeoutMs?: number;
   /* When true, independent commands run concurrently; logs are still assembled in the original command order so the output stays deterministic. */
   parallel?: boolean;
+  execution?: EffectiveConfig['execution'];
 }
 
 function formatCommandLog(res: RunCommandResult): string {
@@ -148,7 +163,7 @@ function formatCommandLog(res: RunCommandResult): string {
  * emitted in command order regardless of execution mode.
  */
 export async function runSuite(commands: string[], workspacePath: string, options: RunSuiteOptions = {}): Promise<ExecutedSuiteResult> {
-  const { maxOutputLines, timeoutMs, parallel } = options;
+  const { maxOutputLines, timeoutMs, parallel, execution } = options;
   const logDir = path.join(workspacePath, '.codex-local-test-runs');
 
   // Ensure log directory exists
@@ -161,7 +176,7 @@ export async function runSuite(commands: string[], workspacePath: string, option
   const rawLogPath = path.join(logDir, logFileName);
 
   const runOne = (cmd: string) =>
-    timeoutMs ? runCommand(cmd, workspacePath, timeoutMs) : runCommand(cmd, workspacePath);
+    timeoutMs ? runCommand(cmd, workspacePath, timeoutMs, execution) : runCommand(cmd, workspacePath, 300000, execution);
 
   let results: RunCommandResult[];
   if (parallel) {

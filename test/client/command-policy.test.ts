@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { evaluateCommand } from '../../src/command-policy';
+import { runCommand } from '../../src/runner';
 
 test('safe allows configured validation commands', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-'));
@@ -43,3 +44,29 @@ test('unrestricted still observes deny-first safety checks', async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('redirection targets outside the workspace are denied', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-'));
+  const decision = await evaluateCommand({ command: 'npm test >/tmp/token-optimizer-policy-out', workspacePath: root, profile: 'safe', allowedCommandPrefixes: ['npm test'] });
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reasonCode, 'WORKSPACE_ESCAPE');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('rm recursive force flags are denied regardless of order', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-'));
+  for (const command of ['rm -r -f target', 'rm -f -r target', 'rm -rf target']) {
+    const decision = await evaluateCommand({ command, workspacePath: root, profile: 'safe', allowedCommandPrefixes: ['rm'] });
+    assert.equal(decision.reasonCode, 'DESTRUCTIVE_PATTERN');
+  }
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('runner rejects blocked commands before execution', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-'));
+  const marker = path.join(os.tmpdir(), `token-optimizer-policy-${process.pid}-should-not-exist`);
+  const command = `printf blocked >${marker}`;
+  const result = await runCommand(command, root, 1000, { profile: 'safe', allowedCommandPrefixes: ['printf blocked'] });
+  assert.equal(result.policyReasonCode, 'WORKSPACE_ESCAPE');
+  assert.equal(fs.existsSync(marker), false);
+  fs.rmSync(root, { recursive: true, force: true });
+});

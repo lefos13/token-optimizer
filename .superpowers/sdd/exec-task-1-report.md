@@ -7,4 +7,9 @@ Implemented deny-first command policy and workspace confinement.
 - Extended execution configuration/types with optional auto-detected command prefixes.
 - Added focused policy tests covering allowlist, sensitive paths, symlink escape, profile behavior, and deny-first enforcement.
 
-Verification: focused policy tests, `npm run build`, and `git diff --check` all pass.
+Follow-up fixes closed review findings: redirection operands are parsed and
+confined, separated `rm -r -f`/`rm -f -r` flags are denied, and `runCommand`
+evaluates policy before invoking the shell. An integration test verifies a
+blocked command cannot execute.
+
+Verification: focused policy/runner tests, `npm run build`, and `git diff --check` all pass.
