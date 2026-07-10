@@ -206,8 +206,12 @@ function installClaude(options) {
      .claude-plugin/plugin.json as a full plugin (token-optimizer@skills-dir)
      on the next session — MCP server and skill included, no CLI needed. */
   const marketplaceAdded = tryClientCommand("claude", ["plugin", "marketplace", "add", options.installRoot], options);
-  const pluginInstalled = marketplaceAdded
-    && tryClientCommand("claude", ["plugin", "install", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`], options);
+  /* Claude owns installed marketplace versions separately from the source
+     directory. Refresh that version first, then install only when absent. */
+  const pluginInstalled = marketplaceAdded && (
+    tryClientCommand("claude", ["plugin", "update", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`], options)
+    || tryClientCommand("claude", ["plugin", "install", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`], options)
+  );
   if (!pluginInstalled) {
     copyDirectory(path.join(options.assetsRoot, "plugin", "claude"), path.join(options.home, ".claude", "skills", "token-optimizer"));
   }
@@ -230,6 +234,9 @@ function installCodex(options) {
      carries the installer-managed provider environment into the MCP process. */
   const marketplaceAdded = tryClientCommand("codex", ["plugin", "marketplace", "add", options.installRoot], options);
   if (marketplaceAdded) {
+    /* Codex caches installed marketplace plugins by version. Removing is
+       harmless on first install and forces a fresh cache before adding. */
+    tryClientCommand("codex", ["plugin", "remove", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options);
     tryClientCommand("codex", ["plugin", "add", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options);
   }
   const startJs = path.join(pluginDest, "server", "start.js");

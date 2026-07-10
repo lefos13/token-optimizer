@@ -277,6 +277,83 @@ test('installCodex writes the credential-bearing direct server after plugin CLI 
   assert.ok(codexToml.includes("LLM_GATEWAY_TOKEN = 'person-token'"));
 });
 
+/* Repeated marketplace installation must invalidate the installed Codex plugin
+   cache before adding the current staged plugin again. */
+test('installCodex refreshes an existing marketplace plugin before adding it again', () => {
+  const home = tmpDir('to-installer-home-');
+  const assetsRoot = tmpDir('to-installer-assets-');
+  const installRoot = path.join(home, '.token-optimizer');
+  const commandDir = tmpDir('to-installer-bin-');
+  const commandLog = path.join(home, 'codex-commands.log');
+  writeFixtureAssets(assetsRoot);
+
+  const fakeCodex = path.join(commandDir, process.platform === 'win32' ? 'codex.cmd' : 'codex');
+  if (process.platform === 'win32') {
+    fs.writeFileSync(fakeCodex, `@echo %*>>"${commandLog}"\r\n@exit /b 0\r\n`);
+  } else {
+    fs.writeFileSync(fakeCodex, `#!/usr/bin/env sh\nprintf '%s\\n' "$*" >> '${commandLog}'\n`);
+    fs.chmodSync(fakeCodex, 0o755);
+  }
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${commandDir}${path.delimiter}${originalPath || ''}`;
+  try {
+    installer.installCodex({
+      home,
+      assetsRoot,
+      installRoot,
+      gatewayToken: 'person-token',
+      skipLaunchctl: true,
+    });
+  } finally {
+    process.env.PATH = originalPath;
+  }
+
+  const commands = fs.readFileSync(commandLog, 'utf8').trim().split(/\r?\n/);
+  assert.deepEqual(commands, [
+    `plugin marketplace add ${installRoot}`,
+    'plugin remove token-optimizer --marketplace Softaware-marketplace',
+    'plugin add token-optimizer --marketplace Softaware-marketplace',
+  ]);
+});
+
+/* Claude owns a marketplace cache too, but its CLI offers a supported update
+   command; a repeat installer run should prefer it before fallback install. */
+test('installClaude refreshes an existing marketplace plugin with plugin update', () => {
+  const home = tmpDir('to-installer-home-');
+  const assetsRoot = tmpDir('to-installer-assets-');
+  const installRoot = path.join(home, '.token-optimizer');
+  const commandDir = tmpDir('to-installer-bin-');
+  const commandLog = path.join(home, 'claude-commands.log');
+  writeFixtureAssets(assetsRoot);
+
+  const fakeClaude = path.join(commandDir, process.platform === 'win32' ? 'claude.cmd' : 'claude');
+  if (process.platform === 'win32') {
+    fs.writeFileSync(fakeClaude, `@echo %*>>"${commandLog}"\r\n@exit /b 0\r\n`);
+  } else {
+    fs.writeFileSync(fakeClaude, `#!/usr/bin/env sh\nprintf '%s\\n' "$*" >> '${commandLog}'\n`);
+    fs.chmodSync(fakeClaude, 0o755);
+  }
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${commandDir}${path.delimiter}${originalPath || ''}`;
+  try {
+    installer.installClaude({
+      home,
+      assetsRoot,
+      installRoot,
+      gatewayToken: 'person-token',
+      skipLaunchctl: true,
+    });
+  } finally {
+    process.env.PATH = originalPath;
+  }
+
+  const commands = fs.readFileSync(commandLog, 'utf8').trim().split(/\r?\n/);
+  assert.deepEqual(commands, [
+    `plugin marketplace add ${installRoot}`,
+    'plugin update token-optimizer@token-optimizer-marketplace',
+  ]);
+});
+
 test('upsertCodexTomlServer replaces an existing section without touching other config', () => {
   const existing = [
     '[mcp_servers.playwright]',

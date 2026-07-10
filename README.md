@@ -27,6 +27,14 @@ The installer detects supported clients, installs the right plugin/server
 assets, writes provider configuration, and enables default-on usage where the
 client supports it. Restart your client after installation.
 
+Re-running the installer is safe and refreshes Token Optimizer. It replaces the
+installer-managed local assets for Antigravity, OpenCode, and Cursor; refreshes
+the Claude marketplace plugin when the Claude CLI is available; and removes
+then re-adds the Codex marketplace plugin so Codex replaces its versioned
+cache. When a client CLI is unavailable, the installer retains its local
+fallback instead. All local MCP registrations start `node` with `start.js`, so
+the same installation path works on Windows without Bash.
+
 Generated launchers verify that the MCP SDK and its Zod compatibility entry
 point are actually resolvable before starting. If an interrupted npm install
 left an incomplete launcher-owned dependency cache, the launcher removes only

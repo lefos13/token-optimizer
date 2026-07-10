@@ -8,7 +8,7 @@ regressions, and scout code without flooding chat context with raw logs.
 
 ## Contents
 
-- `.claude-plugin/plugin.json` — plugin manifest (`token-optimizer` v1.10.5).
+- `.claude-plugin/plugin.json` — plugin manifest (`token-optimizer` v1.10.6).
 - `.mcp.json` — registers the `token_optimizer` stdio server (tools exposed as `mcp__token_optimizer__*`).
 - `server/` — the compiled MCP server plus launchers (`start.js` cross-platform, `start.sh` POSIX) and a minimal `package.json`.
 - `skills/token-optimizer/SKILL.md` — usage guidance, copied from `skill/skill-example.md`.
@@ -58,7 +58,7 @@ the local path must be a git repository (this one is).
 For local development without a marketplace:
 
 ```bash
-claude --plugin-dir C:\Users\slode\Documents\Projects\local-llm-connector-mcp\plugin\claude
+claude --plugin-dir /Users/eevangelinos/.gemini/antigravity/scratch/local-tester-mcp/plugin/claude
 ```
 
 Then restart Claude Code (or run `/reload-plugins`) so the server and skill load.

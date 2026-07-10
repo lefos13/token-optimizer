@@ -193,6 +193,13 @@ If a tool exists in the server but is not exposed in the current Codex session, 
 
 Generated launchers validate that both the MCP SDK server entry point and `zod/v3` resolve from their launcher-owned dependency cache. If the manifest matches but the cache is incomplete, the launcher removes only that cached `node_modules`, reinstalls dependencies, validates them again, and starts the server. A failed repair exits with a concise stderr diagnostic instead of starting a broken MCP process. Codex marketplace configuration forwards `OPENROUTER_BYOK_KEY` alongside the gateway variables, so BYOK-only sessions do not need `LLM_GATEWAY_TOKEN`.
 
+Re-running the npm installer refreshes all client assets: Antigravity, OpenCode,
+and Cursor replace their installer-managed local files; Claude uses its plugin
+update command when available; and Codex removes then re-adds the plugin to
+replace its versioned cache. CLI-free fallbacks remain available for desktop
+installs, including Windows, where every local MCP registration runs `node`
+with `start.js` rather than Bash. Restart the affected client after installing.
+
 ## Guardrails
 
 **LLM provider:** Prefer the repo-shipped config manager (`npm run gateway:config -- setup`) to configure a provider into stable client-owned config surfaces for Claude Code, Gemini/Antigravity, OpenCode, Cursor, and the macOS GUI-session environment used by Codex and other GUI-launched clients. No gateway token is required — the manager (and the npm installer) prompt for one of three providers: a gateway token (shared infrastructure, daily-limited), a bring-your-own OpenRouter key (`OPENROUTER_BYOK_KEY`, unlimited usage, **no proxy token is asked for or written** — a BYOK-only caller isn't using the operator's OpenRouter setup, so the gateway does not authenticate them at all), or a local LLM only (`LOCAL_LLM_API_URL`/`LOCAL_LLM_MODEL`, no token at all) — plus a skip option. Generated plugins intentionally omit blank `LLM_GATEWAY_*` placeholders so inherited host values keep working after plugin reinstalls. The plugin talks to the gateway using `LLM_GATEWAY_URL` (preconfigured) plus either `LLM_GATEWAY_TOKEN` or `OPENROUTER_BYOK_KEY`; models are pinned server-side on the gateway per task type, so no client-side model selection is needed. When the gateway is not configured, the server falls back to a local OpenAI-compatible endpoint (`LOCAL_LLM_API_URL`). If a gateway call fails, the server automatically retries with the local endpoint and surfaces `fallbackReason` in the response. `check_local_llm_health` verifies gateway reachability the same way it verifies a local-endpoint configuration.

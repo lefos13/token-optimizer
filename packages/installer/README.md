@@ -19,6 +19,13 @@ locations, prompts for how to configure the LLM provider, writes supported
 client MCP config, and applies default-on global instructions where the client
 exposes a writable file.
 
+Re-running the installer is safe and refreshes Token Optimizer. It replaces
+installer-managed local files for Antigravity, OpenCode, and Cursor; updates
+the Claude marketplace plugin when the Claude CLI is available; and removes
+then re-adds the Codex marketplace plugin to replace Codex's versioned cache.
+If a client CLI is unavailable, the installer keeps the CLI-free local
+fallback. Restart the affected client after installation.
+
 **A gateway/proxy token is not required** to use this tool. With no provider
 flags, the installer prompts for one of three providers, plus a skip option:
 
@@ -57,10 +64,10 @@ Default `install` behavior:
 Client-specific behavior:
 
 - Claude Code:
-  adds the packaged marketplace, installs `token-optimizer@token-optimizer-marketplace`, writes `~/.claude/settings.json`, writes `~/.claude/CLAUDE.md`.
+  adds the packaged marketplace, updates `token-optimizer@token-optimizer-marketplace` (falling back to install when it is not yet present), writes `~/.claude/settings.json`, writes `~/.claude/CLAUDE.md`.
   If the `claude` CLI is unavailable (desktop-app installs, common on Windows), the plugin is instead copied into `~/.claude/skills/token-optimizer/`, which Claude Code loads as a skills-directory plugin (`token-optimizer@skills-dir`) on the next session.
 - Codex:
-  adds the packaged marketplace and installs `token-optimizer` from `Softaware-marketplace` for skill discovery. It always registers the bundled Node server as `[mcp_servers.token_optimizer]` in `~/.codex/config.toml`, carrying the selected provider environment into the MCP process, and copies the skill into `~/.codex/skills/token-optimizer/`.
+  adds the packaged marketplace, removes any installed `token-optimizer` cache entry, and adds it from `Softaware-marketplace` for skill discovery. It always registers the bundled Node server as `[mcp_servers.token_optimizer]` in `~/.codex/config.toml`, carrying the selected provider environment into the MCP process, and copies the skill into `~/.codex/skills/token-optimizer/`.
 - Antigravity:
   copies the plugin into `~/.gemini/config/plugins/token-optimizer`, writes Gemini/plugin MCP config, writes `~/.gemini/GEMINI.md`.
 - OpenCode:
