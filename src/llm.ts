@@ -1,5 +1,8 @@
 import { FailureDetail, LogQueryResponse, ScoutResponse, ScoutPointer, LLMResponseMetadata } from './types';
 import { FileCandidate } from './runner';
+import { LLMProvider, LLMHealthResponse, LLMTaskType, resolveProvider, providerHealth } from './providers';
+export { resolveProvider, providerHealth } from './providers';
+export type { LLMProvider, LLMHealthResponse, LLMTaskType } from './providers';
 
 /* Token usage is attached as private metadata for analytics, while provider metadata is also copied onto MCP JSON responses so callers can tell which local model answered and whether a fallback path was used. */
 export interface LLMUsage {
@@ -17,23 +20,6 @@ interface ChatCompletionResult {
 
 const LLM_USAGE = Symbol('llmUsage');
 const LLM_METADATA = Symbol('llmMetadata');
-
-export type LLMTaskType = 'verdict' | 'triage' | 'review' | 'digest' | 'scout' | 'query' | 'health';
-
-interface LLMProvider {
-  taskType: LLMTaskType;
-  providerName: string;
-  apiUrl: string;
-  model: string;
-  authHeaders: Record<string, string>;
-}
-
-export interface LLMHealthResponse extends LLMResponseMetadata {
-  apiBase: string;
-  available: boolean;
-  error?: string;
-  skipped?: boolean;
-}
 
 const LOCAL_PROVIDER_NAME = 'local-openai-compatible';
 export const GATEWAY_PROVIDER_NAME = 'gateway';
@@ -117,14 +103,9 @@ function fallbackMetadata(provider: LLMProvider, error: unknown, latencyMs: numb
 }
 
 function resolveLocalProvider(taskType: LLMTaskType): LLMProvider {
-  const modelEnvName = TASK_MODEL_ENV[taskType];
-  return {
-    taskType,
-    providerName: LOCAL_PROVIDER_NAME,
-    apiUrl: process.env.LOCAL_LLM_API_URL || DEFAULT_API_URL,
-    model: (modelEnvName && process.env[modelEnvName]) || process.env.LOCAL_LLM_MODEL || DEFAULT_MODEL,
-    authHeaders: {}
-  };
+  /* Leave model empty so the adapter applies task-specific LOCAL_LLM_<TASK>_MODEL
+     before the shared LOCAL_LLM_MODEL fallback. */
+  return resolveProvider({ mode: 'local', apiUrl: process.env.LOCAL_LLM_API_URL || DEFAULT_API_URL, model: '' }, taskType);
 }
 
 /* Gateway is the centralized proxy: it pins the model per task type via
@@ -137,6 +118,8 @@ function resolveLocalProvider(taskType: LLMTaskType): LLMProvider {
      model, it never authenticates a BYOK-only caller. An optional model
      header is sent only on the user-funded BYOK path. Either value alone is
      enough to engage the gateway; both may be set together. */
+/* Legacy environment resolution remains available through resolveProvider(taskType);
+   callers using EffectiveConfig should pass the provider object explicitly. */
 function resolveGatewayProvider(taskType: LLMTaskType): LLMProvider | null {
   const token = process.env.LLM_GATEWAY_TOKEN;
   const url = process.env.LLM_GATEWAY_URL;
@@ -145,26 +128,7 @@ function resolveGatewayProvider(taskType: LLMTaskType): LLMProvider | null {
   if (!url || (!token && !byokKey)) {
     return null;
   }
-  return {
-    taskType,
-    providerName: GATEWAY_PROVIDER_NAME,
-    apiUrl: url.replace(/\/+$/, ''),
-    model: 'gateway-managed',
-    authHeaders: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      'X-Task-Type': taskType,
-      ...(byokKey ? { 'X-OpenRouter-Key': byokKey } : {}),
-      ...(byokKey && byokModel ? { 'X-OpenRouter-Model': byokModel } : {})
-    }
-  };
-}
-
-export function resolveProvider(taskType: LLMTaskType): LLMProvider {
-  const gateway = resolveGatewayProvider(taskType);
-  if (gateway) {
-    return gateway;
-  }
-  return resolveLocalProvider(taskType);
+  return resolveProvider({ mode: token ? 'gateway-token' : 'gateway-byok', apiUrl: url, model: 'gateway-managed', credentialEnv: token ? 'LLM_GATEWAY_TOKEN' : 'OPENROUTER_BYOK_KEY' }, taskType);
 }
 
 export function combineLLMUsage(usage1?: LLMUsage, usage2?: LLMUsage): LLMUsage | undefined {
@@ -308,68 +272,7 @@ function redactApiBase(apiUrl: string): string {
 }
 
 export async function checkLocalLLMHealth(): Promise<LLMHealthResponse> {
-  /* Gateway is the configured primary whenever a token or a BYOK key is set
-     (see resolveGatewayProvider): ping its /health (served at the root, not
-     under /v1) to confirm reachability before real calls spend tokens. A
-     BYOK-only setup has no token to validate, so the request omits auth
-     entirely and this only proves the gateway itself is reachable. */
-  const gatewayUrl = process.env.LLM_GATEWAY_URL;
-  const gatewayToken = process.env.LLM_GATEWAY_TOKEN;
-  if (gatewayUrl && (gatewayToken || process.env.OPENROUTER_BYOK_KEY)) {
-    const base = gatewayUrl.replace(/\/+$/, '');
-    const healthUrl = `${base.replace(/\/v1$/, '')}/health`;
-    const start = Date.now();
-    try {
-      const response = await fetch(healthUrl, gatewayToken ? { headers: { Authorization: `Bearer ${gatewayToken}` } } : {});
-      if (!response.ok) {
-        throw new Error(`Gateway health ${response.status} ${response.statusText}`);
-      }
-      return {
-        llmAvailable: true,
-        llmProvider: GATEWAY_PROVIDER_NAME,
-        llmModel: 'gateway-managed',
-        llmLatencyMs: Date.now() - start,
-        llmTaskType: 'health',
-        apiBase: redactApiBase(base),
-        available: true
-      };
-    } catch (error: any) {
-      return {
-        llmAvailable: false,
-        llmProvider: GATEWAY_PROVIDER_NAME,
-        llmModel: 'gateway-managed',
-        llmLatencyMs: Date.now() - start,
-        llmTaskType: 'health',
-        apiBase: redactApiBase(base),
-        available: false,
-        error: error.message || String(error)
-      };
-    }
-  }
-
-  const provider = resolveLocalProvider('health');
-  const systemPrompt = 'Return JSON only.';
-  const userPrompt = 'Return {"ok":true}.';
-  const start = Date.now();
-
-  try {
-    const completion = await callChatCompletion(provider, systemPrompt, userPrompt);
-    JSON.parse(extractJSON(completion.content));
-    return {
-      ...completion.metadata,
-      apiBase: redactApiBase(provider.apiUrl),
-      available: true
-    };
-  } catch (error: any) {
-    const latencyMs = Date.now() - start;
-    const metadata = fallbackMetadata(provider, error, latencyMs);
-    return {
-      ...metadata,
-      apiBase: redactApiBase(provider.apiUrl),
-      available: false,
-      error: error.message || String(error)
-    };
-  }
+  return providerHealth(resolveProvider('health'));
 }
 
 export async function queryLocalLLM(

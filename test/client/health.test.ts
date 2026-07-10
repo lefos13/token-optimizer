@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { checkLocalLLMHealth, GATEWAY_PROVIDER_NAME } from '../../src/llm';
+import { providerHealth, resolveProvider } from '../../src/providers';
 
 test('health pings the gateway /health (stripping the /v1 suffix) and reports available', async () => {
   delete process.env.OPENROUTER_API_KEY;
@@ -60,5 +61,23 @@ test('health reports unavailable when the gateway ping fails', async () => {
     globalThis.fetch = orig;
     delete process.env.LLM_GATEWAY_URL;
     delete process.env.LLM_GATEWAY_TOKEN;
+  }
+});
+
+test('providerHealth checks an explicitly selected direct provider', async () => {
+  process.env.OPENROUTER_API_KEY = 'sk-or-user';
+  const orig = globalThis.fetch;
+  let calledUrl = '';
+  globalThis.fetch = (async (url: any) => {
+    calledUrl = String(url);
+    return new Response('{}', { status: 200 });
+  }) as typeof fetch;
+  try {
+    const result = await providerHealth(resolveProvider({ mode: 'openrouter-direct', apiUrl: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o-mini', credentialEnv: 'OPENROUTER_API_KEY' }, 'health'));
+    assert.equal(result.available, true);
+    assert.equal(calledUrl, 'https://openrouter.ai/api/health');
+  } finally {
+    globalThis.fetch = orig;
+    delete process.env.OPENROUTER_API_KEY;
   }
 });
