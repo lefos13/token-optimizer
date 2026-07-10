@@ -43,7 +43,7 @@ the server. Codex marketplace launches also forward `OPENROUTER_BYOK_KEY`, so
 BYOK mode does not require a gateway access token.
 
 Run `npx @softawarest/token-optimizer-installer --help` to see non-interactive
-options such as `--token`, `--byok-key`, and `--local`.
+options such as `--token`, `--byok-key`, `--byok-model`, and `--local`.
 
 ## Use it
 
@@ -69,6 +69,13 @@ of this repository if you want a local multi-workspace analytics dashboard.
 Gateway calls use an approved access token and have the gateway's configured
 daily allowance. A BYOK OpenRouter key is independent of the shared gateway
 quota. A local provider keeps inference on your machine.
+
+`OPENROUTER_BYOK_MODEL` is optional and works only with
+`OPENROUTER_BYOK_KEY`. When set, it selects one OpenRouter model for verdict,
+triage, review, digest, scout, and query requests. When omitted or blank, the
+gateway keeps its task-specific/default model selection. Shared gateway-token
+callers cannot override the gateway's model. The installer prompts for this
+optional value after the BYOK key, or accepts `--byok-model <model-id>`.
 
 The gateway's public token-request portal uses a honeypot and completion-time
 check in addition to its existing rate limit. Operators with email delivery

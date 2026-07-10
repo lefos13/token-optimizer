@@ -30,7 +30,11 @@ Writes are atomic; deleting the directory resets the registry and the stats.
 - `GET /health` → `{"ok":true}`. Unauthenticated for plain liveness (uptime pings), but if an `Authorization: Bearer <proxy-token>` header is presented — as the MCP client's health check does — the token is validated (without consuming a daily use) and an invalid one is rejected with `401`, so misconfigured tokens are caught at health-check time.
 - `POST /v1/chat/completions` → OpenAI-compatible.
   The `X-Task-Type` header (`verdict|triage|review|digest|scout|query`) selects the
-  pinned model. The client's `model` field is always ignored.
+  pinned model. The client's `model` field is always ignored. A BYOK caller may
+  also send `X-OpenRouter-Model: provider/model`; the gateway validates this
+  format and uses it for every task request. An invalid value returns
+  `400 { "error": "invalid BYOK model" }`. The header is ignored unless the
+  request follows the valid BYOK path with `X-OpenRouter-Key`.
   - **Without** a valid `X-OpenRouter-Key`: requires `Authorization: Bearer
     <proxy-token>`. Issued tokens consume one daily use per call; past the
     limit the gateway returns

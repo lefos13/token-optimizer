@@ -57,7 +57,7 @@ Default `install` behavior:
 - copies bundled plugin/server/skill assets for Antigravity, OpenCode, and Cursor
 - writes the resulting provider env vars into supported client config:
   - `gateway` → `LLM_GATEWAY_URL`, `LLM_GATEWAY_TOKEN`
-  - `byok` → `LLM_GATEWAY_URL`, `OPENROUTER_BYOK_KEY` (no `LLM_GATEWAY_TOKEN` is written)
+  - `byok` → `LLM_GATEWAY_URL`, `OPENROUTER_BYOK_KEY`, optional `OPENROUTER_BYOK_MODEL` (no `LLM_GATEWAY_TOKEN` is written)
   - `local` → `LOCAL_LLM_API_URL`, `LOCAL_LLM_MODEL`
 - writes default-on instruction files for Claude Code, Codex, Antigravity, and OpenCode
 
@@ -84,6 +84,7 @@ npx @softawarest/token-optimizer-installer --clients all --cursor-project /path/
 npx @softawarest/token-optimizer-installer --local
 npx @softawarest/token-optimizer-installer --local --local-url http://localhost:11434/v1 --local-model llama3
 npx @softawarest/token-optimizer-installer --byok-key sk-or-...
+npx @softawarest/token-optimizer-installer --byok-key sk-or-... --byok-model provider/model
 npx @softawarest/token-optimizer-installer --provider skip
 npx @softawarest/token-optimizer-installer config --token <token>
 npx @softawarest/token-optimizer-installer config --byok-key sk-or-...
@@ -98,6 +99,10 @@ Flow-specific commands:
   full install with a local LLM only; no token, no gateway config written.
 - `npx @softawarest/token-optimizer-installer --byok-key sk-or-...`:
   full install with your own OpenRouter key; no proxy token is asked for or written.
+  The installer prompts for an optional model after the key, or accepts
+  `--byok-model <model-id>`. This setting is used only with BYOK; when omitted
+  or blank, the gateway keeps its task-specific/default model selection.
+  Shared gateway-token callers cannot override the gateway model.
 - `npx @softawarest/token-optimizer-installer --no-defaults`:
   full install and provider config, but skip default-on instructions.
 - `npx @softawarest/token-optimizer-installer config --token <token>`:
