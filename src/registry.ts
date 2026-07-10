@@ -59,6 +59,7 @@ export function loadRun(workspacePath: string, runId: string): RunRecord | null 
 
 /* Resolve an absolute log path from either an explicit logPath (absolute or workspace-relative) or a runId looked up in the index. Returns null when neither resolves. */
 export function resolveLogPath(workspacePath: string, opts: { runId?: string; logPath?: string }): string | null {
+  try { const root = path.resolve(workspacePath, LOG_DIR); if (fs.existsSync(root) && fs.lstatSync(root).isSymbolicLink()) return null; } catch { return null; }
   if (opts.logPath) {
     const candidate = path.isAbsolute(opts.logPath) ? path.resolve(opts.logPath) : path.resolve(workspacePath, opts.logPath);
     const root = path.resolve(workspacePath, LOG_DIR);
