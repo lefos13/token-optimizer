@@ -31,10 +31,15 @@ function tokens(command: string): string[] {
 
 function redirectionTargets(command: string): string[] {
   const targets: string[] = [];
-  const pattern = /(?:^|\s)(?:\d*)>{1,2}\s*(?:"([^"]+)"|'([^']+)'|(\S+))/g;
-  for (const match of command.matchAll(pattern)) {
+  /* Match both spaced and compact operators (for example `cmd>/tmp/out` and
+     `2>/tmp/out`) while ignoring descriptor duplication such as `2>&1`. */
+  const patterns = [
+    /(?:^|\s|[^\s])(?:\d*)>{1,2}\s*(?:"([^"]+)"|'([^']+)'|(\S+))/g,
+    /(?:^|\s|[^\s])(?:\d*)<(?!!<)\s*(?:"([^"]+)"|'([^']+)'|(\S+))/g,
+  ];
+  for (const pattern of patterns) for (const match of command.matchAll(pattern)) {
     const target = match[1] || match[2] || match[3];
-    if (target && !target.startsWith('&')) targets.push(target);
+    if (target && !target.startsWith('&') && !target.startsWith('<')) targets.push(target);
   }
   return targets;
 }

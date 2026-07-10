@@ -46,9 +46,11 @@ test('unrestricted still observes deny-first safety checks', async () => {
 
 test('redirection targets outside the workspace are denied', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-'));
-  const decision = await evaluateCommand({ command: 'npm test >/tmp/token-optimizer-policy-out', workspacePath: root, profile: 'safe', allowedCommandPrefixes: ['npm test'] });
-  assert.equal(decision.allowed, false);
-  assert.equal(decision.reasonCode, 'WORKSPACE_ESCAPE');
+  for (const command of ['npm test >/tmp/token-optimizer-policy-out', 'npm test>/tmp/token-optimizer-policy-out', 'npm test 2>/tmp/token-optimizer-policy-out', 'npm test>>/tmp/token-optimizer-policy-out', 'cat </tmp/token-optimizer-policy-in']) {
+    const decision = await evaluateCommand({ command, workspacePath: root, profile: 'safe', allowedCommandPrefixes: ['npm test', 'cat'] });
+    assert.equal(decision.allowed, false, command);
+    assert.equal(decision.reasonCode, 'WORKSPACE_ESCAPE', command);
+  }
   fs.rmSync(root, { recursive: true, force: true });
 });
 

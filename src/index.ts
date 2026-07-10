@@ -9,6 +9,7 @@ import { runSuite, trimLog, numberLines, getGitDiff, gatherCandidates } from './
 import { queryLocalLLM, queryCodeReview, queryCommandDigest, queryLogQuestion, queryScout, getLLMUsage, getLLMMetadata, attachLLMUsage, combineLLMUsage, checkLocalLLMHealth } from './llm';
 import { resolveLogPath, grepLog } from './registry';
 import { RunTestVerdictArgs, RunCommandDigestArgs, RunScoutArgs } from './types';
+import { resolveEffectiveConfig } from './config';
 import { buildAnalyticsRecord, inferWorkspaceFromLogPath, recordAnalytics } from './analytics';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -367,7 +368,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // 2. Run commands
-      const suiteResult = await runSuite(commandsToRun, workspacePath, { maxOutputLines, timeoutMs, parallel });
+      const effective = resolveEffectiveConfig({ workspacePath, env: process.env });
+      const execution = { ...effective.execution, autoDetectedCommands: testCommand ? [] : commandsToRun };
+      const suiteResult = await runSuite(commandsToRun, workspacePath, { maxOutputLines, timeoutMs, parallel, execution });
 
       // Create a dictionary of command -> exitCode for easy triaging
       const exitCodes: Record<string, number> = {};
@@ -672,7 +675,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      const suiteResult = await runSuite(commandsToRun, workspacePath, {});
+      const effective = resolveEffectiveConfig({ workspacePath, env: process.env });
+      const suiteResult = await runSuite(commandsToRun, workspacePath, { execution: { ...effective.execution, autoDetectedCommands: commandsToRun } });
       const exitCodes: Record<string, number> = {};
       let hasFailures = false;
       for (const res of suiteResult.results) {
@@ -755,7 +759,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      const suiteResult = await runSuite(commandsToRun, workspacePath, { maxOutputLines, timeoutMs });
+      const effective = resolveEffectiveConfig({ workspacePath, env: process.env });
+      const suiteResult = await runSuite(commandsToRun, workspacePath, { maxOutputLines, timeoutMs, execution: effective.execution });
 
       /* Exit codes stay authoritative: report them verbatim and derive an effective code (non-zero if any command failed). The LLM only describes the output. */
       const exitCodes: Record<string, number> = {};
