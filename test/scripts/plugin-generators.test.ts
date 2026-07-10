@@ -33,8 +33,9 @@ test('every plugin generator carries the release version and delegates POSIX sta
   }
 });
 
-test('Codex marketplace configuration forwards the OpenRouter BYOK key', () => {
+test('Codex marketplace configuration forwards the OpenRouter BYOK credentials', () => {
   const source = readGenerator('generate-plugin-codex.js');
   const envVars = source.match(/env_vars:\s*\[([\s\S]*?)\]/)?.[1] || '';
   assert.match(envVars, /OPENROUTER_BYOK_KEY/);
+  assert.match(envVars, /OPENROUTER_BYOK_MODEL/);
 });

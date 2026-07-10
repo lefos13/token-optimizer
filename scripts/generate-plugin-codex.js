@@ -159,6 +159,7 @@ try {
           "LLM_GATEWAY_TOKEN",
           "LLM_GATEWAY_URL",
           "OPENROUTER_BYOK_KEY",
+          "OPENROUTER_BYOK_MODEL",
         ],
         env: {
           LLM_GATEWAY_URL: "https://llm-proxy.lnf.gr/v1",
