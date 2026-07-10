@@ -56,12 +56,16 @@ export function runCommand(command: string, workspacePath: string, timeoutMs: nu
     let outBytes = 0, errBytes = 0;
     const MAX_EXCERPT = 100_000;
     let fileStream: fs.WriteStream | undefined;
+    let fileCarry = '';
     try { if (logFilePath) fileStream = fs.createWriteStream(logFilePath, { flags: 'w' }); } catch { /* best effort */ }
     const collect = (target: string[], chunk: Buffer, stream: 'stdout' | 'stderr') => {
       const bytes = chunk.byteLength;
       if (stream === 'stdout') outBytes += bytes; else errBytes += bytes;
       fileStream?.write(`[${stream}] `);
-      fileStream?.write(storageMode === 'redacted-local' ? redactText(chunk.toString()).text : chunk);
+      if (fileStream) {
+        if (storageMode === 'redacted-local') { const text = fileCarry + chunk.toString(); const cut = Math.max(0, text.length - 128); fileStream.write(redactText(text.slice(0, cut)).text); fileCarry = text.slice(cut); }
+        else fileStream.write(chunk);
+      }
       const text = chunk.toString();
       const current = target.join('');
       if (current.length < MAX_EXCERPT) target.push(text.slice(0, MAX_EXCERPT - current.length));
@@ -71,7 +75,7 @@ export function runCommand(command: string, workspacePath: string, timeoutMs: nu
     };
     child.stdout?.on('data', (c: Buffer) => collect(out, c, 'stdout'));
     child.stderr?.on('data', (c: Buffer) => collect(err, c, 'stderr'));
-    const closeFile = () => { if (fileStream) { fileStream.end(); fileStream = undefined; } };
+    const closeFile = () => { if (fileStream) { if (storageMode === 'redacted-local' && fileCarry) fileStream.write(redactText(fileCarry).text); fileCarry = ''; fileStream.end(); fileStream = undefined; } };
     const finish = (result: RunCommandResult) => {
       if (settled) return;
       settled = true;

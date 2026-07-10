@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRunLog, ensureLogGitignore, purgeLogs, pruneLogs } from '../../src/log-store';
 import { appendRun, loadRun } from '../../src/registry';
+import { resolveLogPath } from '../../src/registry';
 
 test('lifecycle redacts split secrets and honors purge scope', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'task5-')); const log = await createRunLog(root, { storageMode: 'redacted-local', runId: 'x' });
@@ -26,4 +27,10 @@ test('prune expires logs before quota victims', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'task5-')); const dir = path.join(root, '.codex-local-test-runs'); await fs.mkdir(dir);
   await fs.writeFile(path.join(dir, 'old.log'), 'x'); const old = new Date(Date.now() - 10 * 86400000); await fs.utimes(path.join(dir, 'old.log'), old, old);
   const result = await pruneLogs(root, { retentionDays: 7, maxDiskMb: 500 }); assert.equal(result.removed[0]?.reason, 'expired');
+});
+
+test('registry rejects log symlink escapes', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'task5-')); const dir = path.join(root, '.codex-local-test-runs'); await fs.mkdir(dir);
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'outside-')); await fs.writeFile(path.join(outside, 'secret.log'), 'x'); await fs.symlink(path.join(outside, 'secret.log'), path.join(dir, 'link.log'));
+  assert.equal(resolveLogPath(root, { logPath: '.codex-local-test-runs/link.log' }), null);
 });

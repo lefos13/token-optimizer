@@ -65,14 +65,14 @@ export function resolveLogPath(workspacePath: string, opts: { runId?: string; lo
     const candidate = path.isAbsolute(opts.logPath) ? path.resolve(opts.logPath) : path.resolve(workspacePath, opts.logPath);
     const root = path.resolve(workspacePath, LOG_DIR);
     if (candidate !== root && !candidate.startsWith(`${root}${path.sep}`)) return null;
-    return candidate;
+    try { const real = fs.realpathSync(candidate); const canonicalRoot = fs.realpathSync(root); return real === canonicalRoot || real.startsWith(`${canonicalRoot}${path.sep}`) ? real : null; } catch { return null; }
   }
   if (opts.runId) {
     const rec = loadRun(workspacePath, opts.runId);
     if (rec) {
       const candidate = path.resolve(workspacePath, rec.rawLogPath);
       const root = path.resolve(workspacePath, LOG_DIR);
-      return candidate === root || candidate.startsWith(`${root}${path.sep}`) ? candidate : null;
+      try { const real = fs.realpathSync(candidate); const canonicalRoot = fs.realpathSync(root); return real === canonicalRoot || real.startsWith(`${canonicalRoot}${path.sep}`) ? real : null; } catch { return null; }
     }
   }
   return null;
