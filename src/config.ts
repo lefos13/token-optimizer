@@ -27,7 +27,7 @@ const configSchema = z.object({
     maxDiskMb: z.number().positive().optional(),
     storageMode: z.enum(['raw-local', 'redacted-local']).optional(),
   }).partial().optional(),
-}).passthrough();
+}).strict();
 
 const profiles: ExecutionProfile[] = ['safe', 'standard', 'unrestricted'];
 const DEFAULT_LOCAL_URL = 'http://localhost:8080/v1';
@@ -80,7 +80,7 @@ function resolveProviderConfig(input: ConfigLayers, warnings: string[]): Effecti
   }
   const configuredUrl = input.tool?.provider?.apiUrl || input.project?.provider?.apiUrl || input.user?.provider?.apiUrl;
   const url = configuredUrl || env.LLM_GATEWAY_URL;
-  const model = input.tool?.provider?.model || input.project?.provider?.model || input.user?.provider?.model || env.LOCAL_LLM_MODEL;
+  const model = input.tool?.provider?.model || input.project?.provider?.model || input.user?.provider?.model;
   const byok = env.OPENROUTER_BYOK_KEY;
   const gatewayToken = env.LLM_GATEWAY_TOKEN;
   const directKey = env.OPENROUTER_API_KEY;
@@ -99,9 +99,9 @@ function resolveProviderConfig(input: ConfigLayers, warnings: string[]): Effecti
   }
   if (mode === 'gateway-token' && !explicit) warnings.push('gateway environment variables are a legacy compatibility configuration');
   if (mode === 'gateway-byok' && !explicit) warnings.push('OPENROUTER_BYOK_KEY is a legacy gateway-byok credential');
-  if (mode === 'local') return { mode, apiUrl: configuredUrl || env.LOCAL_LLM_API_URL || DEFAULT_LOCAL_URL, model: model || DEFAULT_LOCAL_MODEL };
-  if (mode === 'openrouter-direct') return { mode, apiUrl: configuredUrl || DEFAULT_OPENROUTER_URL, model: model || env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL, credentialEnv: 'OPENROUTER_API_KEY' };
-  return { mode, apiUrl: url as string, model: model || DEFAULT_LOCAL_MODEL, credentialEnv: mode === 'gateway-token' ? 'LLM_GATEWAY_TOKEN' : 'OPENROUTER_BYOK_KEY' };
+  if (mode === 'local') return { mode, apiUrl: configuredUrl || env.LOCAL_LLM_API_URL || DEFAULT_LOCAL_URL, model: model || env.LOCAL_LLM_MODEL || DEFAULT_LOCAL_MODEL };
+  if (mode === 'openrouter-direct') return { mode, apiUrl: configuredUrl || DEFAULT_OPENROUTER_URL, model: model || env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL, credentialEnv: 'OPENROUTER_API_KEY', credential: directKey };
+  return { mode, apiUrl: url as string, model: model || DEFAULT_LOCAL_MODEL, credentialEnv: mode === 'gateway-token' ? 'LLM_GATEWAY_TOKEN' : 'OPENROUTER_BYOK_KEY', credential: mode === 'gateway-token' ? gatewayToken : byok, byokCredential: mode === 'gateway-token' ? byok : undefined, byokModel: env.OPENROUTER_BYOK_MODEL?.trim() || undefined };
 }
 
 function resolveAllowlist(input: ConfigLayers): string[] {

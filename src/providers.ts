@@ -43,6 +43,7 @@ function modelFor(taskType: LLMTaskType, fallback: string): string {
 function normalizeUrl(url: string): string { return url.replace(/\/+$/, ''); }
 
 function credential(config: ProviderConfig, fallbackEnv: string): string {
+  if (config.credential !== undefined) return config.credential;
   const envName = config.credentialEnv || fallbackEnv;
   return process.env[envName] || '';
 }
@@ -59,7 +60,7 @@ export function resolveProvider(configOrTask: ProviderConfig | LLMTaskType, task
     const token = env.LLM_GATEWAY_TOKEN;
     const byok = env.OPENROUTER_BYOK_KEY;
     if (gatewayUrl && (token || byok)) {
-      return resolveProvider({ mode: token ? 'gateway-token' : 'gateway-byok', apiUrl: gatewayUrl, model: 'gateway-managed', credentialEnv: token ? 'LLM_GATEWAY_TOKEN' : 'OPENROUTER_BYOK_KEY' }, taskType);
+      return resolveProvider({ mode: token ? 'gateway-token' : 'gateway-byok', apiUrl: gatewayUrl, model: 'gateway-managed', credentialEnv: token ? 'LLM_GATEWAY_TOKEN' : 'OPENROUTER_BYOK_KEY', credential: token || byok, byokCredential: token ? byok : undefined, byokModel: byok ? env.OPENROUTER_BYOK_MODEL?.trim() || undefined : undefined }, taskType);
     }
     return resolveProvider({ mode: 'local', apiUrl: env.LOCAL_LLM_API_URL || DEFAULT_LOCAL_URL, model: modelFor(taskType, DEFAULT_LOCAL_MODEL) }, taskType);
   }
@@ -72,12 +73,12 @@ export function resolveProvider(configOrTask: ProviderConfig | LLMTaskType, task
     case 'gateway-token':
       return { mode: config.mode, taskType, providerName: 'gateway', apiUrl: normalizeUrl(config.apiUrl), model: config.model || 'gateway-managed', authHeaders: {
         Authorization: `Bearer ${credential(config, 'LLM_GATEWAY_TOKEN')}`, 'X-Task-Type': taskType,
-        ...(process.env.OPENROUTER_BYOK_KEY ? { 'X-OpenRouter-Key': process.env.OPENROUTER_BYOK_KEY } : {}),
-        ...(process.env.OPENROUTER_BYOK_KEY && process.env.OPENROUTER_BYOK_MODEL?.trim() ? { 'X-OpenRouter-Model': process.env.OPENROUTER_BYOK_MODEL.trim() } : {})
+        ...(config.byokCredential ? { 'X-OpenRouter-Key': config.byokCredential } : {}),
+        ...(config.byokModel ? { 'X-OpenRouter-Model': config.byokModel } : {})
       }, warnings };
     case 'gateway-byok': {
       const headers: Record<string, string> = { 'X-Task-Type': taskType, 'X-OpenRouter-Key': credential(config, 'OPENROUTER_BYOK_KEY') };
-      const byokModel = process.env.OPENROUTER_BYOK_MODEL?.trim();
+      const byokModel = config.byokModel;
       if (byokModel) headers['X-OpenRouter-Model'] = byokModel;
       return { mode: config.mode, taskType, providerName: 'gateway', apiUrl: normalizeUrl(config.apiUrl), model: config.model || 'gateway-managed', authHeaders: headers, warnings };
     }

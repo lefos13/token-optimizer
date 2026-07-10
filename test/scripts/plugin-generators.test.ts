@@ -40,3 +40,18 @@ test('Codex marketplace configuration forwards the OpenRouter BYOK credentials',
   assert.match(envVars, /OPENROUTER_BYOK_KEY/);
   assert.match(envVars, /OPENROUTER_BYOK_MODEL/);
 });
+
+test('generated server bundles include every runtime module required by llm.js', () => {
+  const bundles = ['antigravity', 'claude', 'codex', 'opencode', 'cursor'];
+  const required = ['providers.js', 'llm-schemas.js', 'redaction.js', 'config.js'];
+  for (const bundle of bundles) {
+    for (const file of required) {
+      const generated = path.join(root, 'plugin', bundle, 'server', file);
+      assert.ok(fs.existsSync(generated), `${bundle} missing ${file}`);
+      assert.doesNotThrow(() => require(generated), `${bundle} cannot load ${file}`);
+      const installer = path.join(root, 'packages', 'installer', 'assets', 'plugin', bundle, 'server', file);
+      assert.ok(fs.existsSync(installer), `installer ${bundle} missing ${file}`);
+      assert.doesNotThrow(() => require(installer), `installer ${bundle} cannot load ${file}`);
+    }
+  }
+});

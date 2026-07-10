@@ -17,7 +17,7 @@ send the configured gateway operator (`GMAIL_USER`) a best-effort email alert.
 
 Currently implemented server tools:
 
-- `check_local_llm_health`: verifies the configured LLM provider. When `LLM_GATEWAY_URL` and `LLM_GATEWAY_TOKEN` are set, pings the gateway and returns availability metadata. Otherwise pings the local OpenAI-compatible endpoint.
+- `check_local_llm_health`: verifies the configured LLM provider (local, gateway, or direct OpenRouter) and returns availability metadata.
 - `run_test_verdict`: runs build/lint/test/smoke commands in a workspace and returns a compact local-LLM verdict.
 - `run_failure_triage`: analyzes an existing log file and returns compact root-cause/fix guidance.
 - `run_changed_files_review`: reads changed files under 500 KB and asks the local LLM for likely issues before expensive validation.

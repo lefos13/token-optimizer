@@ -3,6 +3,8 @@ import { FileCandidate } from './runner';
 import { LLMProvider, LLMHealthResponse, LLMTaskType, resolveProvider, providerHealth } from './providers';
 import { parseLLMResponse } from './llm-schemas';
 import { redactText, RedactionResult } from './redaction';
+import { resolveEffectiveConfig } from './config';
+import type { EffectiveConfig } from './types';
 export { resolveProvider, providerHealth } from './providers';
 export type { LLMProvider, LLMHealthResponse, LLMTaskType } from './providers';
 
@@ -133,10 +135,18 @@ function metadataForFailure(provider: LLMProvider, error: unknown, latencyMs: nu
   return metadata;
 }
 
-function resolveLocalProvider(taskType: LLMTaskType): LLMProvider {
+type LLMContext = { workspacePath?: string; effectiveConfig?: EffectiveConfig };
+
+function resolveContextProvider(taskType: LLMTaskType, context: LLMContext = {}): LLMProvider {
+  const effective = context.effectiveConfig || resolveEffectiveConfig({ workspacePath: context.workspacePath });
+  return resolveProvider(effective.provider, taskType);
+}
+
+function resolveLocalProvider(taskType: LLMTaskType, context: LLMContext = {}): LLMProvider {
   /* Leave model empty so the adapter applies task-specific LOCAL_LLM_<TASK>_MODEL
      before the shared LOCAL_LLM_MODEL fallback. */
-  return resolveProvider({ mode: 'local', apiUrl: process.env.LOCAL_LLM_API_URL || DEFAULT_API_URL, model: '' }, taskType);
+  const effective = context.effectiveConfig || resolveEffectiveConfig({ workspacePath: context.workspacePath, env: process.env });
+  return resolveProvider({ ...effective.provider, mode: 'local', apiUrl: process.env.LOCAL_LLM_API_URL || DEFAULT_API_URL, model: '' }, taskType);
 }
 
 /* Gateway is the centralized proxy: it pins the model per task type via
@@ -281,16 +291,16 @@ async function callChatCompletion(provider: LLMProvider, systemPrompt: string, u
 
 /* Resolve provider, attempt the call. If the primary provider is the gateway and the call
    fails, retry once with the local provider and surface the fallback reason in metadata. */
-async function callWithFallback(taskType: LLMTaskType, systemPrompt: string, userPrompt: string): Promise<ChatCompletionResult> {
-  const provider = resolveProvider(taskType);
-  const isRemote = provider.providerName === GATEWAY_PROVIDER_NAME;
+async function callWithFallback(taskType: LLMTaskType, systemPrompt: string, userPrompt: string, context: LLMContext = {}): Promise<ChatCompletionResult> {
+  const provider = resolveContextProvider(taskType, context);
+  const isRemote = provider.mode !== 'local';
   try {
     return await callChatCompletion(provider, systemPrompt, userPrompt);
   } catch (error) {
     if (!isRemote) {
       throw error;
     }
-    const localProvider = resolveLocalProvider(taskType);
+    const localProvider = resolveLocalProvider(taskType, context);
     const result = await callChatCompletion(localProvider, systemPrompt, userPrompt);
     result.metadata = {
       ...result.metadata,
@@ -310,8 +320,8 @@ function redactApiBase(apiUrl: string): string {
   }
 }
 
-export async function checkLocalLLMHealth(): Promise<LLMHealthResponse> {
-  return providerHealth(resolveProvider('health'));
+export async function checkLocalLLMHealth(workspacePath?: string): Promise<LLMHealthResponse> {
+  return providerHealth(resolveContextProvider('health', { workspacePath }));
 }
 
 export async function queryLocalLLM(
@@ -320,7 +330,8 @@ export async function queryLocalLLM(
   exitCodes: Record<string, number>,
   changedFiles: string[],
   trimmedLogs: string,
-  taskType: Extract<LLMTaskType, 'verdict' | 'triage'> = 'verdict'
+  taskType: Extract<LLMTaskType, 'verdict' | 'triage'> = 'verdict',
+  workspacePath?: string
 ): Promise<LLMVerdictResponse> {
   const systemPrompt = `You are a diagnostic and test-log triage assistant.
 You analyze build logs, linter outputs, typechecker warnings/errors, and test execution results.
@@ -358,7 +369,7 @@ ${trimmedLogs}`;
   const start = Date.now();
   let completion: ChatCompletionResult | undefined;
   try {
-    completion = await callWithFallback(taskType, systemPrompt, userPrompt);
+    completion = await callWithFallback(taskType, systemPrompt, userPrompt, { workspacePath });
     const jsonString = extractJSON(completion.content);
     const parsed = parseLLMResponse(taskType, jsonString);
     if (!parsed.success) throw new LLMValidationFailure(parsed.validationErrors);
@@ -379,7 +390,7 @@ ${trimmedLogs}`;
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
     // If the local model is offline, fails to respond, or output is unparseable
-    const provider = resolveProvider(taskType);
+    const provider = resolveContextProvider(taskType, { workspacePath });
     return attachLLMMetadata({
       verdict: 'uncertain',
       confidence: 0.0,
@@ -409,7 +420,7 @@ export interface CodeReviewResponse extends LLMResponseMetadata {
 }
 
 export async function queryCodeReview(
-  files: { filename: string; content: string }[]
+  files: { filename: string; content: string }[], workspacePath?: string
 ): Promise<CodeReviewResponse> {
   const systemPrompt = `You are a code review assistant.
 Analyze the provided code changes in the files.
@@ -440,7 +451,7 @@ Schema:
   const start = Date.now();
   let completion: ChatCompletionResult | undefined;
   try {
-    completion = await callWithFallback('review', systemPrompt, userPrompt);
+    completion = await callWithFallback('review', systemPrompt, userPrompt, { workspacePath });
     const jsonString = extractJSON(completion.content);
     const parsed = parseLLMResponse('review', jsonString);
     if (!parsed.success) throw new LLMValidationFailure(parsed.validationErrors);
@@ -448,7 +459,7 @@ Schema:
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
     /* The local LLM is offline or returned unparseable output. Stay conservative: report no issues rather than a phantom warning, and flag that the review did not actually run. */
-    const provider = resolveProvider('review');
+    const provider = resolveContextProvider('review', { workspacePath });
     return attachLLMMetadata({
       hasIssues: false,
       issues: [],
@@ -471,7 +482,7 @@ export async function queryCommandDigest(
   intent: string,
   commands: string[],
   exitCodes: Record<string, number>,
-  trimmedLogs: string
+  trimmedLogs: string, workspacePath?: string
 ): Promise<CommandDigestResponse> {
   const systemPrompt = `You are a command-output digest assistant.
 You are given the output of one or more shell commands and the caller's intent for running them.
@@ -498,14 +509,14 @@ ${trimmedLogs}`;
   const start = Date.now();
   let completion: ChatCompletionResult | undefined;
   try {
-    completion = await callWithFallback('digest', systemPrompt, userPrompt);
+    completion = await callWithFallback('digest', systemPrompt, userPrompt, { workspacePath });
     const parsed = parseLLMResponse('digest', extractJSON(completion.content));
     if (!parsed.success) throw new LLMValidationFailure(parsed.validationErrors);
     const result: CommandDigestResponse = parsed.data as CommandDigestResponse;
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
     /* Local model offline or unparseable output: stay conservative and tell the caller to fall back to the raw log rather than inventing a digest. */
-    const provider = resolveProvider('digest');
+    const provider = resolveContextProvider('digest', { workspacePath });
     return attachLLMMetadata({
       summary: `Failed to digest command output using local LLM: ${error.message || error}`,
       keyFindings: [],
@@ -517,7 +528,7 @@ ${trimmedLogs}`;
 
 
 /* Rank server-gathered code candidates against a navigation goal so the main model reads only the few regions that matter. The candidates were found deterministically (grep); the model only orders/explains them and must not invent paths. This is a hint, not authority: the main model verifies every pointer. */
-export async function queryScout(goal: string, candidates: FileCandidate[]): Promise<ScoutResponse> {
+export async function queryScout(goal: string, candidates: FileCandidate[], workspacePath?: string): Promise<ScoutResponse> {
   const systemPrompt = `You are a codebase navigation assistant for a larger coding agent.
 You are given a GOAL and a set of CANDIDATE code regions that were already found by a grep over the workspace. Each region is shown with its file path and line-numbered source.
 
@@ -556,7 +567,7 @@ Schema:
   const start = Date.now();
   let completion: ChatCompletionResult | undefined;
   try {
-    completion = await callWithFallback('scout', systemPrompt, userPrompt);
+    completion = await callWithFallback('scout', systemPrompt, userPrompt, { workspacePath });
     const parsed = parseLLMResponse('scout', extractJSON(completion.content));
     if (!parsed.success) throw new LLMValidationFailure(parsed.validationErrors);
     const result: ScoutResponse = { ...(parsed.data as Omit<ScoutResponse, 'scoutAvailable'>), scoutAvailable: true };
@@ -570,7 +581,7 @@ Schema:
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
     /* Model offline or unparseable: stay conservative. Return no ranked pointers and flag that ranking did not run, so the caller falls back to the deterministic candidate list the server already gathered. */
-    const provider = resolveProvider('scout');
+    const provider = resolveContextProvider('scout', { workspacePath });
     return attachLLMMetadata({
       pointers: [],
       suggestedNextSearches: [],
@@ -587,7 +598,7 @@ function isValidPointer(p: any): p is ScoutPointer {
 }
 
 /* Answer a targeted question about a stored log so the caller never has to read the whole file. The log is supplied with 1-based line-number prefixes so the model can cite an exact lineRange. */
-export async function queryLogQuestion(question: string, numberedLog: string): Promise<LogQueryResponse> {
+export async function queryLogQuestion(question: string, numberedLog: string, workspacePath?: string): Promise<LogQueryResponse> {
   const systemPrompt = `You answer a specific question about a stored command/test log.
 The log is provided with each line prefixed by its line number ("123: ...").
 Answer ONLY from the log content. If the log does not contain the answer, say so plainly.
@@ -610,14 +621,14 @@ ${numberedLog}`;
   const start = Date.now();
   let completion: ChatCompletionResult | undefined;
   try {
-    completion = await callWithFallback('query', systemPrompt, userPrompt);
+    completion = await callWithFallback('query', systemPrompt, userPrompt, { workspacePath });
     const parsed = parseLLMResponse('query', extractJSON(completion.content));
     if (!parsed.success) throw new LLMValidationFailure(parsed.validationErrors);
     const result: LogQueryResponse = { ...(parsed.data as Omit<LogQueryResponse, 'available'>), available: true };
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
     /* Model offline or unparseable: signal unavailability so the caller can fall back to grep_log or a raw-log slice. */
-    const provider = resolveProvider('query');
+    const provider = resolveContextProvider('query', { workspacePath });
     return attachLLMMetadata({
       answer: `Failed to query log using local LLM: ${error.message || error}`,
       relevantExcerpt: '',

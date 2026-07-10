@@ -113,7 +113,7 @@ than claiming an LLM verdict.
 ## Troubleshooting
 
 - Restart your client after installing or changing provider settings.
-- Run `check_local_llm_health` to verify the selected provider.
+- Run `check_local_llm_health` to verify the selected LLM provider (local, gateway, or direct OpenRouter).
 - If tools are absent after a prior interrupted dependency install, restart the
   client. The launcher now detects and repairs incomplete runtime caches before
   registering its MCP tools.

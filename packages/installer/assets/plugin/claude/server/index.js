@@ -305,7 +305,7 @@ server.setRequestHandler(types_js_1.CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     if (name === 'check_local_llm_health') {
         try {
-            const health = await (0, llm_1.checkLocalLLMHealth)();
+            const health = await (0, llm_1.checkLocalLLMHealth)(process.cwd());
             const text = jsonText(health);
             recordToolAnalytics(process.cwd(), {
                 toolName: 'check_local_llm_health',
@@ -375,7 +375,7 @@ server.setRequestHandler(types_js_1.CallToolRequestSchema, async (request) => {
                 }
             }
             // 3. Call local LLM
-            const triage = await (0, llm_1.queryLocalLLM)(taskSummary, commandsToRun, exitCodes, changedFiles, suiteResult.trimmedLogContent);
+            const triage = await (0, llm_1.queryLocalLLM)(taskSummary, commandsToRun, exitCodes, changedFiles, suiteResult.trimmedLogContent, undefined, workspacePath);
             // Map local LLM verdict to overall result
             // Keep safety: command exit codes are authoritative and the local LLM cannot override them.
             let finalVerdict = triage.verdict;
@@ -395,7 +395,7 @@ server.setRequestHandler(types_js_1.CallToolRequestSchema, async (request) => {
                 const startBudget = Math.max(1, Math.floor(budget / 3));
                 const bounded = (0, runner_1.trimLog)(numbered, startBudget, budget - startBudget);
                 try {
-                    triageResult = await (0, llm_1.queryLogQuestion)(question, bounded);
+                    triageResult = await (0, llm_1.queryLogQuestion)(question, bounded, workspacePath);
                 }
                 catch (triageErr) {
                     triageResult = {
@@ -484,8 +484,8 @@ server.setRequestHandler(types_js_1.CallToolRequestSchema, async (request) => {
             }
             const logContent = fs.readFileSync(resolvedPath, 'utf8');
             const trimmed = (0, runner_1.trimLog)(logContent);
-            const triage = await (0, llm_1.queryLocalLLM)("Triage request for log file", [], {}, [], trimmed, 'triage');
             const workspaceForAnalytics = (0, analytics_1.inferWorkspaceFromLogPath)(resolvedPath);
+            const triage = await (0, llm_1.queryLocalLLM)("Triage request for log file", [], {}, [], trimmed, 'triage', workspaceForAnalytics);
             const output = {
                 verdict: triage.verdict,
                 confidence: triage.confidence,
@@ -581,7 +581,7 @@ server.setRequestHandler(types_js_1.CallToolRequestSchema, async (request) => {
                     ]
                 };
             }
-            const review = await (0, llm_1.queryCodeReview)(filesToReview);
+            const review = await (0, llm_1.queryCodeReview)(filesToReview, workspacePath);
             const rawSourceText = filesToReview.map((f) => f.content).join('\n');
             const output = { ...review, skipped };
             const text = jsonText(output);
@@ -728,7 +728,7 @@ server.setRequestHandler(types_js_1.CallToolRequestSchema, async (request) => {
                     effectiveExitCode = res.exitCode;
                 }
             }
-            const digest = await (0, llm_1.queryCommandDigest)(intent, commandsToRun, exitCodes, suiteResult.trimmedLogContent);
+            const digest = await (0, llm_1.queryCommandDigest)(intent, commandsToRun, exitCodes, suiteResult.trimmedLogContent, workspacePath);
             const runId = path.basename(suiteResult.rawLogPath).replace(/\.log$/, '');
             const output = {
                 exitCode: effectiveExitCode,
@@ -786,7 +786,7 @@ server.setRequestHandler(types_js_1.CallToolRequestSchema, async (request) => {
             const budget = maxLines && maxLines > 0 ? maxLines : 1200;
             const startBudget = Math.max(1, Math.floor(budget / 3));
             const bounded = (0, runner_1.trimLog)(numbered, startBudget, budget - startBudget);
-            const res = await (0, llm_1.queryLogQuestion)(question, bounded);
+            const res = await (0, llm_1.queryLogQuestion)(question, bounded, workspacePath);
             const output = { ...res, rawLogPath: path.relative(workspacePath, absLog) };
             const text = jsonText(output);
             recordToolAnalytics(workspacePath, {
@@ -888,7 +888,7 @@ server.setRequestHandler(types_js_1.CallToolRequestSchema, async (request) => {
                 recordToolAnalytics(workspacePath, { toolName: 'scout_codebase', rawSourceText: '', responseText: text, avoidedRawOutput: false });
                 return { content: [{ type: 'text', text }] };
             }
-            const scout = await (0, llm_1.queryScout)(goal, gathered.candidates);
+            const scout = await (0, llm_1.queryScout)(goal, gathered.candidates, workspacePath);
             const rawSourceText = gathered.candidates
                 .map((c) => `${c.file}\n${c.regions.map((r) => r.snippet).join('\n')}`)
                 .join('\n');

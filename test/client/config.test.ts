@@ -49,3 +49,17 @@ test('lower-trust allowlists cannot widen the user allowlist', () => {
   });
   assert.deepEqual(config.execution.allowedCommandPrefixes, ['npm test']);
 });
+
+test('effective provider configuration selects each documented destination', () => {
+  const cases = [
+    [{ TOKEN_OPTIMIZER_PROVIDER_MODE: 'local', LOCAL_LLM_API_URL: 'http://local/v1' }, 'local', 'http://local/v1'],
+    [{ TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', LLM_GATEWAY_URL: 'https://gateway/v1', LLM_GATEWAY_TOKEN: 'token' }, 'gateway-token', 'https://gateway/v1'],
+    [{ TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-byok', LLM_GATEWAY_URL: 'https://gateway/v1', OPENROUTER_BYOK_KEY: 'byok' }, 'gateway-byok', 'https://gateway/v1'],
+    [{ TOKEN_OPTIMIZER_PROVIDER_MODE: 'openrouter-direct', OPENROUTER_API_KEY: 'direct' }, 'openrouter-direct', 'https://openrouter.ai/api/v1'],
+  ] as const;
+  for (const [env, mode, apiUrl] of cases) {
+    const config = resolveEffectiveConfig({ env });
+    assert.equal(config.provider.mode, mode);
+    assert.equal(config.provider.apiUrl, apiUrl);
+  }
+});
