@@ -60,6 +60,14 @@ Default `install` behavior:
   - `byok` → `LLM_GATEWAY_URL`, `OPENROUTER_BYOK_KEY`, optional `OPENROUTER_BYOK_MODEL` (no `LLM_GATEWAY_TOKEN` is written)
   - `local` → `LOCAL_LLM_API_URL`, `LOCAL_LLM_MODEL`
 - writes default-on instruction files for Claude Code, Codex, Antigravity, and OpenCode
+- on macOS, mirrors the provider env into the GUI-session environment so
+  Dock/Finder/Spotlight-launched clients inherit it. This is done two ways: an
+  immediate `launchctl setenv` for the current login, plus a `RunAtLoad`
+  LaunchAgent at `~/Library/LaunchAgents/com.softawarest.token-optimizer.env.plist`
+  (chmod 600) that re-applies the values at every future login — a bare
+  `launchctl setenv` does not survive a reboot or logout. Switching to a
+  provider with no managed values (or an uninstall) removes the LaunchAgent.
+  Pass `--skip-launchctl` to skip all GUI-session env writes.
 
 Client-specific behavior:
 

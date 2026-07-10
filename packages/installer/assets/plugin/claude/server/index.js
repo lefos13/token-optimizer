@@ -45,7 +45,7 @@ const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const server = new index_js_1.Server({
     name: 'token-optimizer-mcp',
-    version: '1.11.0',
+    version: '1.12.0',
 }, {
     capabilities: {
         tools: {},

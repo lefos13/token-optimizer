@@ -105,6 +105,83 @@ test('installer launchctl state clears stale BYOK key and model when the provide
   assert.ok(!('OPENROUTER_BYOK_MODEL' in state));
 });
 
+/* launchctl setenv does not survive a reboot/logout, so the installer also
+   writes a RunAtLoad LaunchAgent that re-applies the managed env at every
+   login. These tests use the temp home + state-path hook so no real launchctl
+   agent is loaded. */
+function launchAgentPath(home: string): string {
+  return path.join(home, 'Library', 'LaunchAgents', `${installer.LAUNCH_AGENT_LABEL}.plist`);
+}
+
+test('installer writes a persistent RunAtLoad LaunchAgent so GUI env survives reboot', () => {
+  const home = tmpDir('to-installer-home-');
+  const launchctlStatePath = path.join(home, 'launchctl.json');
+
+  installer.applyGatewayConfig({
+    home,
+    clients: ['opencode'],
+    provider: 'gateway',
+    gatewayToken: 'person-token',
+    launchctlStatePath,
+  });
+
+  const plist = fs.readFileSync(launchAgentPath(home), 'utf8');
+  assert.ok(plist.includes('<key>RunAtLoad</key>'));
+  assert.ok(plist.includes('<true/>'));
+  assert.ok(plist.includes('launchctl setenv LLM_GATEWAY_TOKEN'));
+  assert.ok(plist.includes('person-token'));
+});
+
+test('provider switch rewrites the LaunchAgent to only the current provider values', () => {
+  const home = tmpDir('to-installer-home-');
+  const launchctlStatePath = path.join(home, 'launchctl.json');
+
+  installer.applyGatewayConfig({
+    home, clients: ['opencode'], provider: 'byok', byokKey: 'sk-or-v1-mykey', byokModel: 'openai/gpt-4o-mini', launchctlStatePath,
+  });
+  installer.applyGatewayConfig({
+    home, clients: ['opencode'], provider: 'gateway', gatewayToken: 'person-token', launchctlStatePath,
+  });
+
+  const plist = fs.readFileSync(launchAgentPath(home), 'utf8');
+  assert.ok(plist.includes('LLM_GATEWAY_TOKEN'));
+  assert.ok(!plist.includes('OPENROUTER_BYOK_KEY'));
+  assert.ok(!plist.includes('sk-or-v1-mykey'));
+});
+
+test('a provider with no managed values removes any stale LaunchAgent', () => {
+  const home = tmpDir('to-installer-home-');
+  const launchctlStatePath = path.join(home, 'launchctl.json');
+
+  installer.applyGatewayConfig({
+    home, clients: ['opencode'], provider: 'gateway', gatewayToken: 'person-token', launchctlStatePath,
+  });
+  assert.ok(fs.existsSync(launchAgentPath(home)));
+
+  installer.applyGatewayConfig({ home, clients: ['opencode'], provider: 'skip', launchctlStatePath });
+  assert.ok(!fs.existsSync(launchAgentPath(home)), 'stale LaunchAgent removed when no provider values remain');
+});
+
+test('LaunchAgent plist shell-escapes values so special characters cannot break the command', () => {
+  const home = tmpDir('to-installer-home-');
+  const launchctlStatePath = path.join(home, 'launchctl.json');
+
+  installer.applyGatewayConfig({
+    home,
+    clients: ['opencode'],
+    provider: 'local',
+    localApiUrl: "http://localhost:8080/v1?a=1&b=2",
+    localModel: "model's-name",
+    launchctlStatePath,
+  });
+
+  const plist = fs.readFileSync(launchAgentPath(home), 'utf8');
+  /* & must be XML-escaped in the plist string; the single quote in the model
+     must be shell-escaped as '\'' inside the single-quoted argument. */
+  assert.ok(plist.includes('a=1&amp;b=2'));
+  assert.ok(plist.includes("model'\\''s-name"));
+});
+
 test('installCursor writes global MCP config and optional project rule', () => {
   const home = tmpDir('to-installer-home-');
   const assetsRoot = tmpDir('to-installer-assets-');
@@ -174,6 +251,7 @@ test('installOpenCode with provider "local" registers the server with no token r
 
   installer.installOpenCode({
     home, assetsRoot, provider: 'local', localApiUrl: 'http://localhost:9999/v1', localModel: 'my-model',
+    skipLaunchctl: true,
   });
 
   assert.ok(fs.existsSync(path.join(home, '.config', 'opencode', 'token-optimizer-server', 'start.sh')));
@@ -194,6 +272,7 @@ test('installOpenCode with provider "byok" writes the OpenRouter key and optiona
     provider: 'byok',
     byokKey: 'sk-or-key',
     byokModel: 'openai/gpt-4o-mini',
+    skipLaunchctl: true,
   });
 
   const config = JSON.parse(fs.readFileSync(path.join(home, '.config', 'opencode', 'opencode.jsonc'), 'utf8'));

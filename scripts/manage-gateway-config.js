@@ -21,6 +21,9 @@ const MANAGED_ENV_KEYS = [
 const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
 const DEFAULT_LOCAL_LLM_URL = "http://localhost:8080/v1";
 const DEFAULT_LOCAL_LLM_MODEL = "local-model";
+/* Same label the npm installer uses: both tools manage the one GUI-session
+   LaunchAgent, so re-running either keeps a single agent rather than two. */
+const LAUNCH_AGENT_LABEL = "com.softawarest.token-optimizer.env";
 
 function emptyManagedValues() {
   return Object.fromEntries(MANAGED_ENV_KEYS.map((key) => [key, ""]));
@@ -756,9 +759,12 @@ function ensureDirectory(dirPath) {
 }
 
 /* GUI-launched macOS apps do not inherit shell rc files, so persist the
-   gateway variables into the user's launchd session. That lets Codex,
-   Claude, and Antigravity read the same values when started normally from the
-   Dock, Finder, Spotlight, or their own launchers. */
+   gateway variables into the user's launchd session. An immediate
+   `launchctl setenv` fixes the current login, but that alone is wiped on the
+   next reboot/logout — so a RunAtLoad LaunchAgent re-applies the same values
+   at every future login. That lets Codex, Claude, and Antigravity read the
+   same values when started from the Dock, Finder, Spotlight, or their own
+   launchers, even after a restart. */
 function applyLaunchctlValues(values) {
   for (const envKey of MANAGED_ENV_KEYS) {
     const value = values[envKey];
@@ -768,11 +774,96 @@ function applyLaunchctlValues(values) {
       runLaunchctl(["unsetenv", envKey], { allowFailure: true });
     }
   }
+  writePersistentLaunchAgent(values);
 }
 
 function clearLaunchctlValues() {
   for (const envKey of MANAGED_ENV_KEYS) {
     runLaunchctl(["unsetenv", envKey], { allowFailure: true });
+  }
+  writePersistentLaunchAgent(emptyManagedValues());
+}
+
+/* Writes (or removes) the RunAtLoad LaunchAgent plist that re-applies the
+   managed env at every login. Under the test state-file seam the plist lands
+   next to the state file and no real `launchctl bootstrap` runs. */
+function launchAgentPlistPath() {
+  const statePath =
+    process.env.LOCAL_OPTIMIZER_LAUNCHCTL_STATE_PATH ||
+    process.env.LOCAL_TESTER_LAUNCHCTL_STATE_PATH;
+  const dir = statePath
+    ? path.dirname(statePath)
+    : path.join(os.homedir(), "Library", "LaunchAgents");
+  return path.join(dir, `${LAUNCH_AGENT_LABEL}.plist`);
+}
+
+function writePersistentLaunchAgent(values) {
+  const usingStateHook =
+    process.env.LOCAL_OPTIMIZER_LAUNCHCTL_STATE_PATH ||
+    process.env.LOCAL_TESTER_LAUNCHCTL_STATE_PATH;
+  const plistPath = launchAgentPlistPath();
+  const hasAny = MANAGED_ENV_KEYS.some((envKey) => values[envKey]);
+  if (!hasAny) {
+    if (fs.existsSync(plistPath)) {
+      fs.rmSync(plistPath, { force: true });
+    }
+    reloadLaunchAgent(plistPath, true, usingStateHook);
+    return;
+  }
+  ensureDirectory(path.dirname(plistPath));
+  fs.writeFileSync(plistPath, buildLaunchAgentPlist(values));
+  try {
+    fs.chmodSync(plistPath, 0o600);
+  } catch {
+    /* best-effort on non-POSIX filesystems. */
+  }
+  reloadLaunchAgent(plistPath, false, usingStateHook);
+}
+
+function buildLaunchAgentPlist(values) {
+  const shQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+  const command = MANAGED_ENV_KEYS
+    .filter((envKey) => values[envKey])
+    .map((envKey) => `launchctl setenv ${envKey} ${shQuote(values[envKey])}`)
+    .join("; ");
+  const xmlEscape = (text) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0">',
+    "<dict>",
+    "  <key>Label</key>",
+    `  <string>${LAUNCH_AGENT_LABEL}</string>`,
+    "  <key>RunAtLoad</key>",
+    "  <true/>",
+    "  <key>ProgramArguments</key>",
+    "  <array>",
+    "    <string>/bin/sh</string>",
+    "    <string>-c</string>",
+    `    <string>${xmlEscape(command)}</string>`,
+    "  </array>",
+    "</dict>",
+    "</plist>",
+    "",
+  ].join("\n");
+}
+
+function reloadLaunchAgent(plistPath, remove, usingStateHook) {
+  if (usingStateHook || process.platform !== "darwin") {
+    return;
+  }
+  const uid = typeof process.getuid === "function" ? process.getuid() : "";
+  try {
+    execFileSync("launchctl", ["bootout", `gui/${uid}/${LAUNCH_AGENT_LABEL}`], { stdio: "ignore" });
+  } catch {
+    /* nothing loaded yet on first run. */
+  }
+  if (!remove) {
+    try {
+      execFileSync("launchctl", ["bootstrap", `gui/${uid}`, plistPath], { stdio: "ignore" });
+    } catch {
+      /* a failed reload still leaves a plist that loads on next login. */
+    }
   }
 }
 
@@ -903,6 +994,7 @@ module.exports = {
   applyLaunchctlValues,
   readLaunchctlValues,
   clearLaunchctlValues,
+  LAUNCH_AGENT_LABEL,
   getDirectiveTargets,
   hasDirectiveBlock,
   applyDirectiveBlock,

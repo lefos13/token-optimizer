@@ -179,11 +179,18 @@ test('launchctl values round-trip through the state-file seam', () => {
   const home = tmpHome();
   const statePath = path.join(home, 'launchctl-state.json');
   process.env.LOCAL_OPTIMIZER_LAUNCHCTL_STATE_PATH = statePath;
+  const plistPath = path.join(home, `${cli.LAUNCH_AGENT_LABEL}.plist`);
   try {
     cli.applyLaunchctlValues({ LLM_GATEWAY_TOKEN: 'tok', LLM_GATEWAY_URL: 'https://g/v1' });
     assert.equal(cli.readLaunchctlValues().LLM_GATEWAY_TOKEN, 'tok');
+    /* Persistence: a RunAtLoad LaunchAgent must re-apply the value after reboot. */
+    const plist = fs.readFileSync(plistPath, 'utf8');
+    assert.ok(plist.includes('<key>RunAtLoad</key>'));
+    assert.ok(plist.includes('launchctl setenv LLM_GATEWAY_TOKEN'));
+    assert.ok(plist.includes('tok'));
     cli.clearLaunchctlValues();
     assert.ok(!('LLM_GATEWAY_TOKEN' in cli.readLaunchctlValues()));
+    assert.ok(!fs.existsSync(plistPath), 'clearing removes the LaunchAgent');
   } finally {
     delete process.env.LOCAL_OPTIMIZER_LAUNCHCTL_STATE_PATH;
   }

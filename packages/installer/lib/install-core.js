@@ -76,6 +76,12 @@ function inferProvider(options) {
 }
 const CLAUDE_MARKETPLACE_NAME = "token-optimizer-marketplace";
 const CODEX_MARKETPLACE_NAME = "Softaware-marketplace";
+/* macOS GUI-session env is delivered two ways: an immediate `launchctl setenv`
+   for the current login, plus a RunAtLoad LaunchAgent that re-applies the same
+   values at every future login — `launchctl setenv` alone does NOT survive a
+   reboot or logout, which would silently strip credentials from GUI-launched
+   clients. */
+const LAUNCH_AGENT_LABEL = "com.softawarest.token-optimizer.env";
 const DIRECTIVE_MARKER_START = "<!-- TOKEN_OPTIMIZER_START -->";
 const DIRECTIVE_MARKER_END = "<!-- TOKEN_OPTIMIZER_END -->";
 const DIRECTIVE_BLOCK = `${DIRECTIVE_MARKER_START}
@@ -566,12 +572,89 @@ function applyLaunchctlValues(values, options = {}) {
     return;
   }
   /* Mirror managed client config updates so a provider switch cannot leave
-     stale credentials or model overrides in the GUI-session environment. */
+     stale credentials or model overrides in the GUI-session environment. The
+     immediate setenv fixes the current login; the LaunchAgent makes it stick
+     across reboots. */
   for (const envKey of MANAGED_ENV_KEYS) {
     if (values[envKey]) {
       runLaunchctl(["setenv", envKey, values[envKey]], options);
     } else {
       runLaunchctl(["unsetenv", envKey], options);
+    }
+  }
+  writePersistentLaunchAgent(values, options);
+}
+
+/* Writes (or removes) the RunAtLoad LaunchAgent that re-applies the managed
+   env at every login. The plist file always tracks the current provider
+   values; the actual `launchctl bootstrap` reload only runs for a real macOS
+   install (not under the test state-path hook, not off a temporary home). */
+function writePersistentLaunchAgent(values, options = {}) {
+  const home = path.resolve(options.home || process.env.HOME || os.homedir());
+  const plistPath = path.join(home, "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`);
+  const hasAny = MANAGED_ENV_KEYS.some((envKey) => values[envKey]);
+  if (!hasAny) {
+    if (fs.existsSync(plistPath)) {
+      fs.rmSync(plistPath, { force: true });
+    }
+    reloadLaunchAgent(plistPath, true, options, home);
+    return;
+  }
+  ensureDirectory(path.dirname(plistPath));
+  fs.writeFileSync(plistPath, buildLaunchAgentPlist(values));
+  try {
+    fs.chmodSync(plistPath, 0o600);
+  } catch {
+    /* best-effort: a non-POSIX FS may reject chmod; the plist is still valid. */
+  }
+  reloadLaunchAgent(plistPath, false, options, home);
+}
+
+function buildLaunchAgentPlist(values) {
+  const shQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+  const command = MANAGED_ENV_KEYS
+    .filter((envKey) => values[envKey])
+    .map((envKey) => `launchctl setenv ${envKey} ${shQuote(values[envKey])}`)
+    .join("; ");
+  const xmlEscape = (text) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0">',
+    "<dict>",
+    "  <key>Label</key>",
+    `  <string>${LAUNCH_AGENT_LABEL}</string>`,
+    "  <key>RunAtLoad</key>",
+    "  <true/>",
+    "  <key>ProgramArguments</key>",
+    "  <array>",
+    "    <string>/bin/sh</string>",
+    "    <string>-c</string>",
+    `    <string>${xmlEscape(command)}</string>`,
+    "  </array>",
+    "</dict>",
+    "</plist>",
+    "",
+  ].join("\n");
+}
+
+function reloadLaunchAgent(plistPath, remove, options = {}, home) {
+  const usingStateHook = options.launchctlStatePath || process.env.LOCAL_OPTIMIZER_LAUNCHCTL_STATE_PATH;
+  const realHome = path.resolve(home) === path.resolve(process.env.HOME || os.homedir());
+  if (usingStateHook || process.platform !== "darwin" || !realHome) {
+    return;
+  }
+  const uid = typeof process.getuid === "function" ? process.getuid() : "";
+  try {
+    execFileSync("launchctl", ["bootout", `gui/${uid}/${LAUNCH_AGENT_LABEL}`], { stdio: "ignore" });
+  } catch {
+    /* No existing agent to unload on first install; ignore. */
+  }
+  if (!remove) {
+    try {
+      execFileSync("launchctl", ["bootstrap", `gui/${uid}`, plistPath], { stdio: "ignore" });
+    } catch {
+      /* Reload failure still leaves a valid plist that loads on next login. */
     }
   }
 }
@@ -695,6 +778,7 @@ module.exports = {
   DEFAULT_LOCAL_LLM_URL,
   DEFAULT_LOCAL_LLM_MODEL,
   MANAGED_ENV_KEYS,
+  LAUNCH_AGENT_LABEL,
   emptyManagedValues,
   buildProviderValues,
   normalizeProviderChoice,
