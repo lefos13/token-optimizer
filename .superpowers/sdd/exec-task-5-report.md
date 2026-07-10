@@ -4,4 +4,6 @@ Implemented managed log lifecycle support with canonical path protection, atomic
 
 Follow-up hardening rejects symlinked managed roots, supports scoped purge of baseline/analytics files, and uses stateful redaction carry buffers across chunks.
 
-Verification: `npm run build` and focused streaming tests pass; full suite previously passed (148 tests).
+Added dedicated lifecycle coverage for split-secret redaction, purge scope, expiry ordering, gitignore idempotence, and registry appends. Registry read-modify-write is serialized with an interprocess lock.
+
+Verification: `npm run build`; `npm test` (151 tests) pass.

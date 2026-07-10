@@ -41,10 +41,11 @@ function readRecords(workspacePath: string): RunRecord[] {
 
 /* Append a run to the per-workspace index so every stored log gets a stable, resolvable runId handle. Best-effort: callers must not let an index failure break the underlying run. */
 export function appendRun(workspacePath: string, record: RunRecord): void {
-  const records = readRecords(workspacePath);
-  records.push(record);
-  const trimmed = records.length > MAX_RECORDS ? records.slice(records.length - MAX_RECORDS) : records;
-  writeIndexAtomic(indexPath(workspacePath), trimmed);
+  const lock = `${indexPath(workspacePath)}.lock`; fs.mkdirSync(path.dirname(lock), { recursive: true });
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+  while (true) { try { fs.mkdirSync(lock); break; } catch { Atomics.wait(wait, 0, 0, 5); } }
+  try { const records = readRecords(workspacePath); records.push(record); const trimmed = records.length > MAX_RECORDS ? records.slice(records.length - MAX_RECORDS) : records; writeIndexAtomic(indexPath(workspacePath), trimmed); }
+  finally { fs.rmSync(lock, { recursive: true, force: true }); }
 }
 
 export function loadRun(workspacePath: string, runId: string): RunRecord | null {
