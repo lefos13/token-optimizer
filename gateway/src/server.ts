@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { GatewayConfig } from './config';
 import { isAuthorized, extractBearer } from './auth';
 import { resolveModel } from './model-map';
+import { parseByokModelHeader } from './byok-model';
 import { createRateLimiter, RateLimiter } from './rate-limit';
 import { TokenStore, createTokenStore, normalizeEmail } from './tokens';
 import { StatsStore, createStatsStore } from './stats';
@@ -155,6 +156,16 @@ async function handleChat(
   tokenStore: TokenStore
 ): Promise<void> {
   const byokKey = extractByokKey(req, config);
+  const byokModel = byokKey
+    ? parseByokModelHeader(req.headers['x-openrouter-model'])
+    : { kind: 'absent' as const };
+
+  /* A caller-selected model is valid only on the user-funded BYOK path. Invalid
+     BYOK model input stops here so it can never fall through to operator-funded
+     inference; model headers from non-BYOK callers remain inert. */
+  if (byokKey && byokModel.kind === 'invalid') {
+    return sendJson(res, 400, { error: 'invalid BYOK model' });
+  }
   const authHeader = req.headers['authorization'] as string | undefined;
   const bearer = extractBearer(authHeader);
 
@@ -183,8 +194,9 @@ async function handleChat(
     return;
   }
 
-  /* Central model control: ignore whatever model the client sent. */
-  body.model = resolveModel(req.headers['x-task-type'] as string | undefined, config);
+  body.model = byokModel.kind === 'valid'
+    ? byokModel.model
+    : resolveModel(req.headers['x-task-type'] as string | undefined, config);
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.upstreamTimeoutMs);
