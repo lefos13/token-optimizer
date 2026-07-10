@@ -114,10 +114,15 @@ test('buildProviderValues: gateway needs a token, byok needs ONLY a key (no toke
 
   /* byok needs no gatewayToken at all: the gateway does not authenticate a
      BYOK-only caller, so writing one would be misleading. */
-  const byok = installer.buildProviderValues({ provider: 'byok', byokKey: 'sk-or-key' });
+  const byok = installer.buildProviderValues({
+    provider: 'byok',
+    byokKey: 'sk-or-key',
+    byokModel: ' openai/gpt-4o-mini ',
+  });
   assert.equal(byok.LLM_GATEWAY_TOKEN, '');
   assert.equal(byok.LLM_GATEWAY_URL, installer.DEFAULT_GATEWAY_URL);
   assert.equal(byok.OPENROUTER_BYOK_KEY, 'sk-or-key');
+  assert.equal(byok.OPENROUTER_BYOK_MODEL, 'openai/gpt-4o-mini');
 
   const local = installer.buildProviderValues({ provider: 'local' });
   assert.deepEqual(Object.keys(local).sort(), [...installer.MANAGED_ENV_KEYS].sort());
@@ -152,15 +157,22 @@ test('installOpenCode with provider "local" registers the server with no token r
   assert.ok(!('LLM_GATEWAY_TOKEN' in config.mcp.token_optimizer.environment));
 });
 
-test('installOpenCode with provider "byok" writes only the OpenRouter key, no gateway token', () => {
+test('installOpenCode with provider "byok" writes the OpenRouter key and optional model, with no gateway token', () => {
   const home = tmpDir('to-installer-home-');
   const assetsRoot = tmpDir('to-installer-assets-');
   writeFixtureAssets(assetsRoot);
 
-  installer.installOpenCode({ home, assetsRoot, provider: 'byok', byokKey: 'sk-or-key' });
+  installer.installOpenCode({
+    home,
+    assetsRoot,
+    provider: 'byok',
+    byokKey: 'sk-or-key',
+    byokModel: 'openai/gpt-4o-mini',
+  });
 
   const config = JSON.parse(fs.readFileSync(path.join(home, '.config', 'opencode', 'opencode.jsonc'), 'utf8'));
   assert.equal(config.mcp.token_optimizer.environment.OPENROUTER_BYOK_KEY, 'sk-or-key');
+  assert.equal(config.mcp.token_optimizer.environment.OPENROUTER_BYOK_MODEL, 'openai/gpt-4o-mini');
   assert.equal(config.mcp.token_optimizer.environment.LLM_GATEWAY_URL, installer.DEFAULT_GATEWAY_URL);
   assert.ok(!('LLM_GATEWAY_TOKEN' in config.mcp.token_optimizer.environment));
 });
@@ -375,6 +387,7 @@ test('upsertCodexTomlServer replaces an existing section without touching other 
     LLM_GATEWAY_URL: 'https://llm-proxy.lnf.gr/v1',
     LLM_GATEWAY_TOKEN: 'tok',
     OPENROUTER_BYOK_KEY: '',
+    OPENROUTER_BYOK_MODEL: '',
     LOCAL_LLM_API_URL: '',
     LOCAL_LLM_MODEL: '',
   });

@@ -95,10 +95,17 @@ async function resolveProviderOptions(args, rl) {
   const byokKeyFlag = args["byok-key"] || args.byokKey;
   if (explicit === "byok" || byokKeyFlag) {
     const byokKey = byokKeyFlag || await askRequired(rl, "Your OpenRouter API key (sk-or-...): ");
+    const modelFlag = args["byok-model"] ?? args.byokModel;
+    const byokModel = modelFlag !== undefined
+      ? String(modelFlag).trim()
+      : byokKeyFlag
+        ? ""
+        : await askOptional(rl, "OpenRouter model ID (optional; Enter for gateway default): ");
     return {
       provider: "byok",
       gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL,
       byokKey,
+      byokModel,
     };
   }
   if (explicit === "gateway" || args.token || process.env.LLM_GATEWAY_TOKEN) {
@@ -122,8 +129,14 @@ async function promptForProviderInteractive(args, rl) {
 
   if (answer === "2") {
     const byokKey = await askRequired(rl, "Your OpenRouter API key (sk-or-...): ");
+    const byokModel = await askOptional(rl, "OpenRouter model ID (optional; Enter for gateway default): ");
     console.log("No proxy token needed: calls are billed to your OpenRouter account, unlimited.");
-    return { provider: "byok", gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL, byokKey };
+    return {
+      provider: "byok",
+      gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL,
+      byokKey,
+      byokModel,
+    };
   }
   if (answer === "3") {
     const localApiUrl = (await ask(rl, `Local LLM endpoint [${DEFAULT_LOCAL_LLM_URL}]: `)).trim() || DEFAULT_LOCAL_LLM_URL;
@@ -187,6 +200,10 @@ async function askRequired(rl, prompt) {
   }
 }
 
+async function askOptional(rl, prompt) {
+  return (await ask(rl, prompt)).trim();
+}
+
 function printHelp() {
   console.log(`Usage:
   npx @softawarest/token-optimizer-installer [install] [options]
@@ -203,8 +220,8 @@ prompts for one of three providers, plus a skip option:
            default (operator-adjustable).
   byok     Your own OpenRouter key. NO gateway token is used or needed at
            all — you are not using the operator's OpenRouter setup, so the
-           gateway does not authenticate you, only proxies the request and
-           pins the model. Unlimited usage; billed to your own account.
+           gateway does not authenticate you, only proxies the request.
+           Unlimited usage; billed to your own account.
   local    Your own OpenAI-compatible endpoint (llama.cpp, LM Studio, Ollama,
            etc.). No token, no gateway involved, nothing leaves your machine.
   skip     Install the MCP server with no provider configured; finish later
@@ -215,6 +232,7 @@ Options:
   --token <token>               Gateway access token. Defaults to LLM_GATEWAY_TOKEN. Implies --provider gateway.
   --url <url>                  Gateway URL. Defaults to ${DEFAULT_GATEWAY_URL}. Used by both gateway and byok modes.
   --byok-key <key>              Your own OpenRouter API key (sk-or-...). Implies --provider byok. No --token needed.
+  --byok-model <model-id>       Optional OpenRouter model ID for every task. Defaults to the gateway-selected model.
   --local                      Use a local LLM only; no token required. Implies --provider local.
   --local-url <url>             Local OpenAI-compatible endpoint. Defaults to ${DEFAULT_LOCAL_LLM_URL}.
   --local-model <name>          Local model name. Defaults to ${DEFAULT_LOCAL_LLM_MODEL}.
@@ -226,7 +244,15 @@ Options:
 `);
 }
 
-main().catch((error) => {
-  console.error(`Token Optimizer installer failed: ${error.message}`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`Token Optimizer installer failed: ${error.message}`);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  resolveProviderOptions,
+  promptForProviderInteractive,
+  parseArgs,
+};

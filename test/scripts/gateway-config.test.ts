@@ -13,9 +13,17 @@ function tmpHome(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'gw-cfg-'));
 }
 
+function readlineWith(...answers: string[]) {
+  return {
+    question(_prompt: string, done: (answer: string) => void) {
+      done(answers.shift() || '');
+    }
+  };
+}
+
 test('MANAGED_ENV_KEYS covers gateway, BYOK, and local-LLM provider vars', () => {
   assert.deepEqual(cli.MANAGED_ENV_KEYS, [
-    'LLM_GATEWAY_URL', 'LLM_GATEWAY_TOKEN', 'OPENROUTER_BYOK_KEY', 'LOCAL_LLM_API_URL', 'LOCAL_LLM_MODEL'
+    'LLM_GATEWAY_URL', 'LLM_GATEWAY_TOKEN', 'OPENROUTER_BYOK_KEY', 'OPENROUTER_BYOK_MODEL', 'LOCAL_LLM_API_URL', 'LOCAL_LLM_MODEL'
   ]);
 });
 
@@ -87,11 +95,16 @@ test('applyToTargets writes gateway values to every managed client config, colle
   assert.ok(!('LLM_GATEWAY_TOKEN' in clearedCursor.mcpServers.token_optimizer.env));
 });
 
-test('local-LLM provider values require no token and switching modes clears the previous mode', () => {
+test('local-LLM provider values require no token and switching modes clears previous gateway and BYOK values', () => {
   const home = tmpHome();
 
   cli.applyToTargets(
-    { LLM_GATEWAY_URL: 'https://llm-proxy.lnf.gr/v1', LLM_GATEWAY_TOKEN: 'person-token' },
+    {
+      LLM_GATEWAY_URL: 'https://llm-proxy.lnf.gr/v1',
+      LLM_GATEWAY_TOKEN: 'person-token',
+      OPENROUTER_BYOK_KEY: 'sk-or-v1-mykey',
+      OPENROUTER_BYOK_MODEL: 'openai/gpt-4o-mini',
+    },
     home
   );
   const beforeSwitch = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
@@ -106,26 +119,60 @@ test('local-LLM provider values require no token and switching modes clears the 
 
   const afterSwitch = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
   assert.ok(!('LLM_GATEWAY_TOKEN' in afterSwitch.env));  // stale gateway token cleared
+  assert.ok(!('OPENROUTER_BYOK_KEY' in afterSwitch.env));
+  assert.ok(!('OPENROUTER_BYOK_MODEL' in afterSwitch.env));
   assert.equal(afterSwitch.env.LOCAL_LLM_API_URL, cli.DEFAULT_LOCAL_LLM_URL);
   assert.equal(afterSwitch.env.LOCAL_LLM_MODEL, cli.DEFAULT_LOCAL_LLM_MODEL);
 
   const cursor = JSON.parse(fs.readFileSync(path.join(home, '.cursor', 'mcp.json'), 'utf8'));
   assert.equal(cursor.mcpServers.token_optimizer.env.LOCAL_LLM_API_URL, cli.DEFAULT_LOCAL_LLM_URL);
   assert.ok(!('LLM_GATEWAY_TOKEN' in cursor.mcpServers.token_optimizer.env));
+  assert.ok(!('OPENROUTER_BYOK_KEY' in cursor.mcpServers.token_optimizer.env));
+  assert.ok(!('OPENROUTER_BYOK_MODEL' in cursor.mcpServers.token_optimizer.env));
 });
 
-test('BYOK-mode values write the OpenRouter key and gateway URL, with no gateway token at all', () => {
+test('BYOK-mode values write the OpenRouter key, optional model, and gateway URL, with no gateway token at all', () => {
   const home = tmpHome();
   const values = {
     ...cli.emptyManagedValues(),
     LLM_GATEWAY_URL: cli.DEFAULT_GATEWAY_URL,
     OPENROUTER_BYOK_KEY: 'sk-or-v1-mykey',
+    OPENROUTER_BYOK_MODEL: 'openai/gpt-4o-mini',
   };
   cli.applyToTargets(values, home);
   const claude = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
   assert.equal(claude.env.OPENROUTER_BYOK_KEY, 'sk-or-v1-mykey');
+  assert.equal(claude.env.OPENROUTER_BYOK_MODEL, 'openai/gpt-4o-mini');
   assert.equal(claude.env.LLM_GATEWAY_URL, cli.DEFAULT_GATEWAY_URL);
   assert.ok(!('LLM_GATEWAY_TOKEN' in claude.env));
+
+  const opencode = JSON.parse(fs.readFileSync(path.join(home, '.config', 'opencode', 'opencode.jsonc'), 'utf8'));
+  assert.equal(opencode.mcp.token_optimizer.environment.OPENROUTER_BYOK_MODEL, 'openai/gpt-4o-mini');
+
+  const cursor = JSON.parse(fs.readFileSync(path.join(home, '.cursor', 'mcp.json'), 'utf8'));
+  assert.equal(cursor.mcpServers.token_optimizer.env.OPENROUTER_BYOK_MODEL, 'openai/gpt-4o-mini');
+});
+
+test('collectByokValues keeps or clears the optional model explicitly', async () => {
+  const keep = await cli.collectByokValues(
+    readlineWith('', '', ''),
+    {
+      LLM_GATEWAY_URL: cli.DEFAULT_GATEWAY_URL,
+      OPENROUTER_BYOK_KEY: 'sk-or-v1-existing',
+      OPENROUTER_BYOK_MODEL: 'openai/gpt-4o-mini'
+    }
+  );
+  assert.equal(keep.OPENROUTER_BYOK_MODEL, 'openai/gpt-4o-mini');
+
+  const clear = await cli.collectByokValues(
+    readlineWith('', '', '-'),
+    {
+      LLM_GATEWAY_URL: cli.DEFAULT_GATEWAY_URL,
+      OPENROUTER_BYOK_KEY: 'sk-or-v1-existing',
+      OPENROUTER_BYOK_MODEL: 'openai/gpt-4o-mini'
+    }
+  );
+  assert.equal(clear.OPENROUTER_BYOK_MODEL, '');
 });
 
 test('launchctl values round-trip through the state-file seam', () => {

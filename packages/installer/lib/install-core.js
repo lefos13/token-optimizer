@@ -15,6 +15,7 @@ const MANAGED_ENV_KEYS = [
   "LLM_GATEWAY_URL",
   "LLM_GATEWAY_TOKEN",
   "OPENROUTER_BYOK_KEY",
+  "OPENROUTER_BYOK_MODEL",
   "LOCAL_LLM_API_URL",
   "LOCAL_LLM_MODEL",
 ];
@@ -49,6 +50,7 @@ function buildProviderValues(options) {
     }
     values.LLM_GATEWAY_URL = options.gatewayUrl || DEFAULT_GATEWAY_URL;
     values.OPENROUTER_BYOK_KEY = options.byokKey;
+    values.OPENROUTER_BYOK_MODEL = String(options.byokModel || "").trim();
   } else if (provider === "local") {
     values.LOCAL_LLM_API_URL = options.localApiUrl || "";
     values.LOCAL_LLM_MODEL = options.localModel || "";

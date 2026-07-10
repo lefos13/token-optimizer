@@ -14,6 +14,7 @@ const MANAGED_ENV_KEYS = [
   "LLM_GATEWAY_URL",
   "LLM_GATEWAY_TOKEN",
   "OPENROUTER_BYOK_KEY",
+  "OPENROUTER_BYOK_MODEL",
   "LOCAL_LLM_API_URL",
   "LOCAL_LLM_MODEL",
 ];
@@ -429,6 +430,11 @@ async function collectByokValues(rl, existing) {
     `Your OpenRouter API key (sk-or-...)${existing.OPENROUTER_BYOK_KEY ? " [press Enter to keep current]" : ""}: `,
     existing.OPENROUTER_BYOK_KEY,
   );
+  values.OPENROUTER_BYOK_MODEL = await askOptional(
+    rl,
+    `OpenRouter model ID (optional; Enter to ${existing.OPENROUTER_BYOK_MODEL ? "keep current, - to clear" : "use gateway default"}): `,
+    existing.OPENROUTER_BYOK_MODEL,
+  );
   console.log("");
   console.log("No proxy token needed: calls are billed to your OpenRouter account, unlimited.");
   return values;
@@ -532,6 +538,9 @@ function summarizeValues(values) {
   }
   if (values.OPENROUTER_BYOK_KEY) {
     parts.push(`byok_key=${redactSecret(values.OPENROUTER_BYOK_KEY)}`);
+  }
+  if (values.OPENROUTER_BYOK_MODEL) {
+    parts.push(`byok_model=${values.OPENROUTER_BYOK_MODEL}`);
   }
   if (values.LOCAL_LLM_API_URL) {
     parts.push(`local_url=${values.LOCAL_LLM_API_URL}`);
@@ -901,4 +910,5 @@ module.exports = {
   removeDirectiveFromTargets,
   stripJsonCommentsAndTrailingCommas,
   stripTrailingCommas,
+  collectByokValues,
 };
