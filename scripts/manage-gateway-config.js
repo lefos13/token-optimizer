@@ -384,7 +384,8 @@ async function promptForCommand(rl) {
    - "gateway": shared infrastructure, requires a proxy/issued token, daily-limited.
    - "byok": your own OpenRouter key. NO proxy token is required or asked for
      at all — you aren't using the operator's OpenRouter setup, so the gateway
-     never authenticates you; it only proxies the request and pins the model.
+     never authenticates you; it only proxies the request. You may optionally
+     select one OpenRouter model for every task.
      Unlimited usage, billed to your own OpenRouter account.
    - "local": your own OpenAI-compatible endpoint. No token, no gateway, fully
      offline; nothing leaves your machine.

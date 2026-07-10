@@ -565,9 +565,13 @@ function applyLaunchctlValues(values, options = {}) {
   if (options.skipLaunchctl) {
     return;
   }
+  /* Mirror managed client config updates so a provider switch cannot leave
+     stale credentials or model overrides in the GUI-session environment. */
   for (const envKey of MANAGED_ENV_KEYS) {
     if (values[envKey]) {
       runLaunchctl(["setenv", envKey, values[envKey]], options);
+    } else {
+      runLaunchctl(["unsetenv", envKey], options);
     }
   }
 }
@@ -582,6 +586,10 @@ function runLaunchctl(args, options = {}) {
     const [command, envKey, value] = args;
     if (command === "setenv") {
       state[envKey] = value;
+      ensureDirectory(path.dirname(statePath));
+      fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+    } else if (command === "unsetenv") {
+      delete state[envKey];
       ensureDirectory(path.dirname(statePath));
       fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
     }

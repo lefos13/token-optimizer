@@ -79,6 +79,32 @@ test('installOpenCode copies server and skill, replaces legacy MCP config, and w
   assert.ok(agents.includes('TOKEN_OPTIMIZER_START'));
 });
 
+test('installer launchctl state clears stale BYOK key and model when the provider changes', () => {
+  const home = tmpDir('to-installer-home-');
+  const launchctlStatePath = path.join(home, 'launchctl.json');
+
+  installer.applyGatewayConfig({
+    home,
+    clients: ['opencode'],
+    provider: 'byok',
+    byokKey: 'sk-or-v1-mykey',
+    byokModel: 'openai/gpt-4o-mini',
+    launchctlStatePath,
+  });
+  installer.applyGatewayConfig({
+    home,
+    clients: ['opencode'],
+    provider: 'gateway',
+    gatewayToken: 'person-token',
+    launchctlStatePath,
+  });
+
+  const state = JSON.parse(fs.readFileSync(launchctlStatePath, 'utf8'));
+  assert.equal(state.LLM_GATEWAY_TOKEN, 'person-token');
+  assert.ok(!('OPENROUTER_BYOK_KEY' in state));
+  assert.ok(!('OPENROUTER_BYOK_MODEL' in state));
+});
+
 test('installCursor writes global MCP config and optional project rule', () => {
   const home = tmpDir('to-installer-home-');
   const assetsRoot = tmpDir('to-installer-assets-');
