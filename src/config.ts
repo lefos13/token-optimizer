@@ -21,6 +21,7 @@ const configSchema = z.object({
   execution: z.object({
     profile: z.enum(['safe', 'standard', 'unrestricted']).optional(),
     allowedCommandPrefixes: z.array(z.string().min(1)).optional(),
+    autoDetectedCommands: z.array(z.string().min(1)).optional(),
   }).partial().optional(),
   logs: z.object({
     retentionDays: z.number().int().nonnegative().optional(),
@@ -123,7 +124,11 @@ export function resolveEffectiveConfig(input: ConfigLayers = {}): EffectiveConfi
   if (profiles.indexOf(requested) > profiles.indexOf(ceiling)) warnings.push(`project/tool execution profile cannot elevate user ceiling (${ceiling})`);
   return {
     provider: resolveProviderConfig(layers, warnings),
-    execution: { profile: narrowerProfile(ceiling, requested), allowedCommandPrefixes: resolveAllowlist(layers) },
+    execution: {
+      profile: narrowerProfile(ceiling, requested),
+      allowedCommandPrefixes: resolveAllowlist(layers),
+      autoDetectedCommands: layers.tool?.execution?.autoDetectedCommands || layers.project?.execution?.autoDetectedCommands || [],
+    },
     logs: {
       retentionDays: layers.tool?.logs?.retentionDays ?? layers.project?.logs?.retentionDays ?? layers.user?.logs?.retentionDays ?? 30,
       maxDiskMb: layers.tool?.logs?.maxDiskMb ?? layers.project?.logs?.maxDiskMb ?? layers.user?.logs?.maxDiskMb ?? 1024,

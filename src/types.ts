@@ -101,6 +101,7 @@ export interface TokenOptimizerConfig {
   execution?: Partial<{
     profile: ExecutionProfile;
     allowedCommandPrefixes: string[];
+    autoDetectedCommands: string[];
   }>;
   logs?: Partial<{
     retentionDays: number;
@@ -119,7 +120,7 @@ export interface ConfigLayers {
 
 export interface EffectiveConfig {
   provider: { mode: ProviderMode; apiUrl: string; model: string; credentialEnv?: string; credential?: string; byokCredential?: string; byokModel?: string };
-  execution: { profile: ExecutionProfile; allowedCommandPrefixes: string[] };
+  execution: { profile: ExecutionProfile; allowedCommandPrefixes: string[]; autoDetectedCommands?: string[] };
   logs: { retentionDays: number; maxDiskMb: number; storageMode: 'raw-local' | 'redacted-local' };
   warnings: string[];
 }
