@@ -9,7 +9,7 @@ with raw logs.
 
 ## Contents
 
-- `.codex-plugin/plugin.json` - plugin manifest (`token-optimizer` v1.10.6).
+- `.codex-plugin/plugin.json` - plugin manifest (`token-optimizer` v1.10.7).
 - `.mcp.json` - registers the `token_optimizer` stdio server via the `mcpServers` wrapper, launched with `node server/start.js` anchored at the plugin root via `cwd: "."`.
 - `server/` - the compiled MCP server plus launchers (`start.js` cross-platform, `start.sh` POSIX) and a minimal `package.json`.
 - `skills/token-optimizer/SKILL.md` - usage guidance, copied from `skill/skill-example.md`.

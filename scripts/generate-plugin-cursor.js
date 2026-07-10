@@ -50,7 +50,7 @@ try {
   fs.mkdirSync(rulesDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "1.10.6";
+  const VERSION = "1.10.7";
 
   const sdkVersion = require(
     path.join(rootDir, "node_modules", "@modelcontextprotocol", "sdk", "package.json"),

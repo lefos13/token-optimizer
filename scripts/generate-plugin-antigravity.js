@@ -80,7 +80,7 @@ try {
      install (Antigravity does not document version-gated update pulls the way
      Claude Code's marketplace install does, but keeping this accurate still
      matters for users diffing or re-staging the plugin folder). */
-  const VERSION = "1.10.6";
+  const VERSION = "1.10.7";
 
   const sdkVersion = require(
     path.join(
