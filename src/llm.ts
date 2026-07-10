@@ -1,7 +1,8 @@
-import { FailureDetail, LogQueryResponse, ScoutResponse, ScoutPointer, LLMResponseMetadata } from './types';
+import { FailureDetail, LogQueryResponse, ScoutResponse, ScoutPointer, LLMResponseMetadata, LLMValidationError } from './types';
 import { FileCandidate } from './runner';
 import { LLMProvider, LLMHealthResponse, LLMTaskType, resolveProvider, providerHealth } from './providers';
 import { parseLLMResponse } from './llm-schemas';
+import { redactText, RedactionResult } from './redaction';
 export { resolveProvider, providerHealth } from './providers';
 export type { LLMProvider, LLMHealthResponse, LLMTaskType } from './providers';
 
@@ -89,7 +90,22 @@ function metadataFromProvider(provider: LLMProvider, latencyMs: number, fallback
     llmModel: provider.model,
     llmLatencyMs: latencyMs,
     llmTaskType: provider.taskType,
+    ...(provider.warnings.length ? { providerWarnings: provider.warnings } : {}),
     ...(fallbackReason ? { fallbackReason } : {})
+  };
+}
+
+function summarizeRedaction(systemPrompt: string, userPrompt: string): { systemPrompt: string; userPrompt: string; summary: RedactionResult } {
+  const system = redactText(systemPrompt);
+  const user = redactText(userPrompt);
+  return {
+    systemPrompt: system.text,
+    userPrompt: user.text,
+    summary: {
+      text: '',
+      count: system.count + user.count,
+      categories: [...new Set([...system.categories, ...user.categories])].sort()
+    }
   };
 }
 
@@ -101,6 +117,20 @@ function attachLLMResultMetadata<T extends object>(value: T, completion: ChatCom
 function fallbackMetadata(provider: LLMProvider, error: unknown, latencyMs: number): LLMResponseMetadata {
   const message = error instanceof Error ? error.message : String(error);
   return metadataFromProvider(provider, latencyMs, message);
+}
+
+class LLMValidationFailure extends Error {
+  constructor(public readonly validationErrors: LLMValidationError[]) {
+    super('LLM response failed schema validation');
+  }
+}
+
+function metadataForFailure(provider: LLMProvider, error: unknown, latencyMs: number, completion?: ChatCompletionResult): LLMResponseMetadata {
+  const metadata = completion?.metadata || fallbackMetadata(provider, error, latencyMs);
+  if (error instanceof LLMValidationFailure) metadata.validationErrors = error.validationErrors;
+  metadata.llmAvailable = false;
+  metadata.fallbackReason = error instanceof Error ? error.message : String(error);
+  return metadata;
 }
 
 function resolveLocalProvider(taskType: LLMTaskType): LLMProvider {
@@ -200,8 +230,13 @@ function normalizeUsage(data: any, systemPrompt: string, userPrompt: string, raw
 }
 
 /* Shared transport for every LLM call: accepts an already-resolved provider, builds the OpenAI-compatible request, and returns raw message content plus token/provider accounting. */
-async function callChatCompletion(provider: LLMProvider, systemPrompt: string, userPrompt: string): Promise<ChatCompletionResult> {
+async function callChatCompletion(provider: LLMProvider, systemPrompt: string, userPrompt: string, inheritedRedaction?: RedactionResult): Promise<ChatCompletionResult> {
   const start = Date.now();
+  /* Redact only at the final remote boundary. Local providers retain the full
+     diagnostic payload so offline development and local models are unchanged. */
+  const outbound = provider.mode === 'local'
+    ? { systemPrompt, userPrompt, redaction: inheritedRedaction }
+    : (() => { const result = summarizeRedaction(systemPrompt, userPrompt); return { ...result, redaction: result.summary }; })();
 
   const response = await fetch(`${provider.apiUrl}/chat/completions`, {
     method: 'POST',
@@ -212,8 +247,8 @@ async function callChatCompletion(provider: LLMProvider, systemPrompt: string, u
     body: JSON.stringify({
       model: provider.model,
       messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
+        { role: 'system', content: outbound.systemPrompt },
+        { role: 'user', content: outbound.userPrompt }
       ],
       temperature: 0.1,
       response_format: { type: 'json_object' }
@@ -233,10 +268,13 @@ async function callChatCompletion(provider: LLMProvider, systemPrompt: string, u
      analytics/metadata reflect central config without any client update. */
   const responseModel = typeof data.model === 'string' && data.model ? data.model : provider.model;
   const metadata = metadataFromProvider(provider, Date.now() - start);
+  if (provider.mode !== 'local' && outbound.redaction) {
+    metadata.redactionSummary = { count: outbound.redaction.count, categories: outbound.redaction.categories };
+  }
   metadata.llmModel = responseModel;
   return {
     content: rawContent,
-    usage: normalizeUsage(data, systemPrompt, userPrompt, rawContent),
+    usage: normalizeUsage(data, outbound.systemPrompt, outbound.userPrompt, rawContent),
     metadata
   };
 }
@@ -318,11 +356,12 @@ Logs:
 ${trimmedLogs}`;
 
   const start = Date.now();
+  let completion: ChatCompletionResult | undefined;
   try {
-    const completion = await callWithFallback(taskType, systemPrompt, userPrompt);
+    completion = await callWithFallback(taskType, systemPrompt, userPrompt);
     const jsonString = extractJSON(completion.content);
     const parsed = parseLLMResponse(taskType, jsonString);
-    if (!parsed.success) throw new Error(`Invalid ${taskType} response: ${parsed.validationErrors.map((issue) => issue.message).join('; ')}`);
+    if (!parsed.success) throw new LLMValidationFailure(parsed.validationErrors);
     const result: LLMVerdictResponse = parsed.data as LLMVerdictResponse;
     if (result.confidence < VERDICT_CONFIDENCE_FLOOR) {
       result.verdict = 'uncertain';
@@ -348,7 +387,7 @@ ${trimmedLogs}`;
       likelyRelevantToRecentChanges: false,
       failures: [],
       needsRawLogs: true,
-    }, fallbackMetadata(provider, error, Date.now() - start));
+    }, metadataForFailure(provider, error, Date.now() - start, completion));
   }
 }
 
@@ -399,11 +438,12 @@ Schema:
   }
 
   const start = Date.now();
+  let completion: ChatCompletionResult | undefined;
   try {
-    const completion = await callWithFallback('review', systemPrompt, userPrompt);
+    completion = await callWithFallback('review', systemPrompt, userPrompt);
     const jsonString = extractJSON(completion.content);
     const parsed = parseLLMResponse('review', jsonString);
-    if (!parsed.success) throw new Error(`Invalid review response: ${parsed.validationErrors.map((issue) => issue.message).join('; ')}`);
+    if (!parsed.success) throw new LLMValidationFailure(parsed.validationErrors);
     const result: CodeReviewResponse = { ...(parsed.data as Omit<CodeReviewResponse, 'reviewAvailable'>), reviewAvailable: true };
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
@@ -415,7 +455,7 @@ Schema:
       summary: 'Code review did not run.',
       reviewAvailable: false,
       note: `Failed to review code using local LLM: ${error.message || error}`
-    }, fallbackMetadata(provider, error, Date.now() - start));
+    }, metadataForFailure(provider, error, Date.now() - start, completion));
   }
 }
 
@@ -456,10 +496,11 @@ Output:
 ${trimmedLogs}`;
 
   const start = Date.now();
+  let completion: ChatCompletionResult | undefined;
   try {
-    const completion = await callWithFallback('digest', systemPrompt, userPrompt);
+    completion = await callWithFallback('digest', systemPrompt, userPrompt);
     const parsed = parseLLMResponse('digest', extractJSON(completion.content));
-    if (!parsed.success) throw new Error(`Invalid digest response: ${parsed.validationErrors.map((issue) => issue.message).join('; ')}`);
+    if (!parsed.success) throw new LLMValidationFailure(parsed.validationErrors);
     const result: CommandDigestResponse = parsed.data as CommandDigestResponse;
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
@@ -470,7 +511,7 @@ ${trimmedLogs}`;
       keyFindings: [],
       digest: '',
       needsRawLogs: true,
-    }, fallbackMetadata(provider, error, Date.now() - start));
+    }, metadataForFailure(provider, error, Date.now() - start, completion));
   }
 }
 
@@ -513,10 +554,11 @@ Schema:
   }
 
   const start = Date.now();
+  let completion: ChatCompletionResult | undefined;
   try {
-    const completion = await callWithFallback('scout', systemPrompt, userPrompt);
+    completion = await callWithFallback('scout', systemPrompt, userPrompt);
     const parsed = parseLLMResponse('scout', extractJSON(completion.content));
-    if (!parsed.success) throw new Error(`Invalid scout response: ${parsed.validationErrors.map((issue) => issue.message).join('; ')}`);
+    if (!parsed.success) throw new LLMValidationFailure(parsed.validationErrors);
     const result: ScoutResponse = { ...(parsed.data as Omit<ScoutResponse, 'scoutAvailable'>), scoutAvailable: true };
     if (result.pointers.length === 0 || result.pointers.every((p) => p.confidence < SCOUT_POINTER_CONFIDENCE_FLOOR)) {
       result.needsDeeperLook = true;
@@ -536,7 +578,7 @@ Schema:
       needsDeeperLook: true,
       scoutAvailable: false,
       note: `Failed to rank candidates using local LLM: ${error.message || error}`
-    }, fallbackMetadata(provider, error, Date.now() - start));
+    }, metadataForFailure(provider, error, Date.now() - start, completion));
   }
 }
 
@@ -566,10 +608,11 @@ Log (line-numbered):
 ${numberedLog}`;
 
   const start = Date.now();
+  let completion: ChatCompletionResult | undefined;
   try {
-    const completion = await callWithFallback('query', systemPrompt, userPrompt);
+    completion = await callWithFallback('query', systemPrompt, userPrompt);
     const parsed = parseLLMResponse('query', extractJSON(completion.content));
-    if (!parsed.success) throw new Error(`Invalid query response: ${parsed.validationErrors.map((issue) => issue.message).join('; ')}`);
+    if (!parsed.success) throw new LLMValidationFailure(parsed.validationErrors);
     const result: LogQueryResponse = { ...(parsed.data as Omit<LogQueryResponse, 'available'>), available: true };
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
@@ -580,6 +623,6 @@ ${numberedLog}`;
       relevantExcerpt: '',
       lineRange: '',
       available: false,
-    }, fallbackMetadata(provider, error, Date.now() - start));
+    }, metadataForFailure(provider, error, Date.now() - start, completion));
   }
 }

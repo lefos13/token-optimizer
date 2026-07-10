@@ -142,6 +142,23 @@ test('gateway result reports the model from the response body', async () => {
   }
 });
 
+test('invalid remote output returns conservative fallback with validation metadata', async () => {
+  clearEnv();
+  process.env.LLM_GATEWAY_URL = 'https://llm-proxy.lnf.gr/v1';
+  process.env.LLM_GATEWAY_TOKEN = 'shared-token';
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"verdict":"pass"}' } }] }), { status: 200 })) as typeof fetch;
+  try {
+    const result = await queryLocalLLM('t', [], {}, [], 'logs', 'verdict');
+    assert.equal(result.verdict, 'uncertain');
+    assert.ok(result.validationErrors && result.validationErrors.length > 0);
+    assert.equal(result.llmAvailable, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearEnv();
+  }
+});
+
 test('gateway failure falls back to the local model', async () => {
   clearEnv();
   process.env.LLM_GATEWAY_URL = 'https://llm-proxy.lnf.gr/v1';

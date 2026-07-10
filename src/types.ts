@@ -11,6 +11,9 @@ export interface LLMResponseMetadata {
   llmLatencyMs?: number;
   llmTaskType?: string;
   fallbackReason?: string;
+  redactionSummary?: { count: number; categories: string[] };
+  validationErrors?: LLMValidationError[];
+  providerWarnings?: string[];
 }
 
 export interface LogQueryResponse extends LLMResponseMetadata {
