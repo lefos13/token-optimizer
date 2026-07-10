@@ -8,6 +8,7 @@ function clearEnv(): void {
   delete process.env.OPENROUTER_API_KEY;
   delete process.env.LOCAL_LLM_API_URL;
   delete process.env.OPENROUTER_BYOK_KEY;
+  delete process.env.OPENROUTER_BYOK_MODEL;
 }
 
 test('resolveProvider prefers the gateway when its token+url are set', () => {
@@ -32,6 +33,26 @@ test('resolveProvider adds X-OpenRouter-Key when OPENROUTER_BYOK_KEY is set, omi
   delete process.env.OPENROUTER_BYOK_KEY;
   const withoutByok = resolveProvider('verdict');
   assert.ok(!('X-OpenRouter-Key' in withoutByok.authHeaders));
+  clearEnv();
+});
+
+test('resolveProvider sends a trimmed BYOK model only beside a BYOK key', () => {
+  clearEnv();
+  process.env.LLM_GATEWAY_URL = 'https://llm-proxy.lnf.gr/v1';
+  process.env.OPENROUTER_BYOK_KEY = 'sk-or-v1-mykey';
+  process.env.OPENROUTER_BYOK_MODEL = '  openai/gpt-4o-mini  ';
+  const withByok = resolveProvider('verdict');
+  assert.equal(withByok.authHeaders['X-OpenRouter-Model'], 'openai/gpt-4o-mini');
+
+  delete process.env.OPENROUTER_BYOK_KEY;
+  process.env.LLM_GATEWAY_TOKEN = 'shared-token';
+  const withoutByok = resolveProvider('verdict');
+  assert.ok(!('X-OpenRouter-Model' in withoutByok.authHeaders));
+
+  process.env.OPENROUTER_BYOK_KEY = 'sk-or-v1-mykey';
+  process.env.OPENROUTER_BYOK_MODEL = '   ';
+  const blank = resolveProvider('verdict');
+  assert.ok(!('X-OpenRouter-Model' in blank.authHeaders));
   clearEnv();
 });
 

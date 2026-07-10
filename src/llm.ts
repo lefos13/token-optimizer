@@ -134,12 +134,14 @@ function resolveLocalProvider(taskType: LLMTaskType): LLMProvider {
    - OPENROUTER_BYOK_KEY: the caller's own OpenRouter key, sent as
      X-OpenRouter-Key; the caller's own account pays, usage is unlimited, and
      no proxy token is needed at all — the gateway only proxies and pins the
-     model, it never authenticates a BYOK-only caller. Either value alone is
+     model, it never authenticates a BYOK-only caller. An optional model
+     header is sent only on the user-funded BYOK path. Either value alone is
      enough to engage the gateway; both may be set together. */
 function resolveGatewayProvider(taskType: LLMTaskType): LLMProvider | null {
   const token = process.env.LLM_GATEWAY_TOKEN;
   const url = process.env.LLM_GATEWAY_URL;
   const byokKey = process.env.OPENROUTER_BYOK_KEY;
+  const byokModel = process.env.OPENROUTER_BYOK_MODEL?.trim();
   if (!url || (!token && !byokKey)) {
     return null;
   }
@@ -151,7 +153,8 @@ function resolveGatewayProvider(taskType: LLMTaskType): LLMProvider | null {
     authHeaders: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       'X-Task-Type': taskType,
-      ...(byokKey ? { 'X-OpenRouter-Key': byokKey } : {})
+      ...(byokKey ? { 'X-OpenRouter-Key': byokKey } : {}),
+      ...(byokKey && byokModel ? { 'X-OpenRouter-Model': byokModel } : {})
     }
   };
 }
