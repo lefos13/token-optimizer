@@ -42,6 +42,9 @@ function emptyManagedValues() {
      ever requiring a token. */
 function buildProviderValues(options) {
   const requested = options.provider;
+  if (requested !== undefined && !normalizeProviderChoice(requested)) {
+    throw new Error(`Unsupported provider mode: ${requested}`);
+  }
   const provider = normalizeProviderChoice(requested) || inferProvider(options);
   const values = emptyManagedValues();
   values.TOKEN_OPTIMIZER_PROVIDER_MODE = provider === "skip" ? "" : provider;

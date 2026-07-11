@@ -1,6 +1,6 @@
 {
   "name": "token-optimizer",
-  "version": "2.0.0-alpha.4",
+  "version": "2.0.0-alpha.5",
   "description": "Token Optimizer runs validation commands in a workspace, keeps raw logs out of context, and returns compact verdicts via the token_optimizer MCP server.",
   "author": {
     "name": "Lefos13"

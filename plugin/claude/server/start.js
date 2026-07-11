@@ -5,7 +5,7 @@
    JSON-RPC channel, so all npm output is routed to stderr. */
 const fs = require("fs");
 const path = require("path");
-const { spawn, spawnSync } = require("child_process");
+const { spawn, spawnSync, execFileSync } = require("child_process");
 
 /* start.js always sits in the same directory as index.js and package.json,
    in every bundle layout, so everything resolves from __dirname. */
@@ -69,13 +69,19 @@ const child = spawn(process.execPath, [path.join(__dirname, "index.js")], {
       try { parsed = JSON.parse(ref); } catch {}
       if (!secret && parsed && typeof parsed === "object") {
         if (parsed.store === "env") secret = env[parsed.account || parsed.variable || "TOKEN_OPTIMIZER_CREDENTIAL"];
-        if (!secret && (parsed.store === "config" || parsed.store === "protected-config")) {
+      if (!secret && (parsed.store === "config" || parsed.store === "protected-config")) {
           try {
             const file = env.TOKEN_OPTIMIZER_CREDENTIALS_FILE || path.join(require("os").homedir(), ".token-optimizer", "credentials.json");
             const values = JSON.parse(fs.readFileSync(file, "utf8"));
             secret = values[(parsed.service || "token-optimizer") + ":" + (parsed.account || require("os").userInfo().username)];
           } catch {}
         }
+      }
+      if (!secret && parsed.store === "native") {
+        try {
+          if (process.platform === "darwin") secret = execFileSync("security", ["find-generic-password", "-s", parsed.service || "token-optimizer", "-a", parsed.account || "", "-w"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+          else if (process.platform === "linux") secret = execFileSync("secret-tool", ["lookup", "service", parsed.service || "token-optimizer", "account", parsed.account || ""], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+        } catch {}
       }
       if (secret) {
         const mode = env.TOKEN_OPTIMIZER_PROVIDER_MODE;
