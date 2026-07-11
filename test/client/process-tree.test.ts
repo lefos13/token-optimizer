@@ -49,7 +49,9 @@ test('termination removes the spawned grandchild', { skip: process.platform === 
 test('termination escalates when a descendant ignores SIGTERM', { skip: process.platform === 'win32' }, async () => {
   const child = spawn(process.execPath, [fixturePath], {
     detached: true,
-    env: { ...process.env, IGNORE_TERM: '1' },
+    /* The delay makes the old PID-only synchronization fail deterministically:
+       termination must not start until the resistant handler is installed. */
+    env: { ...process.env, IGNORE_TERM: '1', READY_DELAY_MS: '75' },
     stdio: ['ignore', 'pipe', 'ignore'],
   });
   const grandchildPid = await readGrandchildPid(child);

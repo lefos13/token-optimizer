@@ -1,12 +1,14 @@
 const { spawn } = require('node:child_process');
 
-/* Keep both processes alive so the test can verify that group termination reaches descendants. */
+/* Report the PID only after the grandchild has installed its signal handler.
+   Process creation alone is not a readiness boundary: without this handshake,
+   SIGTERM can win the race and make the escalation test observe a soft exit. */
 const grandchildCode = process.env.IGNORE_TERM
-  ? "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"
-  : 'setInterval(() => {}, 1000)';
+  ? "setTimeout(() => { process.on('SIGTERM', () => {}); process.stdout.write('ready\\n'); setInterval(() => {}, 1000); }, Number(process.env.READY_DELAY_MS || 0))"
+  : "process.stdout.write('ready\\n'); setInterval(() => {}, 1000)";
 const grandchild = spawn(process.execPath, ['-e', grandchildCode], {
-  stdio: 'ignore',
+  stdio: ['ignore', 'pipe', 'ignore'],
 });
-process.stdout.write(`${grandchild.pid}\n`);
+grandchild.stdout.once('data', () => process.stdout.write(`${grandchild.pid}\n`));
 if (process.env.IGNORE_TERM) process.on('SIGTERM', () => {});
 setInterval(() => {}, 1000);
