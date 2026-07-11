@@ -13,13 +13,13 @@ test('repair is scoped to actionable doctor findings', () => {
 });
 
 test('repair consumes stable operation hints and deduplicates exact external work', () => {
-  const manifest = { schemaVersion: 2, roots: ['/managed', '/assets'], files: [] };
+  const manifest = { schemaVersion: 2, roots: ['/managed', '/assets'], files: [], registrations: [{ client: 'codex', canonicalPath: '/managed/config.toml', template: '[mcp_servers.token_optimizer]\ncommand = "node"', ownership: 'installer' }] };
   const plan = planRepair({ findings: [
     { code: 'STALE_REGISTRATION', client: 'codex', operation: 'rewrite-registration' },
     { code: 'STALE_REGISTRATION', client: 'codex', operation: 'rewrite-registration' },
     { code: 'PROVIDER_MISSING', operation: 'configure-provider' },
   ] }, manifest);
-  assert.deepEqual(plan.operations, [{ kind: 'client-command', client: 'codex', command: 'rewrite-registration', paths: [] }]);
+  assert.deepEqual(plan.operations, [{ kind: 'client-command', client: 'codex', command: 'upsert-registration', paths: [], canonicalPath: '/managed/config.toml', template: '[mcp_servers.token_optimizer]\ncommand = "node"' }]);
 });
 
 test('repair removes an incomplete dependency cache so launcher bootstrap can rebuild it', () => {

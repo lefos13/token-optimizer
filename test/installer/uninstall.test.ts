@@ -69,3 +69,11 @@ test('LaunchAgent permission failure leaves plist untouched', () => {
   const operation = { kind: 'platform-service', service: 'fixture', path: file };
   assert.throws(() => adapter.apply(operation), /permitted/); assert.equal(fs.readFileSync(file, 'utf8'), 'owned');
 });
+
+test('managed launchctl environment apply restores exact previous values', () => {
+  const state: Record<string, string> = { TOKEN_OPTIMIZER_PROVIDER_MODE: 'previous' };
+  const exec = (_cmd: string, args: string[]) => { if (args[0] === 'print') return ''; if (args[0] === 'getenv') return state[args[1]] || ''; if (args[0] === 'setenv') { state[args[1]] = args[2]; return ''; } if (args[0] === 'unsetenv') { delete state[args[1]]; return ''; } return ''; };
+  const adapter = createServiceAdapter({ execFileSync: exec, services: [{ service: 'fixture', managedEnv: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'local' } }] });
+  const operation = { kind: 'platform-service', service: 'fixture', action: 'apply-managed-env', envKeys: ['TOKEN_OPTIMIZER_PROVIDER_MODE'] };
+  const before = adapter.capture(operation); adapter.apply(operation); assert.equal(state.TOKEN_OPTIMIZER_PROVIDER_MODE, 'local'); adapter.restore(operation, before); assert.equal(state.TOKEN_OPTIMIZER_PROVIDER_MODE, 'previous');
+});

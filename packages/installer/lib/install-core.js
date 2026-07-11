@@ -361,14 +361,16 @@ function persistInstallManifest(options = {}, clients = []) {
     antigravity: [path.join(paths.home, ".gemini", "config", "mcp_config.json")], opencode: [path.join(paths.home, ".config", "opencode", "opencode.jsonc")],
     cursor: [path.join(paths.home, ".cursor", "mcp.json")],
   };
-  const registrations = clients.map((client) => ({ client, paths: (registrationPaths[client] || []).filter((file) => fs.existsSync(file)), ownership: "installer" }))
+  const registrations = clients.map((client) => { const paths = (registrationPaths[client] || []).filter((file) => fs.existsSync(file)); return { client, paths, canonicalPath: paths[0], template: paths[0] ? captureRegistrationTemplate(paths[0], client) : null, ownership: "installer" }; })
     .concat((options.lifecycleRegistrations || []).map((registration) => ({ ...registration, ownership: "installer" })));
   const launchAgent = path.join(paths.home, "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`);
   const platformServices = process.platform === "darwin" && fs.existsSync(launchAgent)
-    ? [{ platform: "darwin", service: LAUNCH_AGENT_LABEL, path: launchAgent, content: fs.readFileSync(launchAgent, "utf8"), ownership: "installer" }]
+    ? [{ platform: "darwin", service: LAUNCH_AGENT_LABEL, path: launchAgent, content: fs.readFileSync(launchAgent, "utf8"), managedEnv: buildProviderValues(options), ownership: "installer" }]
     : [];
   writeManifest(paths.home, { schemaVersion: 2, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [paths.assetsRoot], managedBlocks, credentials, registrations, platformServices, files });
 }
+
+function captureRegistrationTemplate(file, client) { const text = fs.readFileSync(file, "utf8"); if (client === "codex") return text.match(/^\[mcp_servers\.(?:"?token[_-]optimizer"?)\]\s*$[\s\S]*?(?=^\[(?!mcp_servers\.token_optimizer\.env)|(?![\s\S]))/m)?.[0] || null; try { const data = JSON.parse(text.replace(/\/\*[\s\S]*?\*\/|(^|[^:])\/\/.*$/gm, "$1").replace(/,\s*([}\]])/g, "$1")); const container = client === "opencode" ? data.mcp : data.mcpServers; return container?.token_optimizer || container?.["token-optimizer"] || null; } catch (_) { return null; } }
 
 function clientTargets(client, paths, options = {}) {
   const roots = {

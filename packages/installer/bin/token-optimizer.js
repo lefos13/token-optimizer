@@ -77,16 +77,12 @@ async function main() {
     const report = command === "repair" ? await inspectInstallation({ home, performHealthProbe: false }) : null;
     const assetsRoot = require("path").resolve(__dirname, "..", "assets");
     const managedRoots = [require("path").join(home || process.env.HOME, ".token-optimizer"), require("path").join(home || process.env.HOME, ".config", "opencode"), require("path").join(home || process.env.HOME, ".cursor"), require("path").join(home || process.env.HOME, ".gemini"), require("path").join(home || process.env.HOME, ".claude"), require("path").join(home || process.env.HOME, ".codex")];
-    const plan = command === "repair" ? planRepair(report, manifest, { assetsRoot, managedRoots }) : planUninstall(manifest, currentStateFromManifest(manifest), { manifestPath: manifestPath(home) });
+    const plan = command === "repair" ? planRepair(report, manifest, { assetsRoot, managedRoots, manifestPath: manifestPath(home) }) : planUninstall(manifest, currentStateFromManifest(manifest), { manifestPath: manifestPath(home) });
     if (args["dry-run"] === true || args.json === true) {
       console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
       return;
     }
-    applyLifecyclePlan(plan, { requireExternalAdapters: true, registrationAdapter: createRegistrationAdapter(), serviceAdapter: createServiceAdapter({ services: manifest.platformServices || [] }), manifest, home, planWarnings: plan.warnings || [] });
-    if (command === "repair") {
-      const crypto = require("crypto"); const fs = require("fs");
-      writeManifest(home, { ...manifest, files: manifest.files.map((file) => fs.existsSync(file.path) ? { ...file, sha256: crypto.createHash("sha256").update(fs.readFileSync(file.path)).digest("hex") } : file) });
-    }
+    applyLifecyclePlan(plan, { requireExternalAdapters: true, registrationAdapter: createRegistrationAdapter(), serviceAdapter: createServiceAdapter({ services: manifest.platformServices || [], skipLaunchctl: args["skip-launchctl"] === true }), manifest, home, planWarnings: plan.warnings || [] });
     console.log(`${command}: applied ${plan.operations.length} operation(s).`);
     return;
   }

@@ -57,14 +57,15 @@ function planRepair(report = {}, manifest, options = {}) {
   }
   for (const finding of actionable) {
     if (finding.operation === 'refresh-runtime' && finding.code === 'DEPENDENCY_CACHE_INCOMPLETE' && finding.path) operations.push(removeFileOperation(trustedRuntimeCache(finding.path, options)));
-    if (['rewrite-registration', 'deduplicate-registration', 'install-client'].includes(finding.operation) && finding.client) operations.push(clientCommandOperation(finding.client, finding.operation, { paths: finding.paths || (finding.path ? [finding.path] : []) }));
-    if (['rewrite-launch-agent', 'reload-launch-agent'].includes(finding.operation)) { const service = (manifest.platformServices || []).find((item) => item.path === finding.path) || {}; operations.push(platformServiceOperation('darwin', service.service || 'com.softawarest.token-optimizer.env', { path: finding.path || service.path, action: finding.operation })); }
+    if (['rewrite-registration', 'deduplicate-registration', 'install-client'].includes(finding.operation)) { const owned = (manifest.registrations || []).filter((item) => !finding.client || item.client === finding.client).filter((item) => item.template); for (const registration of owned) { const discovered = finding.paths || (finding.path ? [finding.path] : []); const extras = discovered.filter((item) => item !== registration.canonicalPath).filter((item) => { try { return fs.lstatSync(item).isFile(); } catch (_) { return false; } }); operations.push(clientCommandOperation(registration.client, 'upsert-registration', { paths: extras, canonicalPath: registration.canonicalPath, template: registration.template })); } }
+    if (['rewrite-launch-agent', 'reload-launch-agent', 'apply-managed-env'].includes(finding.operation)) { const service = (manifest.platformServices || []).find((item) => item.path === finding.path) || {}; operations.push(platformServiceOperation('darwin', service.service || 'com.softawarest.token-optimizer.env', { path: finding.path || service.path, action: finding.operation, envKeys: finding.envKey ? [finding.envKey] : undefined })); }
   }
+  if (options.manifestPath && operations.length) operations.push(manifestOperation(options.manifestPath, 'refresh-hashes'));
   return createChangePlan({ action: 'repair', findings: actionable.map((item) => item.code).filter(Boolean) }, deduplicateOperations(operations));
 }
 
 function isRepairFinding(item) {
-  return ['MISSING_LAUNCHER', 'LAUNCHER_NOT_EXECUTABLE', 'MISSING_FILE', 'CORRUPT_FILE', 'VERSION_MISMATCH', 'CLIENT_NOT_CONFIGURED', 'STALE_REGISTRATION', 'DUPLICATE_REGISTRATION', 'LAUNCH_AGENT_MISSING', 'LAUNCH_AGENT_INVALID', 'LAUNCHCTL_MISMATCH', 'DEPENDENCY_CACHE_INCOMPLETE', 'MANIFEST_HASH_MISMATCH'].includes(item.code);
+  return ['MISSING_LAUNCHER', 'LAUNCHER_NOT_EXECUTABLE', 'MISSING_FILE', 'CORRUPT_FILE', 'VERSION_MISMATCH', 'CLIENT_NOT_CONFIGURED', 'STALE_REGISTRATION', 'DUPLICATE_REGISTRATION', 'LAUNCH_AGENT_MISSING', 'LAUNCH_AGENT_INVALID', 'LAUNCHCTL_MISMATCH', 'LAUNCHCTL_ENV_MISMATCH', 'DEPENDENCY_CACHE_INCOMPLETE', 'MANIFEST_HASH_MISMATCH'].includes(item.code);
 }
 
 function deduplicateOperations(operations) { const seen = new Set(); return operations.filter((operation) => { const key = JSON.stringify(operation); if (seen.has(key)) return false; seen.add(key); return true; }); }
@@ -160,6 +161,7 @@ function applyOperation(operation, options) {
 function applyManifestOperation(operation, options) {
   if (!options.manifest) throw new Error('manifest state is required');
   if (operation.action === 'remove') fs.rmSync(operation.path, { force: true });
+  else if (operation.action === 'refresh-hashes') { writeManifest(options.home, { ...options.manifest, files: options.manifest.files.map((file) => fs.existsSync(file.path) ? { ...file, sha256: crypto.createHash('sha256').update(fs.readFileSync(file.path)).digest('hex') } : file) }); }
   else {
     const warned = new Set((options.planWarnings || []).map((warning) => warning.path));
     writeManifest(options.home, { ...options.manifest, files: (options.manifest.files || []).filter((file) => warned.has(file.path)), managedBlocks: (options.manifest.managedBlocks || []).filter((block) => warned.has(block.path)), credentials: [], registrations: [], platformServices: [] });
