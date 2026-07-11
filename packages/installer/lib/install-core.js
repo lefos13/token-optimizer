@@ -346,12 +346,21 @@ function persistInstallManifest(options = {}, clients = []) {
   const managedBlocks = [
     path.join(paths.home, ".claude", "CLAUDE.md"), path.join(paths.home, ".codex", "AGENTS.md"), path.join(paths.home, ".gemini", "GEMINI.md"),
     path.join(paths.home, ".config", "opencode", "AGENTS.md"),
-  ].filter((file) => fs.existsSync(file)).map((file) => ({ path: file, marker: "TOKEN_OPTIMIZER_START", sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") }));
+  ].filter((file) => fs.existsSync(file)).map((file) => {
+    const content = fs.readFileSync(file, "utf8");
+    const block = content.match(/<!-- TOKEN_OPTIMIZER_START -->[\s\S]*?<!-- TOKEN_OPTIMIZER_END -->/)?.[0] || "";
+    return { path: file, marker: "TOKEN_OPTIMIZER_START", blockSha256: crypto.createHash("sha256").update(block).digest("hex") };
+  });
   const existingManifest = readManifest(paths.home);
   const credentials = options.credentialOwnershipCleared ? [] : options.credentialRef && options.credentialOwned !== false && options.credentialRef.store !== "env"
     ? [{ reference: options.credentialRef, ownership: "installer" }]
     : (existingManifest?.credentials || []);
-  const registrations = clients.map((client) => ({ client, ownership: "installer" }));
+  const registrationPaths = {
+    claude: [path.join(paths.home, ".claude.json")], codex: [path.join(paths.home, ".codex", "config.toml")],
+    antigravity: [path.join(paths.home, ".gemini", "config", "mcp_config.json")], opencode: [path.join(paths.home, ".config", "opencode", "opencode.jsonc")],
+    cursor: [path.join(paths.home, ".cursor", "mcp.json")],
+  };
+  const registrations = clients.map((client) => ({ client, paths: (registrationPaths[client] || []).filter((file) => fs.existsSync(file)), ownership: "installer" }));
   const launchAgent = path.join(paths.home, "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`);
   const platformServices = process.platform === "darwin" && fs.existsSync(launchAgent)
     ? [{ platform: "darwin", service: LAUNCH_AGENT_LABEL, path: launchAgent, ownership: "installer" }]

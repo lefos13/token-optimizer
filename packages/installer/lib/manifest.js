@@ -17,6 +17,9 @@ function validateManifest(manifest, home) {
   if (!Array.isArray(manifest.roots) || manifest.roots.length === 0 || manifest.roots.some((root) => typeof root !== "string" || !path.isAbsolute(root))) throw new Error("manifest requires absolute allowed roots");
   const roots = manifest.roots.map((root) => path.resolve(root));
   const rootRealpaths = roots.map((root) => realpathWithMissingTail(root));
+  const assetRoots = manifest.assetRoots === undefined ? [] : manifest.assetRoots;
+  if (!Array.isArray(assetRoots) || assetRoots.some((root) => typeof root !== "string" || !path.isAbsolute(root))) throw new Error("manifest assetRoots require absolute paths");
+  const canonicalAssets = assetRoots.map((root) => realpathWithMissingTail(root));
   for (const file of manifest.files) {
     if (!file || typeof file.path !== "string" || !path.isAbsolute(file.path) || file.path.includes("\0") || file.path.split(path.sep).includes("..")) {
       throw new Error("manifest contains an invalid path");
@@ -25,6 +28,11 @@ function validateManifest(manifest, home) {
     const canonical = realpathWithMissingTail(resolved);
     if (!rootRealpaths.some((root) => canonical === root || canonical.startsWith(`${root}${path.sep}`))) throw new Error(`manifest path outside known roots: ${file.path}`);
     if (typeof file.sha256 !== "string" || typeof file.ownership !== "string") throw new Error("manifest file entries require sha256 and ownership");
+    if (file.source !== undefined) {
+      if (typeof file.source !== "string" || !path.isAbsolute(file.source)) throw new Error("manifest source must be absolute");
+      const source = realpathWithMissingTail(file.source);
+      if (!canonicalAssets.some((root) => source === root || source.startsWith(`${root}${path.sep}`))) throw new Error("manifest source outside assetRoots");
+    }
   }
   if (manifest.credentials !== undefined && (!Array.isArray(manifest.credentials) || manifest.credentials.some((item) => !item || item.ownership !== "installer" || !item.reference || typeof item.reference.store !== "string"))) {
     throw new Error("manifest credentials require installer ownership and a store reference");

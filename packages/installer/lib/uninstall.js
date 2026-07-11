@@ -2,14 +2,15 @@ const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
 const os = require('os');
-const { createChangePlan, copyTreeOperation, removeFileOperation, managedBlockOperation, credentialOperation, clientCommandOperation, platformServiceOperation } = require('./change-plan');
+const { createChangePlan, copyTreeOperation, removeFileOperation, managedBlockOperation, credentialOperation, clientCommandOperation, platformServiceOperation, manifestOperation } = require('./change-plan');
+const { writeManifest } = require('./manifest');
 const { createCredentialStore } = require('./credential-store');
 
 /* Lifecycle plans are deliberately side-effect free. They use the ownership
    hashes captured during installation, so uninstall never deletes a file that
    a user changed after the installer created it. Repair is similarly scoped to
    doctor findings instead of reinstalling every managed client. */
-function planUninstall(manifest, currentState = {}) {
+function planUninstall(manifest, currentState = {}, options = {}) {
   assertManifest(manifest);
   const operations = [];
   const warnings = [];
@@ -22,9 +23,9 @@ function planUninstall(manifest, currentState = {}) {
     operations.push(removeFileOperation(file.path));
   }
   for (const block of manifest.managedBlocks || []) {
-    const actual = stateHash(currentState, block.path);
-    if (block.sha256 && actual !== block.sha256) {
-      warnings.push({ code: 'USER_MODIFIED_FILE', path: block.path });
+    const actual = managedBlockHash(block.path, block.marker || block.id || 'TOKEN_OPTIMIZER_START');
+    if ((block.blockSha256 || block.sha256) && actual !== (block.blockSha256 || block.sha256)) {
+      warnings.push({ code: 'USER_MODIFIED_BLOCK', path: block.path });
       continue;
     }
     operations.push(managedBlockOperation(block.path, block.marker || block.id || 'TOKEN_OPTIMIZER_START'));
@@ -33,15 +34,16 @@ function planUninstall(manifest, currentState = {}) {
     if (credential.ownership === 'installer' && credential.reference) operations.push(credentialOperation('remove', { reference: credential.reference }));
   }
   for (const registration of manifest.registrations || []) {
-    if (registration.ownership === 'installer' && registration.client) operations.push(clientCommandOperation(registration.client, 'remove-registration'));
+    if (registration.ownership === 'installer' && registration.client) operations.push(clientCommandOperation(registration.client, 'remove-registration', { paths: registration.paths || [] }));
   }
   for (const service of manifest.platformServices || []) {
-    if (service.ownership === 'installer') operations.push(platformServiceOperation(service.platform, service.service));
+    if (service.ownership === 'installer') operations.push(platformServiceOperation(service.platform, service.service, { path: service.path }));
   }
+  if (options.manifestPath) operations.push(manifestOperation(options.manifestPath, warnings.length ? 'retain-warnings' : 'remove'));
   return createChangePlan({ action: 'uninstall', warnings }, operations);
 }
 
-function planRepair(report = {}, manifest) {
+function planRepair(report = {}, manifest, options = {}) {
   assertManifest(manifest);
   const findings = Array.isArray(report.findings) ? report.findings : [];
   const actionable = findings.filter((item) => item && item.severity !== 'info' && isRepairFinding(item));
@@ -50,8 +52,8 @@ function planRepair(report = {}, manifest) {
   for (const file of manifest.files) {
     const relevant = needed.has(file.path);
     if (!relevant) continue;
-    if (file.source) operations.push(copyTreeOperation(file.source, file.path));
-    else if (file.kind === 'copy-tree' && file.sourcePath) operations.push(copyTreeOperation(file.sourcePath, file.path));
+    if (file.source) operations.push(copyTreeOperation(trustedRepairSource(file, manifest, options), file.path));
+    else if (file.kind === 'copy-tree' && file.sourcePath) operations.push(copyTreeOperation(trustedRepairSource({ ...file, source: file.sourcePath }, manifest, options), file.path));
   }
   for (const finding of actionable) {
     if (['rewrite-registration', 'deduplicate-registration', 'install-client'].includes(finding.operation) && finding.client) operations.push(clientCommandOperation(finding.client, finding.operation));
@@ -65,6 +67,16 @@ function isRepairFinding(item) {
 }
 
 function deduplicateOperations(operations) { const seen = new Set(); return operations.filter((operation) => { const key = JSON.stringify(operation); if (seen.has(key)) return false; seen.add(key); return true; }); }
+
+function trustedRepairSource(file, manifest, options) {
+  const trustedRoot = options.assetsRoot && path.resolve(options.assetsRoot);
+  if (!trustedRoot) throw Object.assign(new Error('trusted installer assets root is required for repair'), { code: 'REPAIR_SOURCE_UNTRUSTED' });
+  const declared = (manifest.assetRoots || []).map((root) => path.resolve(root)).find((root) => file.source === root || file.source.startsWith(`${root}${path.sep}`));
+  if (!declared) throw Object.assign(new Error('manifest repair source is outside declared assets'), { code: 'REPAIR_SOURCE_UNTRUSTED' });
+  const relative = path.relative(declared, file.source); const source = path.resolve(trustedRoot, relative);
+  if (!(source === trustedRoot || source.startsWith(`${trustedRoot}${path.sep}`)) || !fs.existsSync(source)) throw Object.assign(new Error('packaged repair source is unavailable'), { code: 'REPAIR_SOURCE_UNAVAILABLE' });
+  return source;
+}
 
 function assertManifest(manifest) {
   if (!manifest || !Array.isArray(manifest.files)) throw new TypeError('manifest with files is required');
@@ -118,7 +130,7 @@ function applyLifecyclePlan(plan, options = {}) {
 }
 
 function prepareInverse(operation, options) {
-  if (['remove-file', 'copy-tree', 'managed-block'].includes(operation.kind)) return snapshotPath(operation.path);
+  if (['remove-file', 'copy-tree', 'managed-block', 'manifest'].includes(operation.kind)) return snapshotPath(operation.path);
   if (operation.kind === 'credential') {
     const store = credentialStore(operation, options); const previous = store.get(operation.reference);
     return previous == null ? () => {} : () => store.set(previous, operation.reference);
@@ -139,6 +151,16 @@ function applyOperation(operation, options) {
   else if (operation.kind === 'credential') credentialStore(operation, options).delete(operation.reference);
   else if (operation.kind === 'client-command' && options.registrationAdapter) options.registrationAdapter.apply(operation);
   else if (operation.kind === 'platform-service' && options.serviceAdapter) options.serviceAdapter.apply(operation);
+  else if (operation.kind === 'manifest') applyManifestOperation(operation, options);
+}
+
+function applyManifestOperation(operation, options) {
+  if (!options.manifest) throw new Error('manifest state is required');
+  if (operation.action === 'remove') fs.rmSync(operation.path, { force: true });
+  else {
+    const warned = new Set((options.planWarnings || []).map((warning) => warning.path));
+    writeManifest(options.home, { ...options.manifest, files: (options.manifest.files || []).filter((file) => warned.has(file.path)), managedBlocks: (options.manifest.managedBlocks || []).filter((block) => warned.has(block.path)), credentials: [], registrations: [], platformServices: [] });
+  }
 }
 
 function credentialStore(operation, options) { const ref = operation.reference; const kind = ref.store === 'config' || ref.store === 'protected-config' ? 'config' : 'native'; return options.credentialStoreFactory ? options.credentialStoreFactory(ref) : createCredentialStore(kind, { service: ref.service, account: ref.account, path: ref.path }); }
@@ -159,5 +181,7 @@ function removeManagedBlock(filePath, marker) {
   const next = text.replace(new RegExp(`\\n?${escapedStart}[\\s\\S]*?${escapedEnd}\\n?`, 'g'), '\n');
   if (next !== text) fs.writeFileSync(filePath, next);
 }
+
+function managedBlockHash(filePath, marker) { try { const text = fs.readFileSync(filePath, 'utf8'); const start = marker.includes('<!--') ? marker : `<!-- ${marker} -->`; const end = marker.includes('<!--') ? marker.replace('START', 'END') : `<!-- ${marker.replace('START', 'END')} -->`; const match = text.match(new RegExp(`${start.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${end.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)); return match ? crypto.createHash('sha256').update(match[0]).digest('hex') : null; } catch (_) { return null; } }
 
 module.exports = { planUninstall, planRepair, currentStateFromManifest, stateHash, applyLifecyclePlan };

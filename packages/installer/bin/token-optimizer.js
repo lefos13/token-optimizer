@@ -21,10 +21,11 @@ const {
   applyDefaultDirectives,
 } = require("../lib/install-core");
 const { inspectInstallation } = require("../lib/doctor");
-const { readManifest } = require("../lib/manifest");
+const { readManifest, manifestPath } = require("../lib/manifest");
 const { planRepair, planUninstall, currentStateFromManifest, applyLifecyclePlan } = require("../lib/uninstall");
 const { statusLogs, pruneLogs, purgeLogs } = require("../lib/logs");
 const { planMigrationFromHome, migrateInstallation } = require("../lib/migration");
+const { createRegistrationAdapter, createServiceAdapter } = require("../lib/lifecycle-adapters");
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -74,13 +75,13 @@ async function main() {
       throw new Error("No Token Optimizer ownership manifest found");
     }
     const report = command === "repair" ? await inspectInstallation({ home, performHealthProbe: false }) : null;
-    const plan = command === "repair" ? planRepair(report, manifest) : planUninstall(manifest, currentStateFromManifest(manifest));
+    const assetsRoot = require("path").resolve(__dirname, "..", "assets");
+    const plan = command === "repair" ? planRepair(report, manifest, { assetsRoot }) : planUninstall(manifest, currentStateFromManifest(manifest), { manifestPath: manifestPath(home) });
     if (args["dry-run"] === true || args.json === true) {
       console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
       return;
     }
-    applyLifecyclePlan(plan, { requireExternalAdapters: true });
-    if (command === "uninstall") require("fs").rmSync(require("./../lib/manifest").manifestPath(home), { force: true });
+    applyLifecyclePlan(plan, { requireExternalAdapters: true, registrationAdapter: createRegistrationAdapter(), serviceAdapter: createServiceAdapter(), manifest, home, planWarnings: plan.warnings || [] });
     console.log(`${command}: applied ${plan.operations.length} operation(s).`);
     return;
   }

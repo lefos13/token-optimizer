@@ -4,6 +4,7 @@
 const OPERATION_KINDS = Object.freeze([
   "create-directory", "write-file", "copy-tree", "managed-block",
   "remove-file", "client-command", "credential", "platform-service",
+  "manifest",
 ]);
 
 function deepFreeze(value) {
@@ -57,14 +58,15 @@ const writeFileOperation = (path, sha256) => operation("write-file", { path, sha
 const copyTreeOperation = (source, path) => operation("copy-tree", { source, path });
 const removeFileOperation = (path) => operation("remove-file", { path });
 const managedBlockOperation = (path, marker) => operation("managed-block", { path, marker });
-const clientCommandOperation = (client, command) => operation("client-command", { client, command });
+const clientCommandOperation = (client, command, details = {}) => operation("client-command", { client, command, ...details });
 const credentialOperation = (provider, details = {}) => operation("credential", { provider, ...details });
-const platformServiceOperation = (platform, service) => operation("platform-service", { platform, service });
+const platformServiceOperation = (platform, service, details = {}) => operation("platform-service", { platform, service, ...details });
+const manifestOperation = (path, action) => operation("manifest", { path, action });
 
 module.exports = {
   OPERATION_KINDS, createChangePlan, formatChangePlan, operation,
   createDirectoryOperation, writeFileOperation, copyTreeOperation,
   removeFileOperation,
   managedBlockOperation, clientCommandOperation, credentialOperation,
-  platformServiceOperation,
+  platformServiceOperation, manifestOperation,
 };

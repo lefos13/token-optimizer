@@ -87,8 +87,9 @@ test('uninstall preserves a user-modified managed file', () => {
 test('repair derives only operations required by doctor findings', () => {
   const source = path.join(os.tmpdir(), 'token-optimizer-source');
   const target = path.join(os.tmpdir(), 'token-optimizer-target');
-  const manifest = { schemaVersion: 2, roots: [path.dirname(source)], files: [{ path: target, source, sha256: 'x', ownership: 'installer' }] };
-  const plan = lifecycle.planRepair({ findings: [{ code: 'MISSING_LAUNCHER', path: target }] }, manifest);
+  fs.writeFileSync(source, 'fixture');
+  const manifest = { schemaVersion: 2, roots: [path.dirname(source)], assetRoots: [path.dirname(source)], files: [{ path: target, source, sha256: 'x', ownership: 'installer' }] };
+  const plan = lifecycle.planRepair({ findings: [{ code: 'MISSING_LAUNCHER', path: target }] }, manifest, { assetsRoot: path.dirname(source) });
   assert.deepEqual(plan.operations.map((operation: any) => operation.kind), ['copy-tree']);
 });
 
