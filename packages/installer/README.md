@@ -162,8 +162,12 @@ npx @softawarest/token-optimizer-installer repair --dry-run
 npx @softawarest/token-optimizer-installer uninstall --dry-run
 ```
 
-`status` is read-only; `doctor` performs a provider health check and exits `1`
-for errors, `2` for warnings with `--strict`, and `0` when healthy. Credential
+`status` is read-only and makes no provider/network request. It inspects actual
+MCP/plugin registrations, installed launcher metadata, runtime dependencies,
+credential-store accessibility, manifest integrity, macOS LaunchAgent state,
+and optional `--workspace` logs. `doctor` adds an authenticated metadata-only
+provider liveness check that consumes no model quota and exits `1` for errors,
+`2` for warnings with `--strict`, and `0` when healthy. Credential
 stores prefer macOS Keychain, Windows DPAPI/Credential Manager, and Linux
 Secret Service/libsecret; any fallback is visible in the dry-run plan. Legacy
 provider migration removes only superseded managed keys. Raw logs are scoped to

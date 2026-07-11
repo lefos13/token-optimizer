@@ -36,22 +36,22 @@ async function main() {
   }
 
   if (command === "status" || command === "doctor") {
+    if (args.workspace && !require("path").isAbsolute(args.workspace)) throw new Error("status/doctor --workspace requires an absolute path");
     const report = await inspectInstallation({
       home: args.home,
       installedVersion: args["installed-version"],
       expectedVersion: args["expected-version"] || pkg.version,
       provider: args.provider,
       profile: args.profile,
+      workspace: args.workspace,
       logDirectory: args["log-directory"],
       performHealthProbe: command === "doctor",
     });
     if (args.json === true) console.log(JSON.stringify(report, null, 2));
     else printInspection(report, command);
-    if (command === "doctor") {
-      const errors = report.findings.some((item) => item.severity === "error");
-      const warnings = report.findings.some((item) => item.severity === "warning");
-      process.exitCode = errors ? 1 : warnings && args.strict === true ? 2 : 0;
-    }
+    const errors = report.findings.some((item) => item.severity === "error");
+    const warnings = report.findings.some((item) => item.severity === "warning");
+    process.exitCode = errors ? 1 : warnings && args.strict === true ? 2 : 0;
     return;
   }
 
@@ -408,8 +408,8 @@ function printHelp() {
   token-optimizer install --local
   token-optimizer config --token <token>
   token-optimizer defaults --clients claude,codex,opencode
-  token-optimizer status [--json]
-  token-optimizer doctor [--json] [--strict]
+  token-optimizer status [--json] [--strict] [--workspace <absolute-path>]
+  token-optimizer doctor [--json] [--strict] [--workspace <absolute-path>]
   token-optimizer repair [--home <path>] [--dry-run]
   token-optimizer uninstall [--home <path>] [--dry-run]
   token-optimizer uninstall --dry-run

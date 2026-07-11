@@ -203,7 +203,13 @@ The installer lifecycle is reversible. Use `install --dry-run` (or `--json`)
 to inspect all writes, ownership, credential-store operations, and GUI-session
 environment changes. Its manifest stores hashes and references, never secrets;
 repair and uninstall preserve user-modified files. `status` is read-only,
-`doctor --strict` adds provider health checks, and `repair --dry-run` previews
+performs no network/provider request, and discovers actual five-client MCP
+registrations and installed launcher metadata. `doctor --strict` additionally
+resolves the credential reference and performs an authenticated metadata-only
+provider check that consumes no model quota. Use `--workspace <absolute-path>`
+to include safe log-directory/quota diagnostics. Reports expose stable finding
+codes and repair hints but never secret values; errors exit `1` and warning-only
+strict reports exit `2`. `repair --dry-run` previews
 targeted fixes. Rollback snapshots cover only selected client roots and never
 scan unrelated protected home folders. `logs status|prune|purge --workspace <absolute-path>` manages
 raw logs while preserving baseline and analytics metadata unless explicitly
