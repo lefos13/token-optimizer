@@ -27,7 +27,7 @@ test('--byok-key and --byok-model configure BYOK without prompting', async () =>
     '--byok-model', 'openai/gpt-4o-mini'
   ]);
   const options = await cli.resolveProviderOptions(args, readlineWith());
-  assert.equal(options.provider, 'byok');
+  assert.equal(options.provider, 'gateway-byok');
   assert.equal(options.byokModel, 'openai/gpt-4o-mini');
 });
 

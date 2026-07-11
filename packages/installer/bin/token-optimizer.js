@@ -126,7 +126,7 @@ async function resolveProviderOptions(args, rl) {
         ? ""
         : await askOptional(rl, "OpenRouter model ID (optional; Enter for gateway default): ");
     return {
-      provider: explicit === "openrouter-direct" ? "openrouter-direct" : (args.provider === "byok" ? "byok" : "gateway-byok"),
+      provider: explicit === "openrouter-direct" ? "openrouter-direct" : "gateway-byok",
       gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL,
       openrouterUrl: args["openrouter-url"] || args.openrouterUrl,
       byokKey,
