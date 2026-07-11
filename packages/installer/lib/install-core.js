@@ -217,7 +217,7 @@ function persistInstallManifest(options = {}, clients = []) {
   const managedBlocks = [
     path.join(paths.home, ".claude", "CLAUDE.md"), path.join(paths.home, ".codex", "AGENTS.md"), path.join(paths.home, ".gemini", "GEMINI.md"),
     path.join(paths.home, ".config", "opencode", "AGENTS.md"),
-  ].filter((file) => fs.existsSync(file)).map((file) => ({ path: file, marker: "TOKEN_OPTIMIZER_START" }));
+  ].filter((file) => fs.existsSync(file)).map((file) => ({ path: file, marker: "TOKEN_OPTIMIZER_START", sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") }));
   writeManifest(paths.home, { schemaVersion: 2, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [paths.assetsRoot], managedBlocks, files });
 }
 
