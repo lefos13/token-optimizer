@@ -103,6 +103,9 @@ async function main() {
      finished later with `token-optimizer config`. */
 async function resolveProviderOptions(args, rl) {
   const explicit = normalizeProviderChoice(args.provider);
+  if (args.provider !== undefined && !explicit) {
+    throw new Error(`Unsupported provider mode: ${args.provider}. Choose local, gateway-token, gateway-byok, openrouter-direct, or skip.`);
+  }
   if (explicit === "skip") {
     return { provider: "skip" };
   }

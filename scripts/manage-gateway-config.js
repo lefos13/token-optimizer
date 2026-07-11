@@ -724,7 +724,7 @@ function stripTrailingCommas(content) {
 function mergeManagedEnvValues(existingEnv, incomingValues) {
   const next = { ...existingEnv };
 
-  for (const envKey of ALL_MANAGED_ENV_KEYS) {
+  for (const envKey of [...MANAGED_ENV_KEYS, "TOKEN_OPTIMIZER_PROVIDER_MODE", "TOKEN_OPTIMIZER_CREDENTIAL_REF"]) {
     const value = incomingValues[envKey];
     if (value) {
       next[envKey] = value;
@@ -738,7 +738,7 @@ function mergeManagedEnvValues(existingEnv, incomingValues) {
 
 function sanitizeEnvObject(envObject) {
   const next = {};
-  for (const envKey of ALL_MANAGED_ENV_KEYS) {
+  for (const envKey of [...MANAGED_ENV_KEYS, "TOKEN_OPTIMIZER_PROVIDER_MODE", "TOKEN_OPTIMIZER_CREDENTIAL_REF"]) {
     if (typeof envObject[envKey] === "string" && envObject[envKey].trim() !== "") {
       next[envKey] = envObject[envKey];
     }

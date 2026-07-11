@@ -45,7 +45,9 @@ function buildProviderValues(options) {
   const provider = normalizeProviderChoice(requested) || inferProvider(options);
   const values = emptyManagedValues();
   values.TOKEN_OPTIMIZER_PROVIDER_MODE = provider === "skip" ? "" : provider;
-  values.TOKEN_OPTIMIZER_CREDENTIAL_REF = options.credentialRef || "";
+  values.TOKEN_OPTIMIZER_CREDENTIAL_REF = options.credentialRef
+    ? (typeof options.credentialRef === "string" ? options.credentialRef : JSON.stringify(options.credentialRef))
+    : "";
   if (provider === "gateway-token") {
     if (!options.gatewayToken && !options.credentialRef) {
       throw new Error("gatewayToken is required for provider 'gateway'");
