@@ -358,6 +358,47 @@ test('pre-existing credentials are restored and never claimed by the manifest', 
   assert.deepEqual(manifest.credentials, []);
 });
 
+test('provider switch deletes the superseded owned credential and uninstall leaves no orphan', () => {
+  const home = tmpDir('to-provider-switch-owned-');
+  const assetsRoot = tmpDir('to-provider-switch-assets-');
+  writeFixtureAssets(assetsRoot);
+  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'gateway-token', gatewayToken: 'gateway-value', credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false });
+  const manifestApi = require('../../../packages/installer/lib/manifest.js');
+  const before = manifestApi.readManifest(home);
+  const switched = installer.applyProviderConfiguration({ home, clients: ['opencode'], provider: 'gateway-byok', byokKey: 'byok-value', credentialStore: 'config', skipLaunchctl: true });
+  manifestApi.writeManifest(home, { ...before, credentials: [{ reference: switched.credentialRef, ownership: 'installer' }] });
+  const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' }).get(), null);
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-byok' }).get(), 'byok-value');
+  const lifecycle = require('../../../packages/installer/lib/uninstall.js');
+  const active = manifestApi.readManifest(home);
+  assert.deepEqual(active.credentials.map((item: any) => item.reference.account), ['gateway-byok']);
+  lifecycle.applyLifecyclePlan(lifecycle.planUninstall(active, lifecycle.currentStateFromManifest(active)));
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-byok' }).get(), null);
+});
+
+test('failed provider switch restores the prior owned credential and removes the replacement', () => {
+  const home = tmpDir('to-provider-switch-rollback-');
+  const assetsRoot = tmpDir('to-provider-switch-rollback-assets-');
+  writeFixtureAssets(assetsRoot);
+  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'gateway-token', gatewayToken: 'gateway-value', credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false });
+  const target = path.join(home, '.config', 'opencode', 'opencode.jsonc');
+  const mutableFs = require('node:fs');
+  const originalWrite = mutableFs.writeFileSync;
+  mutableFs.writeFileSync = (file: string, ...args: any[]) => {
+    if (path.resolve(String(file)) === path.resolve(target)) throw new Error('simulated switch failure');
+    return originalWrite(file, ...args);
+  };
+  try {
+    assert.throws(() => installer.applyProviderConfiguration({ home, clients: ['opencode'], provider: 'gateway-byok', byokKey: 'byok-value', credentialStore: 'config', skipLaunchctl: true }), /simulated switch failure/);
+  } finally {
+    mutableFs.writeFileSync = originalWrite;
+  }
+  const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' }).get(), 'gateway-value');
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-byok' }).get(), null);
+});
+
 test('installOpenCode with provider "local" registers the server with no token required', () => {
   const home = tmpDir('to-installer-home-');
   const assetsRoot = tmpDir('to-installer-assets-');

@@ -242,12 +242,22 @@ function planProviderConfiguration(options = {}) {
   const paths = installerPaths(options);
   const provider = normalizeProviderChoice(options.provider) || inferProvider(options);
   const runtime = { options: prepareCredentialOptions(options), credentialRef: options.credentialRef, credentialOwned: false };
+  const existingManifest = readManifest(paths.home);
+  const priorOwned = (existingManifest?.credentials || []).find((item) => item.ownership === "installer")?.reference;
+  const priorStoreKind = priorOwned && (priorOwned.store === "config" || priorOwned.store === "protected-config" ? "config" : "native");
+  const requestedStoreKind = options.credentialStore || "native";
+  const superseded = priorOwned && (priorOwned.account !== provider || priorStoreKind !== requestedStoreKind) ? priorOwned : null;
   const needsCredential = ["gateway-token", "gateway-byok", "openrouter-direct"].includes(provider) && !options.credentialRef;
   const operations = createChangePlan({ action: "config" }, [
     ...(needsCredential ? [{ id: "config:provider:credential", kind: "credential", phase: "credentials", provider, reference: `${options.credentialStore || "native"}:${provider}` }] : []),
     { id: "config:clients", kind: "managed-block", phase: "config", path: paths.home },
+    ...(superseded ? [{ id: "config:provider:cleanup", kind: "credential", phase: "cleanup", provider, reference: superseded }] : []),
   ]);
   registerPlan(operations, (operation) => {
+    if (operation.id === "config:provider:cleanup") {
+      runtime.supersededStore.delete(superseded);
+      return;
+    }
     if (operation.kind === "credential") {
       if (runtime.options.credentialRef) return;
       const secret = provider === "gateway-token" ? options.gatewayToken : (options.openrouterKey || options.byokKey);
@@ -257,6 +267,12 @@ function planProviderConfiguration(options = {}) {
       delete runtime.options.gatewayToken; delete runtime.options.byokKey; delete runtime.options.openrouterKey;
     } else applyGatewayConfig(runtime.options);
   }, (operation) => {
+    if (operation.id === "config:provider:cleanup") {
+      const kind = superseded.store === "config" || superseded.store === "protected-config" ? "config" : "native";
+      runtime.supersededStore = createCredentialStore(kind, { home: paths.home, service: superseded.service, account: superseded.account, path: superseded.path, ...(options.credentialStoreOptions || {}) });
+      runtime.supersededSecret = runtime.supersededStore.get(superseded);
+      return { inverse: () => { if (runtime.supersededSecret) runtime.supersededStore.set(runtime.supersededSecret); } };
+    }
     if (operation.kind === "credential") {
       const kind = options.credentialStore || "native";
       const variable = provider === "gateway-token" ? "LLM_GATEWAY_TOKEN" : provider === "openrouter-direct" ? "OPENROUTER_API_KEY" : "OPENROUTER_BYOK_KEY";
