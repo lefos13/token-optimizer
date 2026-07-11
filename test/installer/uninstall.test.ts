@@ -5,7 +5,7 @@ const { applyLifecyclePlan } = require('../../../packages/installer/lib/uninstal
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createRegistrationAdapter, createServiceAdapter, removeRegistration } = require('../../../packages/installer/lib/lifecycle-adapters.js');
+const { createRegistrationAdapter, createServiceAdapter, removeRegistration, upsertJsonProperty } = require('../../../packages/installer/lib/lifecycle-adapters.js');
 
 test('uninstall emits a warning and preserves user-modified files', () => {
   const file = '/managed/user-edited';
@@ -61,6 +61,10 @@ test('marketplace registration adapter removes and re-adds Claude and Codex on r
 
 test('JSON registration cleanup preserves comments, formatting, and unrelated servers', () => {
   for (const client of ['opencode', 'cursor', 'antigravity']) { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'registration-bytes-')); const file = path.join(home, 'config.jsonc'); const original = '{\n  // keep this comment\n  "mcpServers": {\n    "other": { "command": "keep" },\n    "token_optimizer": { "command": "remove" }\n  },\n  "untouched": true\n}\n'; fs.writeFileSync(file, original); removeRegistration(file, client); const actual = fs.readFileSync(file, 'utf8'); assert.ok(actual.includes('// keep this comment')); assert.ok(actual.includes('"other": { "command": "keep" }')); assert.ok(actual.includes('"untouched": true')); assert.ok(!actual.includes('token_optimizer')); }
+});
+
+test('JSON and JSONC registration upsert preserves every unrelated byte', () => {
+  for (const container of ['mcp', 'mcpServers']) { const original = `{\n  // before\n  "${container}": {\n    "other": { "command": "keep" }, // inline\n    "token_optimizer": { "command": "old" }\n  },\n  "tail": [1, 2, 3]\n}\n`; const next = upsertJsonProperty(original, container, 'token_optimizer', { command: 'new' }); assert.ok(next.includes('// before')); assert.ok(next.includes('"other": { "command": "keep" }, // inline')); assert.ok(next.includes('"tail": [1, 2, 3]')); assert.ok(next.includes('"command":"new"') || next.includes('"command": "new"')); }
 });
 
 test('LaunchAgent permission failure leaves plist untouched', () => {

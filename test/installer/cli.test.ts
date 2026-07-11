@@ -122,14 +122,15 @@ test('spawned CLI completes install, doctor, repair, uninstall, and repeated uni
     const base = { cwd: repository, encoding: 'utf8', env: { ...process.env, HOME: home, TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK: '1' } };
     const install = spawnSync(process.execPath, [bin, 'install', '--provider', 'local', '--clients', client, '--home', home, '--skip-client-commands', '--skip-launchctl'], base);
     assert.equal(install.status, 0, `${client} install: ${install.stderr}`);
+    const ownership = JSON.parse(fs.readFileSync(path.join(home, '.token-optimizer', 'manifest.json'), 'utf8')); const launchers = ownership.files.filter((item: any) => /start\.(?:js|sh)$/.test(item.path)); assert.ok(launchers.length, `${client} launcher ownership missing`); launchers.forEach((item: any) => fs.rmSync(item.path));
     const doctor = spawnSync(process.execPath, [bin, 'doctor', '--home', home, '--json'], base);
     assert.ok([0, 1].includes(doctor.status), `${client} doctor: ${doctor.stderr}`);
-    assert.doesNotThrow(() => JSON.parse(doctor.stdout));
+    const pre = JSON.parse(doctor.stdout); assert.ok(pre.findings.some((item: any) => ['STALE_REGISTRATION', 'MISSING_LAUNCHER', 'MANIFEST_ENTRY_MISSING'].includes(item.code)), `${client} missing actionable pre-repair finding`);
     const repair = spawnSync(process.execPath, [bin, 'repair', '--home', home, '--skip-launchctl'], base);
     assert.equal(repair.status, 0, `${client} repair: ${repair.stderr}`);
     const postRepair = spawnSync(process.execPath, [bin, 'status', '--home', home, '--json'], base);
     assert.ok([0, 1].includes(postRepair.status), `${client} post-repair status: ${postRepair.stderr}`);
-    assert.ok(!JSON.parse(postRepair.stdout).findings.some((item: any) => item.code === 'STALE_REGISTRATION'));
+    const post = JSON.parse(postRepair.stdout); assert.ok(post.clients.configured.includes(client), `${client} not configured after repair: ${postRepair.stdout}`); assert.equal(post.expectedVersion, '2.0.0-beta.6'); assert.ok(!post.findings.some((item: any) => ['STALE_REGISTRATION', 'MISSING_LAUNCHER', 'MANIFEST_ENTRY_MISSING', 'DUPLICATE_REGISTRATION'].includes(item.code)));
     const uninstall = spawnSync(process.execPath, [bin, 'uninstall', '--home', home, '--skip-launchctl'], base);
     assert.equal(uninstall.status, 0, `${client} uninstall: ${uninstall.stderr}`);
     const repeated = spawnSync(process.execPath, [bin, 'uninstall', '--home', home, '--json'], base);

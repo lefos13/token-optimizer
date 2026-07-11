@@ -357,7 +357,7 @@ function persistInstallManifest(options = {}, clients = []) {
     ? [{ reference: options.credentialRef, ownership: "installer" }]
     : (existingManifest?.credentials || []);
   const registrationPaths = {
-    claude: [path.join(paths.home, ".claude.json")], codex: [path.join(paths.home, ".codex", "config.toml")],
+    claude: [path.join(paths.home, ".claude", "settings.json")], codex: [path.join(paths.home, ".codex", "config.toml")],
     antigravity: [path.join(paths.home, ".gemini", "config", "mcp_config.json")], opencode: [path.join(paths.home, ".config", "opencode", "opencode.jsonc")],
     cursor: [path.join(paths.home, ".cursor", "mcp.json")],
   };
