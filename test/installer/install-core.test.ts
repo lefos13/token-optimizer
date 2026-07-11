@@ -79,6 +79,16 @@ test('installOpenCode copies server and skill, replaces legacy MCP config, and w
   assert.ok(agents.includes('TOKEN_OPTIMIZER_START'));
 });
 
+test('successful install persists source-backed ownership manifest for lifecycle repair', () => {
+  const home = tmpDir('to-installer-manifest-home-');
+  const assetsRoot = tmpDir('to-installer-manifest-assets-');
+  writeFixtureAssets(assetsRoot);
+  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'skip', skipLaunchctl: true, defaults: false, skipClientCommands: true });
+  const manifest = require('../../../packages/installer/lib/manifest.js').readManifest(home);
+  assert.ok(manifest.files.length > 0);
+  assert.ok(manifest.files.every((file: any) => file.source && file.source.startsWith(assetsRoot)));
+});
+
 test('installer launchctl state clears stale BYOK key and model when the provider changes', () => {
   const home = tmpDir('to-installer-home-');
   const launchctlStatePath = path.join(home, 'launchctl.json');

@@ -196,24 +196,29 @@ function installSelectedClients(options) {
    remain outside these trees so user-authored settings are never deleted. */
 function persistInstallManifest(options = {}, clients = []) {
   const paths = installerPaths(options);
-  const roots = clients.flatMap((client) => ({
-    opencode: [path.join(paths.home, ".config", "opencode", "token-optimizer-server"), path.join(paths.home, ".config", "opencode", "skills", "token-optimizer")],
-    cursor: [path.join(paths.home, ".cursor", "token-optimizer-server")],
-    antigravity: [path.join(paths.home, ".gemini", "config", "plugins", "token-optimizer")],
-    claude: [path.join(paths.home, ".claude", "skills", "token-optimizer"), path.join(paths.installRoot, "plugin", "claude")],
-    codex: [path.join(paths.home, ".codex", "skills", "token-optimizer"), path.join(paths.installRoot, "plugin", "codex")],
-  }[client] || [])).filter((root) => fs.existsSync(root));
+  const mappings = clients.flatMap((client) => ({
+    opencode: [[path.join(paths.home, ".config", "opencode", "token-optimizer-server"), path.join(paths.assetsRoot, "plugin", "opencode", "server")], [path.join(paths.home, ".config", "opencode", "skills", "token-optimizer"), path.join(paths.assetsRoot, "plugin", "opencode", "skills", "token-optimizer")]],
+    cursor: [[path.join(paths.home, ".cursor", "token-optimizer-server"), path.join(paths.assetsRoot, "plugin", "cursor", "server")]],
+    antigravity: [[path.join(paths.home, ".gemini", "config", "plugins", "token-optimizer"), path.join(paths.assetsRoot, "plugin", "antigravity")]],
+    claude: [[path.join(paths.home, ".claude", "skills", "token-optimizer"), path.join(paths.assetsRoot, "plugin", "claude")], [path.join(paths.installRoot, "plugin", "claude"), path.join(paths.assetsRoot, "plugin", "claude")]],
+    codex: [[path.join(paths.home, ".codex", "skills", "token-optimizer"), path.join(paths.assetsRoot, "plugin", "codex", "skills", "token-optimizer")], [path.join(paths.installRoot, "plugin", "codex"), path.join(paths.assetsRoot, "plugin", "codex")]],
+  }[client] || [])).filter(([root]) => fs.existsSync(root));
+  const roots = mappings.map(([root]) => root);
   const files = [];
-  const walk = (directory) => {
+  const walk = (directory, sourceRoot) => {
     let entries; try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch (_) { return; }
     for (const entry of entries) {
       const file = path.join(directory, entry.name);
-      if (entry.isDirectory() && !entry.isSymbolicLink()) walk(file);
-      else if (entry.isFile()) files.push({ path: file, sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"), ownership: "installer" });
+      if (entry.isDirectory() && !entry.isSymbolicLink()) walk(file, path.join(sourceRoot, entry.name));
+      else if (entry.isFile()) files.push({ path: file, source: path.join(sourceRoot, entry.name), sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"), ownership: "installer" });
     }
   };
-  roots.forEach(walk);
-  writeManifest(paths.home, { schemaVersion: 2, roots: [...new Set(roots.map((root) => path.resolve(root)))], files });
+  mappings.forEach(([root, sourceRoot]) => walk(root, sourceRoot));
+  const managedBlocks = [
+    path.join(paths.home, "CLAUDE.md"), path.join(paths.home, "AGENTS.md"), path.join(paths.home, "GEMINI.md"),
+    path.join(paths.home, ".config", "opencode", "AGENTS.md"), path.join(paths.home, ".codex", "AGENTS.md"),
+  ].filter((file) => fs.existsSync(file)).map((file) => ({ path: file, marker: "TOKEN_OPTIMIZER_START" }));
+  writeManifest(paths.home, { schemaVersion: 2, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [paths.assetsRoot], managedBlocks, files });
 }
 
 function clientTargets(client, paths) {
