@@ -3,7 +3,7 @@
    redact values that could accidentally turn a preview into a secret store. */
 const OPERATION_KINDS = Object.freeze([
   "create-directory", "write-file", "copy-tree", "managed-block",
-  "client-command", "credential", "platform-service",
+  "remove-file", "client-command", "credential", "platform-service",
 ]);
 
 function deepFreeze(value) {
@@ -55,6 +55,7 @@ function operation(kind, fields = {}) { return safeOperation({ kind, ...fields }
 const createDirectoryOperation = (path) => operation("create-directory", { path });
 const writeFileOperation = (path, sha256) => operation("write-file", { path, sha256 });
 const copyTreeOperation = (source, path) => operation("copy-tree", { source, path });
+const removeFileOperation = (path) => operation("remove-file", { path });
 const managedBlockOperation = (path, marker) => operation("managed-block", { path, marker });
 const clientCommandOperation = (client, command) => operation("client-command", { client, command });
 const credentialOperation = (provider, details = {}) => operation("credential", { provider, ...details });
@@ -63,6 +64,7 @@ const platformServiceOperation = (platform, service) => operation("platform-serv
 module.exports = {
   OPERATION_KINDS, createChangePlan, formatChangePlan, operation,
   createDirectoryOperation, writeFileOperation, copyTreeOperation,
+  removeFileOperation,
   managedBlockOperation, clientCommandOperation, credentialOperation,
   platformServiceOperation,
 };

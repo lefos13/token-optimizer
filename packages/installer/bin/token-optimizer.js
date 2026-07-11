@@ -17,6 +17,9 @@ const {
   applyDefaultDirectives,
 } = require("../lib/install-core");
 const { inspectInstallation } = require("../lib/doctor");
+const { readManifest } = require("../lib/manifest");
+const { planRepair, planUninstall, currentStateFromManifest, applyLifecyclePlan } = require("../lib/uninstall");
+const { statusLogs, pruneLogs, purgeLogs } = require("../lib/logs");
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -44,6 +47,32 @@ async function main() {
       const warnings = report.findings.some((item) => item.severity === "warning");
       process.exitCode = errors ? 1 : warnings && args.strict === true ? 2 : 0;
     }
+    return;
+  }
+
+  if (command === "logs") {
+    const workspace = args.workspace;
+    if (!workspace || !require("path").isAbsolute(workspace)) throw new Error("logs commands require --workspace <absolute-path>");
+    const action = args._[1] || "status";
+    const operation = action === "status" ? statusLogs(workspace) : action === "prune" ? pruneLogs(workspace) : action === "purge" ? purgeLogs(workspace, { includeBaseline: args["include-baseline"] === true, includeAnalytics: args["include-analytics"] === true }) : null;
+    if (!operation) throw new Error(`Unsupported logs command: ${action}`);
+    const report = await operation;
+    console.log(args.json === true ? JSON.stringify(report, null, 2) : `${action}: ${report.removed.length} removed, ${report.freedBytes} bytes freed`);
+    return;
+  }
+
+  if (command === "repair" || command === "uninstall") {
+    const home = args.home;
+    const manifest = readManifest(home);
+    if (!manifest) throw new Error("No Token Optimizer ownership manifest found");
+    const report = command === "repair" ? await inspectInstallation({ home, performHealthProbe: false }) : null;
+    const plan = command === "repair" ? planRepair(report, manifest) : planUninstall(manifest, currentStateFromManifest(manifest));
+    if (args["dry-run"] === true || args.json === true) {
+      console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
+      return;
+    }
+    applyLifecyclePlan(plan);
+    console.log(`${command}: applied ${plan.operations.length} operation(s).`);
     return;
   }
 
@@ -339,6 +368,9 @@ function printHelp() {
   token-optimizer defaults --clients claude,codex,opencode
   token-optimizer status [--json]
   token-optimizer doctor [--json] [--strict]
+  token-optimizer repair [--home <path>] [--dry-run]
+  token-optimizer uninstall [--home <path>] [--dry-run]
+  token-optimizer logs status|prune|purge --workspace <absolute-path>
 
 No token is required to use this tool. With no provider flags, the installer
 prompts for one of three providers, plus a skip option:
@@ -397,4 +429,5 @@ module.exports = {
   fetchLatestVersion,
   compareVersions,
   printInspection,
+  main,
 };
