@@ -127,7 +127,7 @@ async function executeMigrationPlan(plan, runtime) {
         else if (credentialOwned) runtime.credentialRuntime.store.delete(credentialRef);
       } catch { manualRemediation.push(plan.operations.find((item) => item.phase === "credentials")); }
     }
-    return { applied, rolledBack, manualRemediation, error, installedClients: [...state.clients] };
+    return { applied, rolledBack, manualRemediation, error: sanitizeMigrationError(error, state, options), installedClients: [...state.clients] };
   }
 }
 
@@ -136,10 +136,26 @@ function preflightMigration(plan, runtime) {
   if (needsRegistration && !runtime.options.skipClientCommands && (!runtime.options.clientRegistrationAdapter || typeof runtime.options.clientRegistrationAdapter.prepare !== "function")) {
     throw new Error("reversible Claude/Codex registration requires a clientRegistrationAdapter or --skip-client-commands");
   }
-  const mutatesDarwinService = process.platform === "darwin" && plan.operations.some((operation) => operation.phase === "service");
+  const mutatesDarwinService = (runtime.options.platform || process.platform) === "darwin" && plan.operations.some((operation) => operation.phase === "service");
   if (mutatesDarwinService && !runtime.options.skipLaunchctl && !runtime.options.launchctlStatePath && (!runtime.options.serviceTransactionAdapter || typeof runtime.options.serviceTransactionAdapter.prepare !== "function")) {
     throw new Error("reversible launchctl migration requires a serviceTransactionAdapter, launchctlStatePath, or --skip-launchctl");
   }
+}
+
+/* Migration errors cross CLI and JSON boundaries, so redact both exact
+   selected credentials and generic authorization/header assignment forms. */
+function sanitizeMigrationError(error, state, options = {}) {
+  let message = String(error?.message || error || "migration failed");
+  const candidates = [
+    state?.env?.LLM_GATEWAY_TOKEN, state?.env?.OPENROUTER_BYOK_KEY, state?.env?.OPENROUTER_API_KEY,
+    options.gatewayToken, options.byokKey, options.openrouterKey,
+  ].filter((value) => typeof value === "string" && value.length > 0);
+  for (const secret of candidates) message = message.split(secret).join("[REDACTED]");
+  message = message
+    .replace(/(authorization\s*[:=]\s*bearer\s+)[^\s,;]+/ig, "$1[REDACTED]")
+    .replace(/((?:LLM_GATEWAY_TOKEN|OPENROUTER_BYOK_KEY|OPENROUTER_API_KEY|X-OpenRouter-Key)\s*[:=]\s*)[^\s,;]+/ig, "$1[REDACTED]")
+    .replace(/\b(?:sk-or-v1-|sk-)[A-Za-z0-9._-]+\b/g, "[REDACTED]");
+  return new Error(message);
 }
 
 function migrationInstallOptions(runtime, credentialRef) {
@@ -279,4 +295,4 @@ function walk(root, visit) {
   for (const entry of entries) { const item = path.join(root, entry.name); if (entry.isDirectory() && !entry.isSymbolicLink()) walk(item, visit); else if (entry.isFile() && fs.statSync(item).size < 1024 * 1024) visit(item); }
 }
 
-module.exports = { detectV1State, planMigrationFromHome, migrateInstallation, removeJsonProperties, preflightMigration };
+module.exports = { detectV1State, planMigrationFromHome, migrateInstallation, removeJsonProperties, preflightMigration, sanitizeMigrationError };

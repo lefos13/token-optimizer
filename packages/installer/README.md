@@ -181,6 +181,7 @@ pre-migration file, service, registration, credential, and manifest state.
 Migration refuses real Claude/Codex CLI or macOS launchctl mutation unless a
 reversible adapter captures the pre-state first. Use `--skip-client-commands`
 or `--skip-launchctl` explicitly when running without those adapters.
+All migration failures are credential-redacted before CLI or JSON reporting.
 
 Flow-specific commands:
 

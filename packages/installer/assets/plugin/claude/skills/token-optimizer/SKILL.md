@@ -220,6 +220,8 @@ and structured legacy-key cleanup.
 Claude/Codex registration and real macOS launchctl mutation fail preflight
 unless reversible adapters capture their exact pre-state. Pass the explicit
 skip flags when those external mutations are intentionally omitted.
+Migration failures are sanitized before CLI and JSON output; do not bypass the
+structured result by printing adapter or provider exception objects directly.
 
 Re-running the npm installer refreshes all client assets: Antigravity, OpenCode,
 and Cursor replace their installer-managed local files; Claude uses its plugin

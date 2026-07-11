@@ -147,6 +147,48 @@ test('service transaction captures rollback before a partial apply failure', asy
   assert.deepEqual(events, ['partial-apply', 'restore-exact-state']);
 });
 
+test('missing Claude registration adapter fails preflight before backup or mutation', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-registration-preflight-'));
+  const legacy = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, JSON.stringify({ env: { LLM_GATEWAY_TOKEN: 'fixture-preflight-secret' } }));
+  const before = fs.readFileSync(legacy, 'utf8');
+  await assert.rejects(() => migration.migrateInstallation({ home, clients: ['claude'], credentialStore: 'config', skipLaunchctl: true }), /skip-client-commands/);
+  assert.equal(fs.readFileSync(legacy, 'utf8'), before);
+  assert.equal(fs.existsSync(path.join(home, '.token-optimizer-mcp', 'backups')), false);
+  assert.equal(fs.existsSync(path.join(home, '.token-optimizer', 'credentials.json')), false);
+});
+
+test('missing Darwin service adapter fails preflight before backup or mutation', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-service-preflight-'));
+  const legacy = path.join(home, '.cursor', 'mcp.json');
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, JSON.stringify({ mcpServers: { token_optimizer: { env: { LOCAL_LLM_API_URL: 'http://localhost:8080/v1' } } } }));
+  const before = fs.readFileSync(legacy, 'utf8');
+  await assert.rejects(() => migration.migrateInstallation({ home, clients: ['cursor'], provider: 'local', platform: 'darwin', skipClientCommands: true }), /skip-launchctl/);
+  assert.equal(fs.readFileSync(legacy, 'utf8'), before);
+  assert.equal(fs.existsSync(path.join(home, '.token-optimizer-mcp', 'backups')), false);
+});
+
+test('migration result and rejection redact provider and authorization secrets', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-error-redaction-'));
+  const legacy = path.join(home, '.cursor', 'mcp.json');
+  const secret = 'sk-or-v1-fixture-redaction';
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, JSON.stringify({ mcpServers: { token_optimizer: { env: { LLM_GATEWAY_URL: 'https://gateway.test/v1', LLM_GATEWAY_TOKEN: secret } } } }));
+  const failWithSecret = (operation: any) => { if (operation.id === 'migrate:doctor') throw new Error(`Authorization: Bearer ${secret}; raw=${secret}`); };
+  const plan = migration.planMigrationFromHome({ home, clients: ['cursor'], credentialStore: 'config', skipClientCommands: true, skipLaunchctl: true, beforeOperation: failWithSecret });
+  const direct = await installer.applyChangePlan(plan);
+  assert.ok(direct.error);
+  assert.doesNotMatch(direct.error.message, new RegExp(secret));
+  assert.match(direct.error.message, /REDACTED/);
+  await assert.rejects(() => migration.migrateInstallation({ home, clients: ['cursor'], credentialStore: 'config', skipClientCommands: true, skipLaunchctl: true, beforeOperation: failWithSecret }), (error: any) => {
+    assert.doesNotMatch(error.message, new RegExp(secret));
+    assert.match(error.message, /REDACTED/);
+    return true;
+  });
+});
+
 for (const fixture of [
   { mode: 'gateway-token', env: { LLM_GATEWAY_URL: 'https://gateway.test/v1', LLM_GATEWAY_TOKEN: 'secret' }, header: 'Authorization' },
   { mode: 'gateway-byok', env: { LLM_GATEWAY_URL: 'https://gateway.test/v1', OPENROUTER_BYOK_KEY: 'secret' }, header: 'X-OpenRouter-Key' },
