@@ -241,8 +241,10 @@ async function authenticatedDoctor(plan, runtime, credentialRef) {
     ? ((request) => runtime.options.healthProbe(request.url, { timeoutMs: request.timeoutMs, mode, headers, credentialRef }))
     : ((request) => defaultHealthProbe(request));
   const performHealthProbe = mode !== "local" || Boolean(runtime.options.healthProbe);
-  const report = await inspectInstallation({ home: runtime.state.home, provider: mode, credentialRef, providerUrl: plan.effectiveProvider.apiUrl, performHealthProbe, healthProbe });
-  const blockingCodes = report.findings.filter((item) => item.code === "PROVIDER_UNREACHABLE" || item.code === "CREDENTIAL_MISSING").map((item) => item.code);
+  const inspect = runtime.options.inspectInstallation || inspectInstallation;
+  const report = await inspect({ home: runtime.state.home, provider: mode, credentialRef, providerUrl: plan.effectiveProvider.apiUrl, performHealthProbe, healthProbe });
+  const blocking = new Set(["PROVIDER_UNREACHABLE", "PROVIDER_AUTH_FAILED", "CREDENTIAL_MISSING", "CREDENTIAL_INACCESSIBLE"]);
+  const blockingCodes = report.findings.filter((item) => blocking.has(item.code)).map((item) => item.code);
   if (blockingCodes.length) throw new Error(`post-migration doctor failed (${[...new Set(blockingCodes)].join(", ")})`);
   return report;
 }

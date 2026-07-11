@@ -252,6 +252,20 @@ test('failed post-migration doctor restores legacy files and credential state', 
   assert.equal(fs.existsSync(credentialFile) ? fs.readFileSync(credentialFile, 'utf8').includes('fixture-secret') : false, false);
 });
 
+for (const statusCode of [401, 403]) test(`authenticated doctor ${statusCode} rolls back before legacy cleanup`, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), `migration-auth-${statusCode}-`)); const legacy = path.join(home, '.cursor', 'mcp.json');
+  fs.mkdirSync(path.dirname(legacy), { recursive: true }); fs.writeFileSync(legacy, JSON.stringify({ mcpServers: { token_optimizer: { env: { LLM_GATEWAY_TOKEN: 'fixture-secret' } } } })); const before = fs.readFileSync(legacy, 'utf8');
+  await assert.rejects(() => migration.migrateInstallation({ home, clients: ['cursor'], credentialStore: 'config', skipClientCommands: true, skipLaunchctl: true, healthProbe: async () => ({ ok: false, statusCode }) }), /PROVIDER_AUTH_FAILED/);
+  assert.equal(fs.readFileSync(legacy, 'utf8'), before);
+});
+
+test('inaccessible credential reference finding rolls back before legacy cleanup', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-inaccessible-')); const legacy = path.join(home, '.cursor', 'mcp.json');
+  fs.mkdirSync(path.dirname(legacy), { recursive: true }); fs.writeFileSync(legacy, JSON.stringify({ mcpServers: { token_optimizer: { env: { LLM_GATEWAY_TOKEN: 'fixture-secret' } } } })); const before = fs.readFileSync(legacy, 'utf8');
+  await assert.rejects(() => migration.migrateInstallation({ home, clients: ['cursor'], credentialStore: 'config', skipClientCommands: true, skipLaunchctl: true, inspectInstallation: async () => ({ findings: [{ code: 'CREDENTIAL_INACCESSIBLE' }] }) }), /CREDENTIAL_INACCESSIBLE/);
+  assert.equal(fs.readFileSync(legacy, 'utf8'), before);
+});
+
 test('repeated migration is idempotent', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-repeat-'));
   const legacy = path.join(home, '.codex', 'config.toml');
