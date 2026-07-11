@@ -334,8 +334,12 @@ function persistInstallManifest(options = {}, clients = []) {
     let entries; try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch (_) { return; }
     for (const entry of entries) {
       const file = path.join(directory, entry.name);
-      if (entry.isDirectory() && !entry.isSymbolicLink()) walk(file, path.join(sourceRoot, entry.name));
-      else if (entry.isFile()) files.push({ path: file, source: path.join(sourceRoot, entry.name), sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"), ownership: "installer" });
+      const source = path.join(sourceRoot, entry.name);
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        if (!["node_modules", ".data", ".cache", "cache", "logs", ".codex-local-test-runs"].includes(entry.name)) walk(file, source);
+      } else if (entry.isFile() && fs.existsSync(source) && !/\.(?:log|tmp|cache)$/i.test(entry.name)) {
+        files.push({ path: file, source, sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"), ownership: "installer" });
+      }
     }
   };
   mappings.forEach(([root, sourceRoot]) => walk(root, sourceRoot));
@@ -347,7 +351,12 @@ function persistInstallManifest(options = {}, clients = []) {
   const credentials = options.credentialOwnershipCleared ? [] : options.credentialRef && options.credentialOwned !== false && options.credentialRef.store !== "env"
     ? [{ reference: options.credentialRef, ownership: "installer" }]
     : (existingManifest?.credentials || []);
-  writeManifest(paths.home, { schemaVersion: 2, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [paths.assetsRoot], managedBlocks, credentials, files });
+  const registrations = clients.map((client) => ({ client, ownership: "installer" }));
+  const launchAgent = path.join(paths.home, "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`);
+  const platformServices = process.platform === "darwin" && fs.existsSync(launchAgent)
+    ? [{ platform: "darwin", service: LAUNCH_AGENT_LABEL, path: launchAgent, ownership: "installer" }]
+    : [];
+  writeManifest(paths.home, { schemaVersion: 2, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [paths.assetsRoot], managedBlocks, credentials, registrations, platformServices, files });
 }
 
 function clientTargets(client, paths, options = {}) {

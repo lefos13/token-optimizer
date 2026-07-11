@@ -32,3 +32,18 @@ test('uninstall preserves a directive file changed after installation', () => {
   assert.equal(plan.operations.length, 0);
   assert.equal(plan.warnings[0].code, 'USER_MODIFIED_FILE');
 });
+
+test('uninstall rolls back files when a later reversible registration fails', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-uninstall-rollback-'));
+  const file = path.join(home, 'owned'); fs.writeFileSync(file, 'owned');
+  const sha256 = require('node:crypto').createHash('sha256').update('owned').digest('hex');
+  const manifest = { schemaVersion: 2, roots: [home], files: [{ path: file, sha256, ownership: 'installer' }], registrations: [{ client: 'codex', ownership: 'installer' }] };
+  const adapter = { capture: () => ({ present: true }), apply: () => { throw new Error('fixture'); }, restore: () => {} };
+  assert.throws(() => applyLifecyclePlan(planUninstall(manifest), { registrationAdapter: adapter }), /rolled back/);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'owned');
+});
+
+test('uninstall fails closed before external state without a reversible adapter', () => {
+  const manifest = { schemaVersion: 2, roots: ['/managed'], files: [], registrations: [{ client: 'claude', ownership: 'installer' }] };
+  assert.throws(() => applyLifecyclePlan(planUninstall(manifest), { requireExternalAdapters: true }), /rolled back/);
+});

@@ -67,7 +67,11 @@ Local and skipped providers do not use a credential store.
 The installer is lifecycle-safe: preview writes with `install --dry-run`, then
 use `status`, `doctor`, `repair --dry-run`, or `uninstall --dry-run` before any
 mutation. A manifest under `~/.token-optimizer/manifest.json` records owned
-paths and hashes without storing credentials; edited user files are preserved.
+paths and hashes without storing credentials or runtime caches/logs; edited user
+files are preserved. Repair uses stable doctor paths and operation hints for an
+exact idempotent plan. Uninstall rolls back earlier mutations on failure and
+fails closed with an explicit follow-up when reversible client/service cleanup
+is unavailable.
 Rollback snapshots are limited to the selected clients' managed roots, so the
 installer never scans unrelated privacy-protected home folders such as Music.
 Provider-health probes are independently limited by client IP and key

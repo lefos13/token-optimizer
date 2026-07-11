@@ -201,8 +201,11 @@ Generated launchers validate that both the MCP SDK server entry point and `zod/v
 
 The installer lifecycle is reversible. Use `install --dry-run` (or `--json`)
 to inspect all writes, ownership, credential-store operations, and GUI-session
-environment changes. Its manifest stores hashes and references, never secrets;
-repair and uninstall preserve user-modified files. `status` is read-only,
+environment changes. Its manifest stores hashes and references, never secrets
+or runtime caches/logs. Repair consumes doctor paths and operation hints into an
+exact idempotent plan; uninstall preserves user-modified files. Lifecycle
+failure rolls back earlier mutations, while unavailable reversible registration
+or service adapters fail closed with an explicit follow-up. `status` is read-only,
 performs no network/provider request or client CLI execution, and discovers
 actual five-client MCP registrations from config/cache files plus installed
 launcher metadata. `doctor --strict` additionally resolves the credential

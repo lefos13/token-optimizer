@@ -69,14 +69,18 @@ async function main() {
   if (command === "repair" || command === "uninstall") {
     const home = args.home;
     const manifest = readManifest(home);
-    if (!manifest) throw new Error("No Token Optimizer ownership manifest found");
+    if (!manifest) {
+      if (command === "uninstall") { console.log(args.json === true ? JSON.stringify({ status: "already-uninstalled", operations: [] }, null, 2) : "uninstall: already clean; no changes applied."); return; }
+      throw new Error("No Token Optimizer ownership manifest found");
+    }
     const report = command === "repair" ? await inspectInstallation({ home, performHealthProbe: false }) : null;
     const plan = command === "repair" ? planRepair(report, manifest) : planUninstall(manifest, currentStateFromManifest(manifest));
     if (args["dry-run"] === true || args.json === true) {
       console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
       return;
     }
-    applyLifecyclePlan(plan);
+    applyLifecyclePlan(plan, { requireExternalAdapters: true });
+    if (command === "uninstall") require("fs").rmSync(require("./../lib/manifest").manifestPath(home), { force: true });
     console.log(`${command}: applied ${plan.operations.length} operation(s).`);
     return;
   }

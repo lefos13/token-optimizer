@@ -6,6 +6,8 @@ const path = require("path");
    can distinguish files it owns from user edits. Replacement is atomic and
    permissions are private because the manifest contains filesystem metadata. */
 const SCHEMA_VERSION = 2;
+const RUNTIME_SEGMENTS = new Set(["node_modules", ".data", ".cache", "cache", "logs", ".codex-local-test-runs"]);
+const RUNTIME_BASENAMES = new Set(["analytics.json", "analytics-summary.json", "baseline.json", "registry.json"]);
 function manifestPath(home) { return path.join(path.resolve(home || process.env.HOME || os.homedir()), ".token-optimizer", "manifest.json"); }
 
 function validateManifest(manifest, home) {
@@ -28,6 +30,23 @@ function validateManifest(manifest, home) {
     throw new Error("manifest credentials require installer ownership and a store reference");
   }
   return manifest;
+}
+
+/* Only files that can be restored byte-for-byte from packaged assets belong in
+   the ownership manifest. Dependency caches and runtime output are disposable
+   state and must never become uninstall authority. */
+function isSourceRepairableFile(file, assetRoots = []) {
+  if (!file || typeof file.path !== "string" || typeof file.source !== "string") return false;
+  const segments = path.resolve(file.path).split(path.sep);
+  if (segments.some((segment) => RUNTIME_SEGMENTS.has(segment)) || RUNTIME_BASENAMES.has(path.basename(file.path)) || /\.(?:log|tmp|cache)$/i.test(file.path)) return false;
+  const source = path.resolve(file.source);
+  return assetRoots.some((root) => source === root || source.startsWith(`${root}${path.sep}`));
+}
+
+function compactManifest(manifest) {
+  const assetRoots = (manifest.assetRoots || []).filter((root) => typeof root === "string" && path.isAbsolute(root)).map((root) => path.resolve(root));
+  const files = (manifest.files || []).filter((file) => isSourceRepairableFile(file, assetRoots));
+  return { manifest: { ...manifest, files }, removedEntries: (manifest.files || []).length - files.length };
 }
 
 function realpathWithMissingTail(target) {
@@ -69,4 +88,4 @@ function readManifest(home) {
   return result;
 }
 
-module.exports = { SCHEMA_VERSION, manifestPath, validateManifest, writeManifest, readManifest };
+module.exports = { SCHEMA_VERSION, manifestPath, validateManifest, writeManifest, readManifest, isSourceRepairableFile, compactManifest };

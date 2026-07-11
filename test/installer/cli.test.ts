@@ -69,7 +69,7 @@ test('status --installed-version reports mismatch without a discovered registrat
   const output = execFileSync(process.execPath, [
     path.join(repository, 'packages/installer/bin/token-optimizer.js'), 'status', '--json',
     '--home', home, '--provider', 'local', '--installed-version', '1.9.0',
-    '--expected-version', '2.0.0-beta.5'
+    '--expected-version', '2.0.0-beta.6'
   ], { cwd: repository, encoding: 'utf8' });
   const report = JSON.parse(output);
   assert.equal(report.installedVersionSource, 'option-installed-version');

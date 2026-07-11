@@ -149,8 +149,13 @@ npx @softawarest/token-optimizer-installer defaults --clients claude,codex,openc
 Preview every mutation with `--dry-run` (or `--json` for automation), including
 managed paths, client commands, credential-store operations, and GUI-session
 environment changes. The ownership manifest at `~/.token-optimizer/manifest.json`
-stores paths, hashes, and references only—never raw API keys. Repair and
-uninstall operate only on matching managed hashes, preserving user edits.
+stores paths, hashes, and references only—never raw API keys. It records only
+packaged, source-repairable files; dependency caches, `.data`, logs, analytics,
+and baselines are excluded. Repair consumes stable doctor paths and operation
+hints into an exact idempotent plan. Uninstall operates only on matching owned
+hashes, preserving user edits, and rolls back earlier mutations on failure.
+Registration and service cleanup fails closed unless a reversible adapter can
+capture and restore prior external state; the CLI reports the required follow-up.
 Rollback snapshots are scoped to selected client roots (and requested Cursor
 projects), avoiding unrelated macOS privacy-protected home directories.
 
