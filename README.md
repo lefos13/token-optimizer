@@ -72,10 +72,12 @@ Rollback snapshots are limited to the selected clients' managed roots, so the
 installer never scans unrelated privacy-protected home folders such as Music.
 Credential stores and any fallback are shown in the plan. Use
 `logs status|prune|purge --workspace <absolute-path>` for raw-log lifecycle.
-`status` performs no network/provider call while inspecting actual MCP and
-local marketplace registrations, installed package versions, launcher caches,
+`status` performs no network/provider call and launches no client process while
+inspecting MCP config and marketplace cache files, installed package versions,
+launcher entrypoints, resolvable SDK/zod runtime dependencies,
 manifest/service state, and optional `--workspace` logs. `doctor` adds an
-authenticated metadata-only provider check that consumes no model quota.
+authenticated quota-free provider check: local `/models`, OpenRouter `/auth/key`,
+or the gateway's BYOK metadata-validation route.
 Stable findings include repair operations/paths without secrets; errors exit
 `1`, and warning-only `--strict` reports exit `2`.
 

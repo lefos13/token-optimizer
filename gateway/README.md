@@ -28,6 +28,7 @@ Writes are atomic; deleting the directory resets the registry and the stats.
 ## Request contract
 
 - `GET /health` → `{"ok":true}`. Unauthenticated for plain liveness (uptime pings), but if an `Authorization: Bearer <proxy-token>` header is presented — as the MCP client's health check does — the token is validated (without consuming a daily use) and an invalid one is rejected with `401`, so misconfigured tokens are caught at health-check time.
+- `GET /v1/provider-health` with `X-OpenRouter-Key` validates a BYOK key against OpenRouter's `/auth/key` metadata endpoint. It never invokes a model or consumes inference quota.
 - `POST /v1/chat/completions` → OpenAI-compatible.
   The `X-Task-Type` header (`verdict|triage|review|digest|scout|query`) selects the
   pinned model. The client's `model` field is always ignored. A BYOK caller may

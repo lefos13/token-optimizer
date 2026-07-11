@@ -54,6 +54,25 @@ test('GET /health rejects a presented invalid token with 401', async () => {
   });
 });
 
+test('GET /v1/provider-health validates BYOK upstream without inference', async () => {
+  let seenUrl = ''; let seenAuth = '';
+  const upstream: typeof fetch = async (url, init) => {
+    seenUrl = String(url); seenAuth = new Headers(init?.headers).get('authorization') || '';
+    return new Response(JSON.stringify({ data: { label: 'key' } }), { status: 200 });
+  };
+  await withServer(upstream, async (base) => {
+    const valid = await fetch(`${base}/v1/provider-health`, { headers: { 'X-OpenRouter-Key': 'sk-or-validfixturekey' } });
+    assert.equal(valid.status, 200); assert.match(seenUrl, /\/auth\/key$/); assert.equal(seenAuth, 'Bearer sk-or-validfixturekey');
+  });
+});
+
+test('GET /v1/provider-health rejects invalid BYOK metadata auth', async () => {
+  await withServer(async () => new Response('{}', { status: 401 }), async (base) => {
+    const invalid = await fetch(`${base}/v1/provider-health`, { headers: { 'X-OpenRouter-Key': 'sk-or-invalidfixture' } });
+    assert.equal(invalid.status, 401);
+  });
+});
+
 test('POST /v1/chat/completions rejects a missing/invalid token with 401', async () => {
   await withServer(okUpstream, async (base) => {
     const res = await fetch(`${base}/v1/chat/completions`, {

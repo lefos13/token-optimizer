@@ -207,6 +207,7 @@ for (const fixture of [
     assert.equal(result.status, 'migrated');
     assert.equal(result.plan.effectiveProvider.mode, fixture.mode);
     if (fixture.header) assert.ok(request.headers[fixture.header]);
+    else if (fixture.mode === 'local') assert.equal(request.mode, 'local');
     else assert.equal(request, undefined);
   });
 }

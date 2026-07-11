@@ -4,9 +4,10 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { createServer } from 'node:http';
 
 const doctor = require('../../../packages/installer/lib/doctor.js');
-const inspectInstallation = (options: any) => doctor.inspectInstallation({ skipPluginCommands: true, ...options });
+const inspectInstallation = (options: any) => doctor.inspectInstallation(options);
 
 function write(file: string, value: string) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); }
 function server(home: string, name: string, version = '2.0.0-beta.5', complete = true) {
@@ -53,6 +54,18 @@ test('doctor resolves credential reference and performs authenticated quota-free
   assert.equal(request.mode, 'gateway-token'); assert.equal(request.credential, 'valid-fixture-token'); assert.doesNotMatch(JSON.stringify(report), /valid-fixture-token/);
 });
 
+test('local doctor performs quota-free GET /v1/models and reports a dead endpoint', async () => {
+  let requested = '';
+  const server = createServer((req, res) => { requested = req.url || ''; res.writeHead(200).end('{}'); });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve)); const address: any = server.address();
+  try {
+    const live = await inspectInstallation({ home: fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')), provider: 'local', providerUrl: `http://127.0.0.1:${address.port}/v1`, performHealthProbe: true });
+    assert.equal(requested, '/v1/models'); assert.ok(!live.findings.some((item: any) => item.code === 'PROVIDER_UNREACHABLE'));
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+  const dead = await inspectInstallation({ home: fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')), provider: 'local', providerUrl: 'http://127.0.0.1:1/v1', healthProbeTimeoutMs: 20, performHealthProbe: true });
+  assert.ok(dead.findings.some((item: any) => item.code === 'PROVIDER_UNREACHABLE'));
+});
+
 test('invalid nonblank placeholder and inaccessible native credential fail truthfully', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-'));
   const invalid = await inspectInstallation({ home, provider: 'gateway-token', env: { LLM_GATEWAY_TOKEN: '${TOKEN}' }, performHealthProbe: true, healthProbe: async () => ({ ok: true }) });
@@ -83,8 +96,35 @@ test('reports bad manifest without repair source and macOS launchctl mismatch', 
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); const managed = path.join(home, '.token-optimizer', 'managed.txt'); write(managed, 'changed');
   write(path.join(home, '.token-optimizer', 'manifest.json'), JSON.stringify({ schemaVersion: 2, roots: [path.join(home, '.token-optimizer')], assetRoots: [path.join(home, 'missing-cache')], files: [{ path: managed, sha256: 'bad', ownership: 'installer' }] }));
   write(path.join(home, 'Library', 'LaunchAgents', 'com.softawarest.token-optimizer.env.plist'), '<plist/>');
-  const report = await inspectInstallation({ home, platform: 'darwin', provider: 'gateway-token', env: { LLM_GATEWAY_TOKEN: 'valid-token' }, launchctlLoaded: false, healthProbe: async () => ({ ok: true }) });
+  const report = await inspectInstallation({ home, platform: 'darwin', provider: 'gateway-token', env: { LLM_GATEWAY_TOKEN: 'valid-token' }, execFileSync: () => { throw new Error('not loaded'); }, healthProbe: async () => ({ ok: true }) });
   for (const code of ['MANIFEST_HASH_MISMATCH', 'MANIFEST_SOURCE_UNAVAILABLE', 'LAUNCHCTL_MISMATCH']) assert.ok(report.findings.some((item: any) => item.code === code), code);
+});
+
+test('filesystem marketplace caches are discovered without executing client processes', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); const root = path.join(home, '.claude', 'plugins', 'cache', 'token-optimizer-marketplace', 'token-optimizer', '1.12.1');
+  write(path.join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'token-optimizer', version: '1.12.1' })); write(path.join(root, 'server', 'start.js'), '');
+  let commands = 0; const report = await inspectInstallation({ home, provider: 'local', commandProbe: () => { commands++; throw new Error('must not run'); } });
+  assert.equal(commands, 0); assert.ok(report.detectedVersions.some((item: any) => item.version === '1.12.1' && item.source === 'client-plugin-list'));
+});
+
+test('runtime validation resolves SDK server entrypoint and zod/v3 from launcher cache', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); const launcher = server(home, 'cursor'); write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher] } } }));
+  const seen: string[] = []; const report = await inspectInstallation({ home, provider: 'local', resolveModule: (id: string, options: any) => { seen.push(id); return path.join(options.paths[0], id); } });
+  assert.deepEqual(seen, ['@modelcontextprotocol/sdk/server/index.js', 'zod/v3']); assert.ok(!report.findings.some((item: any) => item.code === 'DEPENDENCY_CACHE_INCOMPLETE'));
+});
+
+test('manifest reports path escapes, symlinks, and non-files as stable findings', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); const root = path.join(home, '.token-optimizer'); const outside = path.join(home, 'outside'); write(outside, 'x'); fs.mkdirSync(path.join(root, 'directory'), { recursive: true }); fs.symlinkSync(outside, path.join(root, 'link'));
+  write(path.join(root, 'manifest.json'), JSON.stringify({ schemaVersion: 2, roots: [root], files: [{ path: outside, sha256: 'x', ownership: 'installer' }, { path: path.join(root, 'link'), sha256: 'x', ownership: 'installer' }, { path: path.join(root, 'directory'), sha256: 'x', ownership: 'installer' }] }));
+  const report = await inspectInstallation({ home, provider: 'local' }); const codes = report.findings.map((item: any) => item.code);
+  assert.ok(codes.includes('MANIFEST_PATH_ESCAPE')); assert.ok(codes.includes('MANIFEST_ENTRY_SYMLINK')); assert.ok(codes.includes('MANIFEST_ENTRY_NOT_FILE'));
+});
+
+test('launchctl read diagnostics compare loaded service and exact managed values', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); write(path.join(home, 'Library', 'LaunchAgents', 'com.softawarest.token-optimizer.env.plist'), '<plist/>'); const launcher = server(home, 'cursor'); const ref = JSON.stringify({ store: 'macos-keychain', account: 'x' }); write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', TOKEN_OPTIMIZER_CREDENTIAL_REF: ref } } } }));
+  const calls: string[][] = []; const exec = (_command: string, args: string[]) => { calls.push(args); if (args[0] === 'print') return 'loaded'; if (args[1] === 'TOKEN_OPTIMIZER_PROVIDER_MODE') return 'gateway-token\n'; return 'wrong\n'; };
+  const report = await inspectInstallation({ home, platform: 'darwin', createCredentialStore: () => ({ get: () => 'token' }), execFileSync: exec });
+  assert.ok(calls.some((args) => args[0] === 'print')); assert.ok(calls.some((args) => args[0] === 'getenv')); assert.ok(report.findings.some((item: any) => item.code === 'LAUNCHCTL_ENV_MISMATCH'));
 });
 
 test('workspace log diagnostics enforce quota and reject symlink roots', async () => {

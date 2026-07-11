@@ -5,7 +5,7 @@ const path = require("path");
 const { createChangePlan } = require("./change-plan");
 const { registerPlan, applyChangePlan } = require("./apply-plan");
 const { createCredentialStore } = require("./credential-store");
-const { inspectInstallation } = require("./doctor");
+const { inspectInstallation, defaultHealthProbe } = require("./doctor");
 const installer = require("./install-core");
 
 const CLIENT_CONFIG_PATHS = {
@@ -238,10 +238,12 @@ async function authenticatedDoctor(plan, runtime, credentialRef) {
   else if (mode === "gateway-byok") headers["X-OpenRouter-Key"] = secret;
   else if (mode === "openrouter-direct") headers.Authorization = `Bearer ${secret}`;
   const healthProbe = runtime.options.healthProbe
-    ? ((url, timeout) => runtime.options.healthProbe(url, { timeoutMs: timeout, mode, headers, credentialRef }))
-    : ((url, timeout) => authenticatedHealthProbe(url, headers, timeout));
-  const report = await inspectInstallation({ home: runtime.state.home, provider: mode, credentialRef, providerUrl: plan.effectiveProvider.apiUrl, performHealthProbe: true, healthProbe });
-  if (report.findings.some((item) => item.code === "PROVIDER_UNREACHABLE" || item.code === "CREDENTIAL_MISSING")) throw new Error("post-migration doctor failed");
+    ? ((request) => runtime.options.healthProbe(request.url, { timeoutMs: request.timeoutMs, mode, headers, credentialRef }))
+    : ((request) => defaultHealthProbe(request));
+  const performHealthProbe = mode !== "local" || Boolean(runtime.options.healthProbe);
+  const report = await inspectInstallation({ home: runtime.state.home, provider: mode, credentialRef, providerUrl: plan.effectiveProvider.apiUrl, performHealthProbe, healthProbe });
+  const blockingCodes = report.findings.filter((item) => item.code === "PROVIDER_UNREACHABLE" || item.code === "CREDENTIAL_MISSING").map((item) => item.code);
+  if (blockingCodes.length) throw new Error(`post-migration doctor failed (${[...new Set(blockingCodes)].join(", ")})`);
   return report;
 }
 

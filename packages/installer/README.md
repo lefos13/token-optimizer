@@ -162,11 +162,12 @@ npx @softawarest/token-optimizer-installer repair --dry-run
 npx @softawarest/token-optimizer-installer uninstall --dry-run
 ```
 
-`status` is read-only and makes no provider/network request. It inspects actual
-MCP/plugin registrations, installed launcher metadata, runtime dependencies,
+`status` is read-only, makes no provider/network request, and launches no client
+CLI. It inspects MCP config and marketplace cache files, installed launcher
+metadata, resolvable SDK server and zod/v3 runtime dependencies,
 credential-store accessibility, manifest integrity, macOS LaunchAgent state,
-and optional `--workspace` logs. `doctor` adds an authenticated metadata-only
-provider liveness check that consumes no model quota and exits `1` for errors,
+and optional `--workspace` logs. `doctor` adds quota-free local `/models`, direct
+OpenRouter `/auth/key`, or gateway BYOK metadata validation and exits `1` for errors,
 `2` for warnings with `--strict`, and `0` when healthy. Credential
 stores prefer macOS Keychain, Windows DPAPI/Credential Manager, and Linux
 Secret Service/libsecret; any fallback is visible in the dry-run plan. Legacy
