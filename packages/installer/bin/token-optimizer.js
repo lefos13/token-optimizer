@@ -25,7 +25,7 @@ const { readManifest, writeManifest, manifestPath } = require("../lib/manifest")
 const { planRepair, planUninstall, currentStateFromManifest, applyLifecyclePlan } = require("../lib/uninstall");
 const { statusLogs, pruneLogs, purgeLogs } = require("../lib/logs");
 const { planMigrationFromHome, migrateInstallation } = require("../lib/migration");
-const { createRegistrationAdapter, createServiceAdapter } = require("../lib/lifecycle-adapters");
+const { createRegistrationAdapter, createFilesystemMarketplaceAdapter, createServiceAdapter } = require("../lib/lifecycle-adapters");
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -82,7 +82,7 @@ async function main() {
       console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
       return;
     }
-    applyLifecyclePlan(plan, { requireExternalAdapters: true, registrationAdapter: createRegistrationAdapter(), serviceAdapter: createServiceAdapter({ services: manifest.platformServices || [], skipLaunchctl: args["skip-launchctl"] === true }), manifest, home, planWarnings: plan.warnings || [] });
+    applyLifecyclePlan(plan, { requireExternalAdapters: true, registrationAdapter: createRegistrationAdapter({ marketplaceAdapter: createFilesystemMarketplaceAdapter(home || process.env.HOME) }), serviceAdapter: createServiceAdapter({ services: manifest.platformServices || [], skipLaunchctl: args["skip-launchctl"] === true }), manifest, home, planWarnings: plan.warnings || [] });
     console.log(`${command}: applied ${plan.operations.length} operation(s).`);
     return;
   }

@@ -5,7 +5,7 @@ const { applyLifecyclePlan } = require('../../../packages/installer/lib/uninstal
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createRegistrationAdapter, createServiceAdapter, removeRegistration, removeRegistrationIdentity, upsertJsonProperty } = require('../../../packages/installer/lib/lifecycle-adapters.js');
+const { createRegistrationAdapter, createFilesystemMarketplaceAdapter, createServiceAdapter, removeRegistration, removeRegistrationIdentity, upsertJsonProperty } = require('../../../packages/installer/lib/lifecycle-adapters.js');
 
 test('uninstall emits a warning and preserves user-modified files', () => {
   const file = '/managed/user-edited';
@@ -73,7 +73,7 @@ test('same-file JSON and TOML aliases remove only the noncanonical identity', ()
 });
 
 test('registration cleanup is scoped to MCP container and full TOML namespace', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'scoped-cleanup-')); const json = path.join(home, 'config.jsonc'); fs.writeFileSync(json, '{"token_optimizer":{"keep":true},"nested":{"token_optimizer":{"keep":true}},"mcpServers":{"token_optimizer":{"drop":true},"other":{}}}'); removeRegistration(json, 'cursor'); const jsonText = fs.readFileSync(json, 'utf8'); assert.equal((jsonText.match(/token_optimizer/g) || []).length, 2); assert.ok(jsonText.includes('"other"'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'scoped-cleanup-')); const json = path.join(home, 'config.jsonc'); fs.writeFileSync(json, '{"token_optimizer":{"keep":true},"nested":{"mcpServers":{"token_optimizer":{"keep":true}}},"mcpServers":{"token_optimizer":{"drop":true},"other":{}}}'); removeRegistration(json, 'cursor'); const jsonText = fs.readFileSync(json, 'utf8'); assert.equal((jsonText.match(/token_optimizer/g) || []).length, 2); assert.ok(jsonText.includes('"other"'));
   const toml = path.join(home, 'config.toml'); fs.writeFileSync(toml, '# keep\n[mcp_servers."token-optimizer"]\ncommand="drop"\n[mcp_servers."token-optimizer".env]\nA="drop"\n[mcp_servers.other]\ncommand="keep"\n'); removeRegistrationIdentity({ client: 'codex', name: 'token-optimizer', path: toml }); const tomlText = fs.readFileSync(toml, 'utf8'); assert.ok(tomlText.includes('# keep')); assert.ok(tomlText.includes('[mcp_servers.other]')); assert.ok(!tomlText.includes('A="drop"'));
 });
 
@@ -99,4 +99,8 @@ test('marketplace normalization rollback restores the exact duplicate identity s
 test('marketplace normalization fails closed without exact state enumeration', () => {
   const plan = { schemaVersion: 2, operations: [{ kind: 'client-command', command: 'normalize-marketplace-registration', client: 'claude', paths: [], canonicalIdentity: { version: '2.0.0-beta.6' } }] };
   assert.throws(() => applyLifecyclePlan(plan, { registrationAdapter: createRegistrationAdapter() }), /rolled back/);
+});
+
+test('filesystem marketplace adapter restores exact version directories', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-fs-')); const root = path.join(home, '.claude', 'plugins', 'cache', 'token-optimizer-marketplace', 'token-optimizer'); for (const version of ['2.0.0-beta.6', '2.0.0-beta.5']) { fs.mkdirSync(path.join(root, version), { recursive: true }); fs.writeFileSync(path.join(root, version, 'marker'), version); } const marketplaceAdapter = createFilesystemMarketplaceAdapter(home); const adapter = createRegistrationAdapter({ marketplaceAdapter }); const operation = { kind: 'client-command', command: 'normalize-marketplace-registration', client: 'claude', paths: [], canonicalIdentity: { path: path.join(root, '2.0.0-beta.6'), version: '2.0.0-beta.6' } }; const captured = adapter.capture(operation); adapter.apply(operation); assert.deepEqual(fs.readdirSync(root), ['2.0.0-beta.6']); adapter.restore(operation, captured); assert.deepEqual(fs.readdirSync(root).sort(), ['2.0.0-beta.5', '2.0.0-beta.6']);
 });
