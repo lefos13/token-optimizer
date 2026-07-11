@@ -73,6 +73,13 @@ installer never scans unrelated privacy-protected home folders such as Music.
 Credential stores and any fallback are shown in the plan. Use
 `logs status|prune|purge --workspace <absolute-path>` for raw-log lifecycle.
 
+Upgrade v1 installations with `token-optimizer install --migrate`. Add
+`--dry-run --json` for the same secret-free plan without mutation. Migration
+detects all five clients, preserves legacy BYOK gateway routing unless direct
+OpenRouter is explicitly selected, creates private backups, and removes raw
+legacy credentials only after authenticated doctor validation. Failures roll
+back client files, credentials, services, and ownership state.
+
 ## Use it
 
 Ask your coding agent to use Token Optimizer when it needs to understand a

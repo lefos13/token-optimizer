@@ -170,6 +170,12 @@ provider migration removes only superseded managed keys. Raw logs are scoped to
 an absolute workspace and managed with `logs status|prune|purge`; purge keeps
 baseline and analytics metadata unless explicit include flags are supplied.
 
+For a v1 upgrade, run `token-optimizer install --migrate --dry-run --json`,
+then remove the preview flags to apply. The migration preserves legacy BYOK
+gateway routing by default, uses the transactional credential store, creates a
+private backup and manifest, and delays plaintext cleanup until doctor passes.
+Repeated runs are no-ops and any failure restores pre-migration state.
+
 Flow-specific commands:
 
 - `npx @softawarest/token-optimizer-installer`:

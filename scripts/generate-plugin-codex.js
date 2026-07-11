@@ -57,7 +57,7 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "2.0.0-beta.3";
+  const VERSION = "2.0.0-beta.4";
 
   const sdkVersion = require(
     path.join(

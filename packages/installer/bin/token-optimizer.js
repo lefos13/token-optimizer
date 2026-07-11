@@ -24,6 +24,7 @@ const { inspectInstallation } = require("../lib/doctor");
 const { readManifest } = require("../lib/manifest");
 const { planRepair, planUninstall, currentStateFromManifest, applyLifecyclePlan } = require("../lib/uninstall");
 const { statusLogs, pruneLogs, purgeLogs } = require("../lib/logs");
+const { planMigrationFromHome, migrateInstallation } = require("../lib/migration");
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -88,6 +89,27 @@ async function main() {
   try {
     await checkForUpdate(rl, args);
     const clients = parseList(args.clients || args.client || "detected");
+    if (command === "install" && args.migrate === true) {
+      const explicitProvider = args.provider !== undefined || args.local === true || args.token !== undefined || args["byok-key"] !== undefined;
+      const providerOptions = explicitProvider ? await resolveProviderOptions(args, rl) : {};
+      const migrationOptions = {
+        home: args.home,
+        clients,
+        ...providerOptions,
+        credentialStore: normalizeCredentialStore(args["credential-store"]),
+        cursorProjects: parseList(args["cursor-project"] || args.cursorProject || ""),
+        skipClientCommands: args["skip-client-commands"] === true,
+        skipLaunchctl: args["skip-launchctl"] === true,
+      };
+      if (args["dry-run"] === true || args.json === true) {
+        const plan = planMigrationFromHome(migrationOptions);
+        console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
+        return;
+      }
+      const result = await migrateInstallation(migrationOptions);
+      console.log(result.status === "already-migrated" ? "Migration already complete; no changes applied." : `Migrated Token Optimizer for: ${result.plan.clients.join(", ")}`);
+      return;
+    }
     const providerOptions = await resolveProviderOptions(args, rl);
     const defaults = args.defaults !== "false" && args["no-defaults"] !== true;
     const options = {
@@ -381,6 +403,7 @@ function printHelp() {
   npx @softawarest/token-optimizer-installer [install] [options]
   token-optimizer install --clients opencode,cursor
   token-optimizer install --dry-run [--json]
+  token-optimizer install --migrate [--dry-run --json]
   token-optimizer install --local
   token-optimizer config --token <token>
   token-optimizer defaults --clients claude,codex,opencode
@@ -408,6 +431,7 @@ prompts for one of three providers, plus a skip option:
 
 Options:
   --provider <mode>            gateway, byok, local, or skip. Overrides interactive prompting.
+  --migrate                    Detect v1 state, back it up privately, and migrate transactionally.
   --credential-store <kind>    native (default), env, or config. env/config are explicit plaintext opt-ins.
   --token <token>               Gateway access token. Defaults to LLM_GATEWAY_TOKEN. Implies --provider gateway.
   --url <url>                  Gateway URL. Defaults to ${DEFAULT_GATEWAY_URL}. Used by both gateway and byok modes.

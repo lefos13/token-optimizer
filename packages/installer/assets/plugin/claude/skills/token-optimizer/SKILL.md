@@ -209,6 +209,12 @@ scan unrelated protected home folders. `logs status|prune|purge --workspace <abs
 raw logs while preserving baseline and analytics metadata unless explicitly
 requested for deletion.
 
+For v1, preview `token-optimizer install --migrate --dry-run --json`, then
+remove the preview flags to apply. Migration scans only supported client roots,
+preserves gateway routing for legacy BYOK unless direct OpenRouter is explicit,
+creates a private backup, and cleans plaintext only after authenticated doctor
+validation. The operation is transactional and idempotent.
+
 Re-running the npm installer refreshes all client assets: Antigravity, OpenCode,
 and Cursor replace their installer-managed local files; Claude uses its plugin
 update command when available; and Codex removes then re-adds the plugin to
