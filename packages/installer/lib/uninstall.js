@@ -94,11 +94,11 @@ function applyLifecyclePlan(plan) {
 function removeManagedBlock(filePath, marker) {
   if (!fs.existsSync(filePath)) return;
   const text = fs.readFileSync(filePath, 'utf8');
-  const start = marker.includes('START') ? marker : `<!-- ${marker}_START -->`;
-  const end = marker.includes('END') ? marker.replace('START', 'END') : `<!-- ${marker}_END -->`;
+  const start = marker.includes('<!--') ? marker : `<!-- ${marker} -->`;
+  const end = marker.includes('<!--') ? marker.replace('START', 'END') : `<!-- ${marker.replace('START', 'END')} -->`;
   const escapedStart = start.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const escapedEnd = end.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const next = text.replace(new RegExp(`\\n?${escapedStart}[\\s\\S]*?${escapedEnd}\\n?`, 'g'), '\\n');
+  const next = text.replace(new RegExp(`\\n?${escapedStart}[\\s\\S]*?${escapedEnd}\\n?`, 'g'), '\n');
   if (next !== text) fs.writeFileSync(filePath, next);
 }
 

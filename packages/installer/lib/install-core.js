@@ -215,8 +215,8 @@ function persistInstallManifest(options = {}, clients = []) {
   };
   mappings.forEach(([root, sourceRoot]) => walk(root, sourceRoot));
   const managedBlocks = [
-    path.join(paths.home, "CLAUDE.md"), path.join(paths.home, "AGENTS.md"), path.join(paths.home, "GEMINI.md"),
-    path.join(paths.home, ".config", "opencode", "AGENTS.md"), path.join(paths.home, ".codex", "AGENTS.md"),
+    path.join(paths.home, ".claude", "CLAUDE.md"), path.join(paths.home, ".codex", "AGENTS.md"), path.join(paths.home, ".gemini", "GEMINI.md"),
+    path.join(paths.home, ".config", "opencode", "AGENTS.md"),
   ].filter((file) => fs.existsSync(file)).map((file) => ({ path: file, marker: "TOKEN_OPTIMIZER_START" }));
   writeManifest(paths.home, { schemaVersion: 2, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [paths.assetsRoot], managedBlocks, files });
 }
