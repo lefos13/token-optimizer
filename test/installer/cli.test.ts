@@ -20,6 +20,7 @@ function readlineWith(...answers: string[]) {
     }
   };
 }
+function packageRoot(resolved: string) { let current = path.dirname(resolved); while (current !== path.dirname(current)) { try { if (JSON.parse(fs.readFileSync(path.join(current, 'package.json'), 'utf8')).name) return current; } catch {} current = path.dirname(current); } throw new Error(`package root not found for ${resolved}`); }
 
 test('interactive BYOK setup asks for one optional model', async () => {
   const options = await cli.resolveProviderOptions(
@@ -128,9 +129,11 @@ test('spawned CLI completes install, doctor, repair, uninstall, and repeated uni
     const pre = JSON.parse(doctor.stdout); assert.ok(pre.findings.some((item: any) => ['STALE_REGISTRATION', 'MISSING_LAUNCHER', 'MANIFEST_ENTRY_MISSING'].includes(item.code)), `${client} missing actionable pre-repair finding`);
     const repair = spawnSync(process.execPath, [bin, 'repair', '--home', home, '--skip-launchctl'], base);
     assert.equal(repair.status, 0, `${client} repair: ${repair.stderr}`);
-    const postRepair = spawnSync(process.execPath, [bin, 'status', '--home', home, '--json'], base);
+    const repairedOwnership = JSON.parse(fs.readFileSync(path.join(home, '.token-optimizer', 'manifest.json'), 'utf8')); const servers = [...new Set(repairedOwnership.files.filter((item: any) => /start\.(?:js|sh)$/.test(item.path)).map((item: any) => path.dirname(item.path)))]; const sdkRoot = packageRoot(require.resolve('@modelcontextprotocol/sdk/server/index.js')); const zodRoot = packageRoot(require.resolve('zod/v3'));
+    for (const server of servers as string[]) { const modules = path.join(server, '.data', 'node_modules'); fs.mkdirSync(path.join(modules, '@modelcontextprotocol'), { recursive: true }); fs.cpSync(sdkRoot, path.join(modules, '@modelcontextprotocol', 'sdk'), { recursive: true }); fs.cpSync(zodRoot, path.join(modules, 'zod'), { recursive: true }); }
+    const postRepair = spawnSync(process.execPath, [bin, 'status', '--home', home, '--provider', 'local', '--json'], base);
     assert.ok([0, 1].includes(postRepair.status), `${client} post-repair status: ${postRepair.stderr}`);
-    const post = JSON.parse(postRepair.stdout); assert.ok(post.clients.configured.includes(client), `${client} not configured after repair: ${postRepair.stdout}`); assert.equal(post.expectedVersion, '2.0.0-beta.6'); assert.ok(!post.findings.some((item: any) => ['STALE_REGISTRATION', 'MISSING_LAUNCHER', 'MANIFEST_ENTRY_MISSING', 'DUPLICATE_REGISTRATION'].includes(item.code)));
+    const post = JSON.parse(postRepair.stdout); assert.ok(post.clients.configured.includes(client), `${client} not configured after repair: ${postRepair.stdout}`); assert.equal(post.expectedVersion, '2.0.0-beta.6'); assert.ok(!post.findings.some((item: any) => ['STALE_REGISTRATION', 'MISSING_LAUNCHER', 'MANIFEST_ENTRY_MISSING', 'DUPLICATE_REGISTRATION'].includes(item.code))); assert.equal(post.healthy, true, `${client} post-repair not healthy: ${postRepair.stdout}`);
     const uninstall = spawnSync(process.execPath, [bin, 'uninstall', '--home', home, '--skip-launchctl'], base);
     assert.equal(uninstall.status, 0, `${client} uninstall: ${uninstall.stderr}`);
     const repeated = spawnSync(process.execPath, [bin, 'uninstall', '--home', home, '--json'], base);

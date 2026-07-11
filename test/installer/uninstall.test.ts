@@ -5,7 +5,7 @@ const { applyLifecyclePlan } = require('../../../packages/installer/lib/uninstal
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createRegistrationAdapter, createServiceAdapter, removeRegistration, upsertJsonProperty } = require('../../../packages/installer/lib/lifecycle-adapters.js');
+const { createRegistrationAdapter, createServiceAdapter, removeRegistration, removeRegistrationIdentity, upsertJsonProperty } = require('../../../packages/installer/lib/lifecycle-adapters.js');
 
 test('uninstall emits a warning and preserves user-modified files', () => {
   const file = '/managed/user-edited';
@@ -65,6 +65,11 @@ test('JSON registration cleanup preserves comments, formatting, and unrelated se
 
 test('JSON and JSONC registration upsert preserves every unrelated byte', () => {
   for (const container of ['mcp', 'mcpServers']) { const original = `{\n  // before\n  "${container}": {\n    "other": { "command": "keep" }, // inline\n    "token_optimizer": { "command": "old" }\n  },\n  "tail": [1, 2, 3]\n}\n`; const next = upsertJsonProperty(original, container, 'token_optimizer', { command: 'new' }); assert.ok(next.includes('// before')); assert.ok(next.includes('"other": { "command": "keep" }, // inline')); assert.ok(next.includes('"tail": [1, 2, 3]')); assert.ok(next.includes('"command":"new"') || next.includes('"command": "new"')); }
+});
+
+test('same-file JSON and TOML aliases remove only the noncanonical identity', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'alias-identity-')); const json = path.join(home, 'mcp.json'); fs.writeFileSync(json, '{"mcpServers":{"token_optimizer":{"command":"keep"},"token-optimizer":{"command":"drop"},"other":{}}}'); removeRegistrationIdentity({ client: 'cursor', name: 'token-optimizer', path: json }); assert.ok(fs.readFileSync(json, 'utf8').includes('token_optimizer')); assert.ok(!fs.readFileSync(json, 'utf8').includes('token-optimizer'));
+  const toml = path.join(home, 'config.toml'); fs.writeFileSync(toml, '[mcp_servers.token_optimizer]\ncommand="keep"\n\n[mcp_servers."token-optimizer"]\ncommand="drop"\n'); removeRegistrationIdentity({ client: 'codex', name: 'token-optimizer', path: toml }); const next = fs.readFileSync(toml, 'utf8'); assert.ok(next.includes('[mcp_servers.token_optimizer]')); assert.ok(!next.includes('[mcp_servers."token-optimizer"]'));
 });
 
 test('LaunchAgent permission failure leaves plist untouched', () => {

@@ -8,10 +8,12 @@ function createRegistrationAdapter(options = {}) {
   const exec = options.execFileSync || execFileSync;
   return {
     capture(operation) { const files = [...new Set([...(operation.paths || []), operation.canonicalPath].filter(Boolean))]; return { files: files.map((file) => ({ file, exists: fs.existsSync(file), content: fs.existsSync(file) ? fs.readFileSync(file) : null })), marketplace: Boolean(operation.recipe) }; },
-    apply(operation) { for (const file of operation.paths || []) removeRegistration(file, operation.client); if (operation.command === 'upsert-registration') upsertRegistration(operation); if (operation.recipe) exec(operation.client, operation.recipe.remove, { stdio: 'ignore' }); },
+    apply(operation) { if (operation.command === 'remove-registration-identity') removeRegistrationIdentity(operation.identity); else for (const file of operation.paths || []) removeRegistration(file, operation.client); if (operation.command === 'upsert-registration') upsertRegistration(operation); if (operation.recipe) exec(operation.client, operation.recipe.remove, { stdio: 'ignore' }); },
     restore(operation, state) { for (const item of state.files) { if (!item.exists) fs.rmSync(item.file, { force: true }); else { fs.mkdirSync(require('path').dirname(item.file), { recursive: true }); fs.writeFileSync(item.file, item.content); } } if (state.marketplace) exec(operation.client, operation.recipe.restore, { stdio: 'ignore' }); },
   };
 }
+
+function removeRegistrationIdentity(identity) { if (!identity?.path || !fs.existsSync(identity.path)) return; const text = fs.readFileSync(identity.path, 'utf8'); if (identity.client === 'codex') { const escaped = String(identity.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); fs.writeFileSync(identity.path, text.replace(new RegExp(`^\\[mcp_servers\\.(?:"?)${escaped}(?:"?)\\]\\s*$[\\s\\S]*?(?=^\\[|(?![\\s\\S]))`, 'gm'), '')); return; } const next = removeJsonProperty(text, [identity.name]); if (next === null) throw new Error(`cannot safely remove ${identity.client} registration identity`); fs.writeFileSync(identity.path, next); }
 
 function upsertRegistration(operation) { const file = operation.canonicalPath; if (!file || !operation.template) throw new Error('owned registration template unavailable'); fs.mkdirSync(require('path').dirname(file), { recursive: true }); const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''; if (operation.client === 'codex') { const clean = existing.replace(/^\[mcp_servers\.(?:"?token[_-]optimizer"?)\]\s*$[\s\S]*?(?=^\[|(?![\s\S]))/gm, '').trimEnd(); fs.writeFileSync(file, `${clean}${clean ? '\n\n' : ''}${operation.template.trim()}\n`); return; } const key = operation.client === 'opencode' ? 'mcp' : 'mcpServers'; const next = upsertJsonProperty(existing, key, 'token_optimizer', operation.template); if (next === null) throw new Error(`cannot safely upsert ${operation.client} registration`); fs.writeFileSync(file, next); }
 
@@ -39,4 +41,4 @@ function createServiceAdapter(options = {}) {
   };
 }
 
-module.exports = { createRegistrationAdapter, createServiceAdapter, removeRegistration, removeJsonProperty, upsertJsonProperty };
+module.exports = { createRegistrationAdapter, createServiceAdapter, removeRegistration, removeRegistrationIdentity, removeJsonProperty, upsertJsonProperty };
