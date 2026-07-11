@@ -419,6 +419,7 @@ test('installSelectedClients defaults to detected clients and does not write eve
     home,
     assetsRoot,
     gatewayToken: 'person-token',
+    credentialStore: 'config',
     skipLaunchctl: true,
     skipClientCommands: true,
   });
