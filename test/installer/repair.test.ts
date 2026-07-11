@@ -26,7 +26,7 @@ test('repair removes an incomplete dependency cache so launcher bootstrap can re
   const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path'); const root = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-runtime-')); const cache = path.join(root, '.data', 'node_modules');
   const manifest = { schemaVersion: 2, roots: [root], files: [] };
   const plan = planRepair({ findings: [{ code: 'DEPENDENCY_CACHE_INCOMPLETE', path: cache, operation: 'refresh-runtime' }] }, manifest, { managedRoots: [root] });
-  assert.deepEqual(plan.operations, [{ kind: 'remove-file', path: cache }]);
+  assert.deepEqual(plan.operations, [{ kind: 'remove-file', path: cache }, { kind: 'client-command', client: 'runtime', command: 'bootstrap-runtime', launcherPath: path.join(root, 'start.js'), networkPotential: true }]);
   assert.throws(() => planRepair({ findings: [{ code: 'DEPENDENCY_CACHE_INCOMPLETE', path: '/tmp/arbitrary/.data/node_modules', operation: 'refresh-runtime' }] }, manifest, { managedRoots: [root] }), /outside managed roots/);
 });
 
@@ -36,4 +36,11 @@ test('duplicate repair honors marketplace canonical and does not upsert direct',
   const plan = planRepair({ findings: [finding] }, manifest);
   assert.equal(plan.operations.some((item: any) => item.command === 'upsert-registration'), false);
   assert.equal(plan.operations[0].command, 'remove-registration-identity');
+});
+
+test('multi-version marketplace extras coalesce into one normalize cycle', () => {
+  const manifest = { schemaVersion: 2, roots: ['/managed'], files: [], registrations: [{ client: 'claude', kind: 'marketplace', remove: ['plugin', 'uninstall', 'token'], restore: ['plugin', 'install', 'token@2.0.0-beta.6'], ownership: 'installer' }] };
+  const canonical = { client: 'claude', name: 'token-optimizer', type: 'marketplace', path: '/cache/2.0.0-beta.6', version: '2.0.0-beta.6' };
+  const plan = planRepair({ findings: [{ code: 'DUPLICATE_REGISTRATION', client: 'claude', operation: 'deduplicate-registration', canonical, registrations: [canonical, { ...canonical, path: '/cache/2.0.0-beta.5', version: '2.0.0-beta.5' }, { ...canonical, path: '/cache/1.9.0', version: '1.9.0' }] }] }, manifest);
+  const normalize = plan.operations.filter((item: any) => item.command === 'normalize-marketplace-registration'); assert.equal(normalize.length, 1); assert.equal(normalize[0].identities.length, 2); assert.deepEqual(normalize[0].recipe.restore, ['plugin', 'install', 'token@2.0.0-beta.6']);
 });

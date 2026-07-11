@@ -56,6 +56,8 @@ if (!upToDate) {
   }
 }
 
+if (process.env.TOKEN_OPTIMIZER_REPAIR_ONLY === "1") process.exit(0);
+
 const child = spawn(process.execPath, [path.join(__dirname, "index.js")], {
   stdio: "inherit",
   env: (() => {
