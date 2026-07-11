@@ -174,7 +174,10 @@ For a v1 upgrade, run `token-optimizer install --migrate --dry-run --json`,
 then remove the preview flags to apply. The migration preserves legacy BYOK
 gateway routing by default, uses the transactional credential store, creates a
 private backup and manifest, and delays plaintext cleanup until doctor passes.
-Repeated runs are no-ops and any failure restores pre-migration state.
+The exact preview operation IDs execute in order; the doctor resolves the new
+credential reference and sends mode-appropriate authentication before
+structured cleanup. Repeated runs are no-ops and any failure restores
+pre-migration file, service, registration, credential, and manifest state.
 
 Flow-specific commands:
 

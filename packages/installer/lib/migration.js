@@ -3,6 +3,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { createChangePlan } = require("./change-plan");
+const { registerPlan, applyChangePlan } = require("./apply-plan");
 const { createCredentialStore } = require("./credential-store");
 const { inspectInstallation } = require("./doctor");
 const installer = require("./install-core");
@@ -15,6 +16,7 @@ const CLIENT_ROOTS = {
   cursor: [".cursor"],
 };
 const LEGACY_KEYS = ["LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_BYOK_MODEL", "OPENROUTER_API_KEY", "LOCAL_LLM_API_URL", "LOCAL_LLM_MODEL"];
+const LEGACY_SECRET_KEYS = ["LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_API_KEY"];
 
 /* Legacy inspection is intentionally bounded to the five supported client
    roots. Values stay in process memory and only redacted provider metadata is
@@ -51,7 +53,10 @@ function planMigrationFromHome(options = {}) {
     { id: "migrate:doctor", kind: "client-command", phase: "validation", client: "all", command: "authenticated-doctor" },
     ...(legacy.operations.some((item) => item.id === "cleanup:legacy-provider-env") ? [{ id: "cleanup:legacy-provider-env", kind: "managed-block", phase: "cleanup", path: "supported-client-configs", marker: "legacy-provider-env" }] : []),
   ];
-  return createChangePlan({ action: "migration", version: require("../package.json").version, clients: state.clients, effectiveProvider: legacy.effectiveProvider, warnings: legacy.warnings }, operations);
+  const plan = createChangePlan({ action: "migration", version: require("../package.json").version, clients: state.clients, effectiveProvider: legacy.effectiveProvider, warnings: legacy.warnings }, operations);
+  const runtime = { state, options, providerOptions, backup: null, credentialRuntime: null, doctor: null };
+  registerPlan(plan, null, null, runtime, () => executeMigrationPlan(plan, runtime));
+  return plan;
 }
 
 /* The outer backup transaction extends the install transaction through the
@@ -64,47 +69,129 @@ async function migrateInstallation(options = {}) {
     return { status: "already-migrated", plan: planMigrationFromHome(options) };
   }
   const plan = planMigrationFromHome(options);
-  const mode = plan.effectiveProvider.mode;
-  if (!installer.normalizeProviderChoice(mode)) throw new Error(`Unsupported provider mode: ${mode}`);
-  const providerOptions = providerOptionsFromState(state, options, mode);
-  const backup = createBackup(state);
-  let applyResult;
+  const result = await applyChangePlan(plan);
+  if (result.error) throw new Error(`Migration rolled back: ${result.error.message}`);
+  return { status: "migrated", plan, appliedOperationIds: result.applied.map((operation) => operation.id), backup: result.backup, doctor: result.doctor };
+}
+
+/* The registered preview is the sole source of execution order. One bounded
+   backup remains live until authenticated validation and cleanup both finish. */
+async function executeMigrationPlan(plan, runtime) {
+  const { state, options, providerOptions } = runtime;
+  const applied = []; const rolledBack = []; const manualRemediation = []; const externalRollbacks = [];
+  let credentialRef = providerOptions.credentialRef || null; let credentialOwned = false;
   try {
-    const installPlan = installer.planInstallation({ ...options, ...providerOptions, clients: state.clients });
-    applyResult = installer.applyChangePlan(installPlan);
-    if (applyResult.error) throw applyResult.error;
-    installer.persistInstallManifest({ ...options, ...providerOptions, credentialRef: applyResult.credentialRef, credentialOwned: applyResult.credentialOwned }, applyResult.installedClients);
-    const report = await inspectInstallation({ home: state.home, provider: mode, credentialRef: applyResult.credentialRef, providerUrl: plan.effectiveProvider.apiUrl, performHealthProbe: true, healthProbe: options.healthProbe });
-    if (report.findings.some((item) => item.code === "PROVIDER_UNREACHABLE" || item.code === "CREDENTIAL_MISSING")) throw new Error("post-migration doctor failed");
-    cleanupLegacy(state, providerOptions);
-    fs.mkdirSync(path.dirname(completionMarker), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(completionMarker, `${JSON.stringify({ schemaVersion: 1, migratedAt: new Date().toISOString(), clients: state.clients })}\n`, { mode: 0o600 });
-    return { status: "migrated", plan, appliedOperationIds: plan.operations.map((operation) => operation.id), backup: { directory: backup.directory, manifestPath: backup.manifestPath }, doctor: report };
-  } catch (error) {
-    restoreBackup(backup, state.home);
-    if (applyResult?.credentialOwned && applyResult.credentialRef) {
-      const ref = applyResult.credentialRef;
-      const kind = ref.store === "config" || ref.store === "protected-config" ? "config" : "native";
-      try { createCredentialStore(kind, { home: state.home, service: ref.service, account: ref.account, path: ref.path, ...(options.credentialStoreOptions || {}) }).delete(ref); } catch { /* backup restoration remains authoritative */ }
+    for (const operation of plan.operations) {
+      if (operation.id === "migrate:backup") runtime.backup = createBackup(state, options);
+      else if (operation.kind === "credential" && operation.phase === "credentials") {
+        const credential = createMigrationCredential(state, providerOptions, options, plan.effectiveProvider.mode);
+        credentialRef = credential.reference; credentialOwned = credential.owned; runtime.credentialRuntime = credential;
+      } else if (operation.phase === "copy") installer.copyClientAssets(operation.client, migrationInstallOptions(runtime, credentialRef));
+      else if (operation.phase === "config") installer.configureMigratedClient(operation.client, migrationInstallOptions(runtime, credentialRef));
+      else if (operation.phase === "service") {
+        const installOptions = migrationInstallOptions(runtime, credentialRef);
+        installer.applyLaunchctlValues(installer.buildProviderValues(installOptions), installOptions);
+        if (!options.skipLaunchctl) externalRollbacks.push({ operation, rollback: () => installer.applyLaunchctlValues(legacyProviderValues(state.env), installOptions) });
+      }
+      else if (operation.phase === "command") {
+        const transaction = options.clientRegistrationAdapter
+          ? options.clientRegistrationAdapter(operation.client, migrationInstallOptions(runtime, credentialRef))
+          : installer.registerMigratedClient(operation.client, migrationInstallOptions(runtime, credentialRef));
+        if (transaction && typeof transaction.rollback === "function") externalRollbacks.push({ operation, rollback: transaction.rollback });
+      }
+      else if (operation.id === "migrate:doctor") runtime.doctor = await authenticatedDoctor(plan, runtime, credentialRef);
+      else if (operation.id === "cleanup:legacy-provider-env") cleanupLegacy(state);
+      applied.push(operation);
     }
-    throw new Error(`Migration rolled back: ${error.message}`);
+    installer.persistInstallManifest({ ...options, ...providerOptions, credentialRef, credentialOwned }, state.clients);
+    const marker = path.join(state.home, ".token-optimizer", "migration-v2.json");
+    fs.mkdirSync(path.dirname(marker), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(marker, `${JSON.stringify({ schemaVersion: 1, migratedAt: new Date().toISOString(), clients: state.clients })}\n`, { mode: 0o600 });
+    return { applied, rolledBack, manualRemediation, installedClients: [...state.clients], credentialRef, credentialOwned, backup: { directory: runtime.backup.directory, manifestPath: runtime.backup.manifestPath }, doctor: runtime.doctor };
+  } catch (error) {
+    for (const transaction of externalRollbacks.reverse()) {
+      try { await transaction.rollback(); rolledBack.push(transaction.operation); }
+      catch { manualRemediation.push(transaction.operation); }
+    }
+    if (runtime.backup) { try { restoreBackup(runtime.backup); rolledBack.push(...applied.slice().reverse()); } catch { manualRemediation.push(...applied.slice().reverse()); } }
+    if (credentialRef) {
+      try {
+        if (runtime.credentialRuntime.prior) runtime.credentialRuntime.store.set(runtime.credentialRuntime.prior);
+        else if (credentialOwned) runtime.credentialRuntime.store.delete(credentialRef);
+      } catch { manualRemediation.push(plan.operations.find((item) => item.phase === "credentials")); }
+    }
+    return { applied, rolledBack, manualRemediation, error, installedClients: [...state.clients] };
   }
+}
+
+function legacyProviderValues(env) {
+  const values = Object.fromEntries(installer.MANAGED_ENV_KEYS.map((key) => [key, ""]));
+  for (const key of installer.MANAGED_ENV_KEYS) if (env[key]) values[key] = env[key];
+  return values;
+}
+
+function migrationInstallOptions(runtime, credentialRef) {
+  const values = installer.buildProviderValues({ ...runtime.options, ...runtime.providerOptions, credentialRef });
+  return { ...runtime.options, ...runtime.providerOptions, clients: runtime.state.clients, home: runtime.state.home, installRoot: runtime.options.installRoot || path.join(runtime.state.home, ".token-optimizer"), assetsRoot: runtime.options.assetsRoot || path.join(__dirname, "..", "assets"), credentialRef, providerValues: values };
+}
+
+function createMigrationCredential(state, providerOptions, options, mode) {
+  if (!["gateway-token", "gateway-byok", "openrouter-direct"].includes(mode)) return { reference: null, owned: false, store: null };
+  const kind = options.credentialStore || "native";
+  const secret = mode === "gateway-token" ? providerOptions.gatewayToken : (providerOptions.openrouterKey || providerOptions.byokKey);
+  const store = createCredentialStore(kind, { home: state.home, service: "token-optimizer", account: mode, ...(options.credentialStoreOptions || {}) });
+  const prior = store.get({ service: "token-optimizer", account: mode });
+  const reference = store.set(secret);
+  return { reference, owned: !prior, prior, store };
+}
+
+async function authenticatedDoctor(plan, runtime, credentialRef) {
+  const mode = plan.effectiveProvider.mode;
+  let secret = null;
+  if (credentialRef && runtime.credentialRuntime?.store) secret = runtime.credentialRuntime.store.get(credentialRef);
+  else if (credentialRef && typeof credentialRef === "object") {
+    const kind = credentialRef.store === "config" || credentialRef.store === "protected-config" ? "config" : credentialRef.store === "env" ? "env" : "native";
+    const store = createCredentialStore(kind, { home: runtime.state.home, service: credentialRef.service, account: credentialRef.account, path: credentialRef.path, envVar: credentialRef.variable, ...(runtime.options.credentialStoreOptions || {}) });
+    secret = store.get(credentialRef);
+  }
+  if (["gateway-token", "gateway-byok", "openrouter-direct"].includes(mode) && !secret) throw new Error("post-migration doctor could not resolve credential reference");
+  const headers = {};
+  if (mode === "gateway-token") headers.Authorization = `Bearer ${secret}`;
+  else if (mode === "gateway-byok") headers["X-OpenRouter-Key"] = secret;
+  else if (mode === "openrouter-direct") headers.Authorization = `Bearer ${secret}`;
+  const healthProbe = runtime.options.healthProbe
+    ? ((url, timeout) => runtime.options.healthProbe(url, { timeoutMs: timeout, mode, headers, credentialRef }))
+    : ((url, timeout) => authenticatedHealthProbe(url, headers, timeout));
+  const report = await inspectInstallation({ home: runtime.state.home, provider: mode, credentialRef, providerUrl: plan.effectiveProvider.apiUrl, performHealthProbe: true, healthProbe });
+  if (report.findings.some((item) => item.code === "PROVIDER_UNREACHABLE" || item.code === "CREDENTIAL_MISSING")) throw new Error("post-migration doctor failed");
+  return report;
+}
+
+async function authenticatedHealthProbe(url, headers, timeoutMs = 2500) {
+  const target = `${String(url).replace(/\/+$/, "").replace(/\/v1$/, "")}/health`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try { const response = await fetch(target, { headers, signal: controller.signal }); return { ok: response.ok }; }
+  finally { clearTimeout(timer); }
 }
 
 function providerOptionsFromState(state, choices, mode) {
   const env = state.env;
-  if (mode === "gateway-token") return { provider: mode, gatewayUrl: choices.gatewayUrl || env.LLM_GATEWAY_URL, gatewayToken: choices.gatewayToken || env.LLM_GATEWAY_TOKEN };
-  if (mode === "gateway-byok") return { provider: mode, gatewayUrl: choices.gatewayUrl || env.LLM_GATEWAY_URL, byokKey: choices.byokKey || env.OPENROUTER_BYOK_KEY || env.OPENROUTER_API_KEY, byokModel: choices.byokModel || env.OPENROUTER_BYOK_MODEL };
-  if (mode === "openrouter-direct") return { provider: mode, openrouterUrl: choices.openrouterUrl, openrouterKey: choices.openrouterKey || choices.byokKey || env.OPENROUTER_API_KEY || env.OPENROUTER_BYOK_KEY, byokModel: choices.byokModel || env.OPENROUTER_BYOK_MODEL };
+  const credentialRef = choices.credentialRef || env.TOKEN_OPTIMIZER_CREDENTIAL_REF;
+  if (mode === "gateway-token") return { provider: mode, credentialRef, gatewayUrl: choices.gatewayUrl || env.LLM_GATEWAY_URL, gatewayToken: choices.gatewayToken || env.LLM_GATEWAY_TOKEN };
+  if (mode === "gateway-byok") return { provider: mode, credentialRef, gatewayUrl: choices.gatewayUrl || env.LLM_GATEWAY_URL, byokKey: choices.byokKey || env.OPENROUTER_BYOK_KEY || env.OPENROUTER_API_KEY, byokModel: choices.byokModel || env.OPENROUTER_BYOK_MODEL };
+  if (mode === "openrouter-direct") return { provider: mode, credentialRef, openrouterUrl: choices.openrouterUrl, openrouterKey: choices.openrouterKey || choices.byokKey || env.OPENROUTER_API_KEY || env.OPENROUTER_BYOK_KEY, byokModel: choices.byokModel || env.OPENROUTER_BYOK_MODEL };
   if (mode === "local") return { provider: mode, localApiUrl: choices.localApiUrl || env.LOCAL_LLM_API_URL, localModel: choices.localModel || env.LOCAL_LLM_MODEL };
   return { provider: "skip" };
 }
 
-function createBackup(state) {
+function createBackup(state, options = {}) {
   const directory = path.join(state.home, ".token-optimizer-mcp", "backups", `migration-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const entries = [];
-  const targets = [...new Set([...state.files, path.join(state.home, ".token-optimizer"), path.join(state.home, "Library", "LaunchAgents", "com.softawarest.token-optimizer.env.plist")])];
+  const clientRoots = state.clients.flatMap((client) => CLIENT_ROOTS[client] || []).map((root) => path.join(state.home, root));
+  const cursorRoots = (options.cursorProjects || []).map((root) => path.join(path.resolve(root), ".cursor"));
+  const targets = [...new Set([...clientRoots, ...cursorRoots, ...state.files, options.installRoot || path.join(state.home, ".token-optimizer"), path.join(state.home, ".token-optimizer-mcp", "manifest.json"), path.join(state.home, "Library", "LaunchAgents", "com.softawarest.token-optimizer.env.plist"), ...(options.launchctlStatePath ? [path.resolve(options.launchctlStatePath)] : [])])];
   targets.forEach((target, index) => {
     const existed = fs.existsSync(target); const stored = path.join(directory, "contents", String(index));
     if (existed) fs.cpSync(target, stored, { recursive: true });
@@ -123,14 +210,25 @@ function restoreBackup(backup) {
   }
 }
 
-function cleanupLegacy(state, providerOptions) {
-  const secrets = [state.env.LLM_GATEWAY_TOKEN, state.env.OPENROUTER_BYOK_KEY, state.env.OPENROUTER_API_KEY].filter(Boolean);
+function cleanupLegacy(state) {
   for (const file of state.files) {
-    let text = fs.readFileSync(file, "utf8");
-    for (const secret of secrets) text = text.split(secret).join("");
-    fs.writeFileSync(file, text);
+    const text = fs.readFileSync(file, "utf8");
+    if (/\.toml$/i.test(file)) {
+      fs.writeFileSync(file, text.split(/\r?\n/).filter((line) => !LEGACY_SECRET_KEYS.some((key) => new RegExp(`^\\s*${key}\\s*=`).test(line))).join("\n"));
+      continue;
+    }
+    const parsed = JSON.parse(installer.stripJsonCommentsAndTrailingCommas(text));
+    removeLegacyKeys(parsed);
+    fs.writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`);
   }
-  for (const key of ["LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_API_KEY"]) if (providerOptions[key]) delete providerOptions[key];
+}
+
+function removeLegacyKeys(value) {
+  if (!value || typeof value !== "object") return;
+  for (const key of Object.keys(value)) {
+    if (LEGACY_SECRET_KEYS.includes(key)) delete value[key];
+    else removeLegacyKeys(value[key]);
+  }
 }
 
 function normalizeClients(clients, home) {

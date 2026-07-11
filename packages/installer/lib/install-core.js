@@ -541,7 +541,7 @@ function installCodex(options) {
 
 function applyGatewayConfig(options) {
   const paths = installerPaths(options);
-  const values = buildProviderValues(options);
+  const values = options.providerValues || buildProviderValues(options);
   for (const target of getGatewayTargets(paths.home)) {
     if (!target.matches(options.clients)) {
       continue;
@@ -982,6 +982,47 @@ function tryClientCommand(command, args, options) {
   }
 }
 
+/* Migration phases are exposed separately so one registered change plan can
+   keep rollback state alive through credential validation and legacy cleanup. */
+function copyClientAssets(client, options) {
+  if (client === "opencode") {
+    copyDirectory(path.join(options.assetsRoot, "plugin", "opencode", "server"), path.join(options.home, ".config", "opencode", "token-optimizer-server"));
+    copyDirectory(path.join(options.assetsRoot, "plugin", "opencode", "skills", "token-optimizer"), path.join(options.home, ".config", "opencode", "skills", "token-optimizer"));
+  } else if (client === "cursor") {
+    copyDirectory(path.join(options.assetsRoot, "plugin", "cursor", "server"), path.join(options.home, ".cursor", "token-optimizer-server"));
+    for (const project of options.cursorProjects || []) copyFile(path.join(options.assetsRoot, "plugin", "cursor", "rules", "token-optimizer.mdc"), path.join(path.resolve(project), ".cursor", "rules", "token-optimizer.mdc"));
+  } else if (client === "antigravity") copyDirectory(path.join(options.assetsRoot, "plugin", "antigravity"), path.join(options.home, ".gemini", "config", "plugins", "token-optimizer"));
+  else if (client === "claude" || client === "codex") copyDirectory(path.join(options.assetsRoot, "plugin", client), path.join(options.installRoot, "plugin", client));
+  else throw new Error(`Unsupported client: ${client}`);
+}
+
+function configureMigratedClient(client, options) {
+  if (client === "codex") {
+    const file = path.join(options.home, ".codex", "config.toml");
+    ensureDirectory(path.dirname(file));
+    const existing = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+    fs.writeFileSync(file, upsertCodexTomlServer(existing, path.join(options.installRoot, "plugin", "codex", "server", "start.js"), options.providerValues));
+    const skill = path.join(options.assetsRoot, "plugin", "codex", "skills", "token-optimizer");
+    if (fs.existsSync(skill)) copyDirectory(skill, path.join(options.home, ".codex", "skills", "token-optimizer"));
+  } else applyGatewayConfig({ ...options, clients: client === "antigravity" ? ["gemini", "antigravity"] : [client], skipLaunchctl: true });
+  if (options.defaults !== false && client !== "cursor") applyDefaultDirectives({ ...options, clients: client === "antigravity" ? ["gemini"] : [client] });
+}
+
+function registerMigratedClient(client, options) {
+  if (client === "claude") {
+    const added = tryClientCommand("claude", ["plugin", "marketplace", "add", options.installRoot], options);
+    const installed = added && (tryClientCommand("claude", ["plugin", "update", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`], options) || tryClientCommand("claude", ["plugin", "install", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`], options));
+    if (!installed) copyDirectory(path.join(options.assetsRoot, "plugin", "claude"), path.join(options.home, ".claude", "skills", "token-optimizer"));
+    return installed;
+  }
+  if (client === "codex") {
+    const added = tryClientCommand("codex", ["plugin", "marketplace", "add", options.installRoot], options);
+    if (added) { tryClientCommand("codex", ["plugin", "remove", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options); tryClientCommand("codex", ["plugin", "add", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options); }
+    return added;
+  }
+  return false;
+}
+
 function commandExists(command) {
   const [probe, probeArgs] = process.platform === "win32"
     ? ["where", [command]]
@@ -1079,4 +1120,8 @@ module.exports = {
   applyDirectiveBlock,
   stripJsonCommentsAndTrailingCommas,
   upsertCodexTomlServer,
+  copyClientAssets,
+  configureMigratedClient,
+  registerMigratedClient,
+  applyLaunchctlValues,
 };

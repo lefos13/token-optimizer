@@ -3,13 +3,17 @@
    while allowing the compatibility installer API to share the same pipeline. */
 const executions = new WeakMap();
 
-function registerPlan(plan, execute, prepare, state) {
-  executions.set(plan, { execute, prepare, state });
+function registerPlan(plan, execute, prepare, state, executePlan) {
+  executions.set(plan, { execute, prepare, state, executePlan });
   return plan;
 }
 
 function applyChangePlan(plan, adapters = {}) {
   if (!plan || !Array.isArray(plan.operations)) throw new TypeError("invalid change plan");
+  const registered = executions.get(plan);
+  if (!adapters.applyOperation && !adapters.apply && registered?.executePlan) {
+    return registered.executePlan(plan);
+  }
   const applied = [];
   const rolledBack = [];
   const manualRemediation = [];

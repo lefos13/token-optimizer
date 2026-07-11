@@ -214,6 +214,9 @@ remove the preview flags to apply. Migration scans only supported client roots,
 preserves gateway routing for legacy BYOK unless direct OpenRouter is explicit,
 creates a private backup, and cleans plaintext only after authenticated doctor
 validation. The operation is transactional and idempotent.
+The preview itself is registered for execution, so apply does not recompute a
+hidden plan. Its rollback handles remain live through the authenticated probe
+and structured legacy-key cleanup.
 
 Re-running the npm installer refreshes all client assets: Antigravity, OpenCode,
 and Cursor replace their installer-managed local files; Claude uses its plugin

@@ -57,6 +57,34 @@ test('migration dry-run matches apply plan and leaves fixture state untouched', 
   assert.doesNotMatch(fs.readFileSync(legacy, 'utf8'), /fixture-secret/);
 });
 
+test('the exact preview plan is executable and authenticates the migrated credential', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-exact-plan-'));
+  const legacy = path.join(home, '.cursor', 'mcp.json');
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, JSON.stringify({
+    note: 'fixture-secret remains ordinary user content',
+    mcpServers: { token_optimizer: { env: { LLM_GATEWAY_URL: 'https://legacy.example/v1', LLM_GATEWAY_TOKEN: 'fixture-secret' } } },
+  }));
+  let probe: any;
+  const plan = migration.planMigrationFromHome({
+    home,
+    clients: ['cursor'],
+    credentialStore: 'config',
+    skipClientCommands: true,
+    skipLaunchctl: true,
+    healthProbe: async (url: string, request: any) => { probe = { url, request }; return { ok: true }; },
+  });
+  const result = await installer.applyChangePlan(plan);
+  assert.equal(result.error, undefined);
+  assert.deepEqual(result.applied.map((operation: any) => operation.id), plan.operations.map((operation: any) => operation.id));
+  assert.equal(probe.request.mode, 'gateway-token');
+  assert.equal(probe.request.headers.Authorization, 'Bearer fixture-secret');
+  const migrated = JSON.parse(fs.readFileSync(legacy, 'utf8'));
+  assert.equal(migrated.note, 'fixture-secret remains ordinary user content');
+  assert.equal(migrated.mcpServers.token_optimizer.env.LLM_GATEWAY_TOKEN, undefined);
+  assert.equal(migrated.mcpServers.token_optimizer.env.LLM_GATEWAY_URL, 'https://legacy.example/v1');
+});
+
 test('failed post-migration doctor restores legacy files and credential state', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-rollback-'));
   const legacy = path.join(home, '.cursor', 'mcp.json');

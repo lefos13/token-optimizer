@@ -78,7 +78,10 @@ Upgrade v1 installations with `token-optimizer install --migrate`. Add
 detects all five clients, preserves legacy BYOK gateway routing unless direct
 OpenRouter is explicitly selected, creates private backups, and removes raw
 legacy credentials only after authenticated doctor validation. Failures roll
-back client files, credentials, services, and ownership state.
+back client files, credentials, services, registrations, and ownership state.
+The JSON preview is the registered executable plan: apply uses those exact
+operation IDs and order, resolves the migrated credential for a mode-specific
+authenticated probe, then removes legacy credential keys structurally.
 
 ## Use it
 
