@@ -156,3 +156,42 @@ test('launcher supports every credential reference adapter and fails closed when
   assert.match(source, /credential reference could not be resolved/);
   assert.doesNotMatch(source, /console\.log\([^)]*secret/);
 });
+
+/* Each case executes the generated launcher, lets it resolve the reference,
+   and records only the environment seen by the spawned MCP child. Native
+   commands are fakes on PATH, so no real credential store is touched. */
+test('launcher behavior resolves env, config, and native references only into the child environment', async (t) => {
+  const cases = [
+    { name: 'env', ref: { store: 'env', variable: 'CUSTOM_CREDENTIAL', account: 'wrong-account' }, extraEnv: { CUSTOM_CREDENTIAL: 'resolved-value' } },
+    { name: 'config', ref: { store: 'config', path: 'CUSTOM_PATH', service: 'token-optimizer', account: 'gateway-token' } },
+    { name: 'macOS', platform: 'darwin', command: 'security', ref: { store: 'macos-keychain', service: 'token-optimizer', account: 'gateway-token' } },
+    { name: 'Linux', platform: 'linux', command: 'secret-tool', ref: { store: 'linux-secret-service', service: 'token-optimizer', account: 'gateway-token' } },
+    { name: 'Windows', platform: 'win32', command: 'powershell.exe', ref: { store: 'windows-dpapi', path: 'ignored.dpapi', service: 'token-optimizer', account: 'gateway-token' } },
+  ];
+  for (const item of cases) await t.test(item.name, () => {
+    const fixture = createLauncherFixture({ healthy: true });
+    const childEnvPath = path.join(fixture.serverDir, 'child-env.json');
+    fs.writeFileSync(path.join(fixture.serverDir, 'index.js'), `require('fs').writeFileSync(${JSON.stringify(childEnvPath)}, JSON.stringify({ token: process.env.LLM_GATEWAY_TOKEN, ref: process.env.TOKEN_OPTIMIZER_CREDENTIAL_REF }));\n`);
+    const ref: any = { ...item.ref };
+    if (item.name === 'config') {
+      const configPath = path.join(fixture.serverDir, 'custom-credentials.json');
+      ref.path = configPath;
+      fs.writeFileSync(configPath, JSON.stringify({ 'token-optimizer:gateway-token': 'resolved-value' }));
+    }
+    if (item.command) {
+      const executable = path.join(fixture.binDir, item.command);
+      fs.writeFileSync(executable, '#!/bin/sh\nprintf %s resolved-value\n');
+      fs.chmodSync(executable, 0o755);
+    }
+    const result = spawnSync(process.execPath, [fixture.startPath], {
+      cwd: fixture.serverDir,
+      env: { ...process.env, NODE_ENV: 'test', TOKEN_OPTIMIZER_LAUNCHER_TEST_PLATFORM: item.platform || '', TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', TOKEN_OPTIMIZER_CREDENTIAL_REF: JSON.stringify(ref), ...item.extraEnv, PATH: `${fixture.binDir}${path.delimiter}${process.env.PATH || ''}` },
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, /resolved-value/);
+    const childEnv = JSON.parse(fs.readFileSync(childEnvPath, 'utf8'));
+    assert.equal(childEnv.token, 'resolved-value');
+    assert.equal(childEnv.ref, JSON.stringify(ref));
+  });
+});

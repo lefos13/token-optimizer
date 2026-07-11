@@ -94,7 +94,14 @@ function configContains(home, pattern) {
   const candidates = [path.join(home, ".codex", "config.toml"), path.join(home, ".cursor", "mcp.json"), path.join(home, ".config", "opencode", "opencode.jsonc"), path.join(home, ".gemini", "config", "plugins", "token-optimizer", "config.json")];
   return candidates.some((file) => { try {
     const text = fs.readFileSync(file, "utf8");
-    return text.split(/\r?\n/).some((line) => pattern.test(line) && /[:=]\s*(?:["']?[^"'\s,}\]]+["']?|\{[^}]+\})/.test(line) && !/[:=]\s*["']?(?:["']|none|null|undefined|placeholder|changeme|your-token|your-key)\b/i.test(line));
+    /* Installer-managed JSON can encode a credential reference as an escaped
+       JSON string. Match the named key and reject only empty/placeholder
+       assignments instead of assuming the value contains no quote. */
+    return text.split(/\r?\n/).some((line) => {
+      if (!pattern.test(line)) return false;
+      const assignment = line.slice(Math.max(line.indexOf(":"), line.indexOf("=")) + 1).trim();
+      return Boolean(assignment) && !/^["']?(?:["']|none|null|undefined|placeholder|changeme|your-token|your-key)(?:["']|\s|[,}\]])/i.test(assignment);
+    });
   } catch (_) { return false; } });
 }
 

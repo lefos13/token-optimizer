@@ -25,11 +25,12 @@ test('injected macOS adapter uses argv and supports lifecycle', () => {
   const calls: unknown[][] = [];
   const store = createCredentialStore('native', { platform: 'darwin', available: true, account: 'alice', execFileSync: (bin: string, args: string[], options: object) => { calls.push([bin, args, options]); return ''; } });
   assert.equal(store.isAvailable(), true);
-  store.set('secret'); store.get(); store.delete();
-  assert.equal(calls[0][0], '/usr/bin/security');
-  assert.deepEqual((calls[0][1] as string[]).slice(0, 2), ['add-generic-password', '-U']);
-  assert.doesNotMatch(JSON.stringify(calls[0][1]), /secret/);
-  assert.equal((calls[0][2] as { input: string }).input, 'secret');
+  store.set('fixture-value'); store.get(); store.delete();
+  assert.equal(calls[0][0], '/usr/bin/swift');
+  assert.equal((calls[0][1] as string[])[0], '-e');
+  assert.match((calls[0][1] as string[])[1], /SecItemAdd/);
+  assert.doesNotMatch(JSON.stringify(calls[0][1]), /fixture-value/);
+  assert.equal((calls[0][2] as { input: string }).input, 'fixture-value');
 });
 
 test('linux native store fails closed when secret-tool is unavailable', () => {

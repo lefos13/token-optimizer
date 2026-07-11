@@ -9,6 +9,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const installer = require('../../../packages/installer/lib/install-core.js');
 
 function readlineWith(...answers: string[]) {
   return {
@@ -43,6 +44,17 @@ test('a BYOK key flag without a model remains non-interactive and uses gateway d
     readlineWith('must-not-be-consumed')
   );
   assert.equal(options.byokModel, '');
+});
+
+test('--credential-store env is an explicit working plaintext opt-in', async () => {
+  const options = await cli.resolveProviderOptions(cli.parseArgs(['--provider', 'gateway-token', '--token', 'fixture-value', '--credential-store', 'env']), readlineWith());
+  const credentialEnv: Record<string, string> = {};
+  const prepared = installer.prepareCredentialOptions({ ...options, credentialStoreOptions: { env: credentialEnv } });
+  const values = installer.buildProviderValues(prepared);
+  assert.equal(prepared.credentialRef.store, 'env');
+  assert.equal(prepared.credentialRef.variable, 'TOKEN_OPTIMIZER_CREDENTIAL');
+  assert.equal(credentialEnv.TOKEN_OPTIMIZER_CREDENTIAL, 'fixture-value');
+  assert.equal(values.LLM_GATEWAY_TOKEN, '');
 });
 
 test('uninstall preserves a user-modified managed file', () => {

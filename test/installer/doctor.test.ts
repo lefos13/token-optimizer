@@ -39,7 +39,7 @@ test('blank credential placeholders are not considered configured', async () => 
 test('doctor detects JSON credential references and redacts provider URL secrets', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-'));
   fs.mkdirSync(path.join(home, '.cursor'), { recursive: true });
-  fs.writeFileSync(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ env: { LLM_GATEWAY_TOKEN: { store: 'native', account: 'alice' }, TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token' } }));
+  fs.writeFileSync(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { env: { TOKEN_OPTIMIZER_CREDENTIAL_REF: JSON.stringify({ store: 'macos-keychain', account: 'alice' }), TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token' } } } }));
   const report = await inspectInstallation({ home, providerUrl: 'https://user:secret@example.test/v1?token=secret', healthProbe: async () => true });
   assert.equal(report.provider.credentialConfigured, true);
   assert.equal(report.provider.url, 'https://example.test/v1');
