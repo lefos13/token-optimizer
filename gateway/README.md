@@ -68,6 +68,8 @@ Writes are atomic; deleting the directory resets the registry and the stats.
   (`TOKEN_REQUESTS_PER_MIN`, default 3/min). A filled honeypot or implausibly
   fast/old form timestamp returns the normal pending `202` response without
   creating a record; direct API callers may omit these optional bot signals.
+- Client-IP limits use the socket peer by default. Set `TRUST_PROXY=true` only
+  when an operator-managed reverse proxy sanitizes `X-Forwarded-For`.
 - `GET /admin` + `/admin/api/*` → operator dashboard and API (see below). All
   admin routes return `404` unless `ADMIN_TOKEN` is set.
 

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { AddressInfo } from 'node:net';
 import { createGatewayServer } from '../../gateway/src/server';
 import { loadConfig } from '../../gateway/src/config';
+import { createRateLimiter } from '../../gateway/src/rate-limit';
 
 const config = loadConfig({
   OPENROUTER_API_KEY: 'sk-real', PROXY_TOKENS: 'good-token',
@@ -82,6 +83,15 @@ test('GET /v1/provider-health rate limits before contacting upstream without ret
     assert.equal(upstreamCalls, 0);
     assert.doesNotMatch(limiterKey, /validfixturekey/);
   }, { rateLimiter: { allow: (key) => { limiterKey = key; return false; } } });
+});
+
+test('GET /v1/provider-health limits socket IP independently when callers rotate BYOK keys', async () => {
+  let upstreamCalls = 0;
+  await withServer(async () => { upstreamCalls++; return new Response('{}', { status: 200 }); }, async (base) => {
+    const first = await fetch(`${base}/v1/provider-health`, { headers: { 'X-OpenRouter-Key': 'sk-or-firstfixturekey', 'X-Forwarded-For': '198.51.100.1' } });
+    const second = await fetch(`${base}/v1/provider-health`, { headers: { 'X-OpenRouter-Key': 'sk-or-secondfixturekey', 'X-Forwarded-For': '198.51.100.2' } });
+    assert.equal(first.status, 200); assert.equal(second.status, 429); assert.equal(upstreamCalls, 1);
+  }, { rateLimiter: createRateLimiter(1) });
 });
 
 test('GET /v1/provider-health bounds concurrent upstream probes', async () => {

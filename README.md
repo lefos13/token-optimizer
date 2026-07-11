@@ -70,8 +70,9 @@ mutation. A manifest under `~/.token-optimizer/manifest.json` records owned
 paths and hashes without storing credentials; edited user files are preserved.
 Rollback snapshots are limited to the selected clients' managed roots, so the
 installer never scans unrelated privacy-protected home folders such as Music.
-Provider-health probes are rate- and concurrency-limited before contacting the
-upstream provider. Doctor treats ownership manifests as untrusted input: it
+Provider-health probes are independently limited by client IP and key
+fingerprint, then concurrency-limited before upstream access; forwarded IPs
+require explicit trusted-proxy configuration. Doctor treats ownership manifests as untrusted input: it
 only inspects installer-known roots and applies entry-count, per-file, and
 total-byte limits before hashing. `--installed-version` remains authoritative
 for mismatch diagnostics even when no client registration is discovered.

@@ -142,6 +142,16 @@ test('explicit installed and detected versions take precedence without registrat
   assert.equal(detected.installedVersion, '1.8.0'); assert.equal(detected.installedVersionSource, 'option-detected-version');
 });
 
+test('explicit installed version alone controls mismatch while discoveries remain metadata', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); const launcher = server(home, 'cursor', '1.8.0');
+  write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher] } } }));
+  const expected = await inspectInstallation({ home, provider: 'local', installedVersion: '2.0.0-beta.5', expectedVersion: '2.0.0-beta.5' });
+  assert.ok(expected.detectedVersions.some((item: any) => item.version === '1.8.0'));
+  assert.ok(!expected.findings.some((item: any) => item.code === 'VERSION_MISMATCH'));
+  const old = await inspectInstallation({ home, provider: 'local', installedVersion: '1.9.0', expectedVersion: '2.0.0-beta.5' });
+  assert.ok(old.findings.some((item: any) => item.code === 'VERSION_MISMATCH'));
+});
+
 test('launchctl read diagnostics compare loaded service and exact managed values', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); write(path.join(home, 'Library', 'LaunchAgents', 'com.softawarest.token-optimizer.env.plist'), '<plist/>'); const launcher = server(home, 'cursor'); const ref = JSON.stringify({ store: 'macos-keychain', account: 'x' }); write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', TOKEN_OPTIMIZER_CREDENTIAL_REF: ref } } } }));
   const calls: string[][] = []; const exec = (_command: string, args: string[]) => { calls.push(args); if (args[0] === 'print') return 'loaded'; if (args[1] === 'TOKEN_OPTIMIZER_PROVIDER_MODE') return 'gateway-token\n'; return 'wrong\n'; };

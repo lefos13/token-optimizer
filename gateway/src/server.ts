@@ -65,12 +65,12 @@ async function readJsonBody(req: IncomingMessage, res: ServerResponse, maxBytes:
   }
 }
 
-/* Caddy fronts the gateway, so the first X-Forwarded-For entry is the real
-   client; fall back to the socket address for direct/loopback access. */
-function clientIp(req: IncomingMessage): string {
+/* Forwarded addresses are attacker-controlled unless an operator explicitly
+   declares that a trusted reverse proxy owns the connection boundary. */
+function clientIp(req: IncomingMessage, trustProxy = false): string {
   const forwarded = req.headers['x-forwarded-for'];
   const first = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-  if (first) {
+  if (trustProxy && first) {
     return first.split(',')[0].trim();
   }
   return req.socket.remoteAddress || 'unknown';
@@ -257,7 +257,8 @@ async function handleProviderHealth(
   const key = extractByokKey(req, config);
   if (!key) return sendJson(res, 401, { error: 'invalid BYOK credential' });
   const fingerprint = byokRateLimitKey(key);
-  if (!limiter.allow(`provider-health:${clientIp(req)}:${fingerprint}`)) return sendJson(res, 429, { error: 'rate limited' });
+  if (!limiter.allow(`provider-health:ip:${clientIp(req, config.trustProxy)}`)) return sendJson(res, 429, { error: 'rate limited' });
+  if (!limiter.allow(`provider-health:${fingerprint}`)) return sendJson(res, 429, { error: 'rate limited' });
   if (concurrency.active >= concurrency.max) return sendJson(res, 429, { error: 'provider health busy' });
   concurrency.active++;
   const controller = new AbortController();
@@ -311,7 +312,7 @@ async function handleTokenRequest(
   config: GatewayConfig,
   notificationSender: NonNullable<ServerDeps['tokenRequestNotificationSender']>
 ): Promise<void> {
-  if (!requestLimiter.allow(`ip:${clientIp(req)}`)) {
+  if (!requestLimiter.allow(`ip:${clientIp(req, config.trustProxy)}`)) {
     return sendJson(res, 429, { error: 'rate limited' });
   }
   const body = await readJsonBody(req, res, 4 * 1024);
