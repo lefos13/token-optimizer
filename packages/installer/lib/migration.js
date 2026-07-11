@@ -305,8 +305,36 @@ function cleanupLegacy(state) {
     }
     const scoped = patchNamedObject(text, ["token_optimizer", "token-optimizer"], (object) => removeJsonProperties(object, LEGACY_SECRET_KEYS));
     const isClaudeSettings = file === path.join(state.home, ".claude", "settings.json");
-    fs.writeFileSync(file, scoped.changed || !isClaudeSettings ? scoped.content : patchNamedObject(text, ["env"], (object) => removeJsonProperties(object, LEGACY_SECRET_KEYS)).content);
+    fs.writeFileSync(file, scoped.changed || !isClaudeSettings ? scoped.content : patchTopLevelNamedObject(text, "env", (object) => removeJsonProperties(object, LEGACY_SECRET_KEYS)).content);
   }
+}
+
+function patchTopLevelNamedObject(content, key, transform) {
+  const expression = new RegExp(`(?:"${key}"|'${key}'|${key})\\s*:\\s*{`, "g");
+  let match;
+  while ((match = expression.exec(content))) {
+    if (objectDepthAt(content, match.index) !== 1) continue;
+    const start = content.indexOf("{", match.index);
+    const end = findObjectEnd(content, start);
+    if (end !== -1) return { changed: true, content: `${content.slice(0, start)}${transform(content.slice(start, end + 1))}${content.slice(end + 1)}` };
+  }
+  return { changed: false, content };
+}
+
+function objectDepthAt(content, limit) {
+  let depth = 0; let quote = null; let escaped = false; let lineComment = false; let blockComment = false;
+  for (let index = 0; index < limit; index += 1) {
+    const char = content[index]; const next = content[index + 1];
+    if (lineComment) { if (char === "\n") lineComment = false; continue; }
+    if (blockComment) { if (char === "*" && next === "/") { blockComment = false; index += 1; } continue; }
+    if (quote) { if (escaped) escaped = false; else if (char === "\\") escaped = true; else if (char === quote) quote = null; continue; }
+    if (char === "/" && next === "/") { lineComment = true; index += 1; continue; }
+    if (char === "/" && next === "*") { blockComment = true; index += 1; continue; }
+    if (char === "\"" || char === "'") { quote = char; continue; }
+    if (char === "{") depth += 1;
+    else if (char === "}") depth -= 1;
+  }
+  return depth;
 }
 
 function patchNamedObject(content, keys, transform) {

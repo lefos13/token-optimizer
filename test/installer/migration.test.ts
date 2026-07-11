@@ -348,3 +348,15 @@ test('Codex cleanup removes credentials only from token_optimizer TOML sections'
   const managed = after.slice(after.indexOf('[mcp_servers.token_optimizer]'));
   assert.doesNotMatch(managed, /LLM_GATEWAY_TOKEN\s*=/);
 });
+
+test('Claude cleanup targets only top-level env when nested hook env appears first', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-scope-claude-'));
+  const file = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ hooks: { beforeTool: { env: { LLM_GATEWAY_TOKEN: 'hook-secret' } } }, env: { LLM_GATEWAY_TOKEN: 'managed-secret', LLM_GATEWAY_URL: 'https://gateway.test/v1' } }, null, 2));
+  await migration.migrateInstallation({ home, clients: ['claude'], credentialStore: 'config', skipClientCommands: true, skipLaunchctl: true, healthProbe: async () => ({ ok: true }) });
+  const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(after.hooks.beforeTool.env.LLM_GATEWAY_TOKEN, 'hook-secret');
+  assert.equal(after.env.LLM_GATEWAY_TOKEN, undefined);
+  assert.ok(after.env.TOKEN_OPTIMIZER_CREDENTIAL_REF);
+});
