@@ -8,6 +8,30 @@ const installer = require('../../../packages/installer/lib/install-core.js');
 const migration = require('../../../packages/installer/lib/migration.js');
 
 const clients = ['claude', 'codex', 'antigravity', 'opencode', 'cursor'];
+const v1Layouts: Record<string, [string, string]> = {
+  claude: ['.claude/settings.json', JSON.stringify({ env: { LOCAL_LLM_API_URL: 'http://localhost:8080/v1' } })],
+  codex: ['.codex/config.toml', '[mcp_servers.token_optimizer.env]\nLOCAL_LLM_API_URL = "http://localhost:8080/v1"\n'],
+  antigravity: ['.gemini/config/mcp_config.json', JSON.stringify({ mcpServers: { token_optimizer: { env: { LOCAL_LLM_API_URL: 'http://localhost:8080/v1' } } } })],
+  opencode: ['.config/opencode/opencode.jsonc', JSON.stringify({ mcp: { token_optimizer: { environment: { LOCAL_LLM_API_URL: 'http://localhost:8080/v1' } } } })],
+  cursor: ['.cursor/mcp.json', JSON.stringify({ mcpServers: { token_optimizer: { env: { LOCAL_LLM_API_URL: 'http://localhost:8080/v1' } } } })],
+};
+
+for (const client of clients) {
+  test(`detectV1State and migrateInstallation exercise the real ${client} v1 layout`, async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), `migration-real-${client}-`));
+    const [relative, contents] = v1Layouts[client];
+    const legacy = path.join(home, relative);
+    fs.mkdirSync(path.dirname(legacy), { recursive: true });
+    fs.writeFileSync(legacy, contents);
+    const detected = migration.detectV1State({ home, clients: ['detected'] });
+    assert.deepEqual(detected.clients, [client]);
+    assert.equal(detected.env.LOCAL_LLM_API_URL, 'http://localhost:8080/v1');
+    const result = await migration.migrateInstallation({ home, clients: ['detected'], provider: 'local', skipClientCommands: true, skipLaunchctl: true });
+    assert.equal(result.status, 'migrated');
+    assert.deepEqual(result.plan.clients, [client]);
+  });
+}
+
 for (const client of clients) {
   test(`migration v1 BYOK preserves destination and applies idempotently for ${client}`, () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), `migration-${client}-`));
@@ -55,7 +79,94 @@ test('migration dry-run matches apply plan and leaves fixture state untouched', 
   assert.equal(fs.statSync(result.backup.manifestPath).mode & 0o777, 0o600);
   assert.doesNotMatch(JSON.stringify(result), /fixture-secret/);
   assert.doesNotMatch(fs.readFileSync(legacy, 'utf8'), /fixture-secret/);
+  assert.deepEqual(result.appliedOperationIds.slice(-2), ['migrate:manifest', 'migrate:completion-marker']);
 });
+
+test('JSONC and quoted TOML cleanup preserve comments, formatting, unrelated text, and file modes', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-preserve-'));
+  const jsonc = path.join(home, '.config', 'opencode', 'opencode.jsonc');
+  const toml = path.join(home, '.codex', 'config.toml');
+  fs.mkdirSync(path.dirname(jsonc), { recursive: true });
+  fs.mkdirSync(path.dirname(toml), { recursive: true });
+  fs.writeFileSync(jsonc, '{\n  // keep this comment\n  "note": "fixture-secret stays",\n  "mcp": { "token_optimizer": { "environment": { "OPENROUTER_BYOK_KEY": "fixture-secret", "LLM_GATEWAY_URL": "https://legacy.example/v1" } } },\n}\n', { mode: 0o640 });
+  fs.writeFileSync(toml, '# keep toml comment\n"LLM_GATEWAY_TOKEN" = "fixture-secret"\nLOCAL_LLM_MODEL = "custom"\n', { mode: 0o640 });
+  await migration.migrateInstallation({ home, clients: ['opencode', 'codex'], provider: 'gateway-byok', credentialStore: 'config', skipClientCommands: true, skipLaunchctl: true, healthProbe: async () => ({ ok: true }) });
+  const jsoncAfter = fs.readFileSync(jsonc, 'utf8');
+  const tomlAfter = fs.readFileSync(toml, 'utf8');
+  assert.match(jsoncAfter, /keep this comment/);
+  assert.match(jsoncAfter, /fixture-secret stays/);
+  assert.doesNotMatch(jsoncAfter, /OPENROUTER_BYOK_KEY\s*:/);
+  assert.match(tomlAfter, /keep toml comment/);
+  assert.match(tomlAfter, /LOCAL_LLM_MODEL = "custom"/);
+  assert.doesNotMatch(tomlAfter, /LLM_GATEWAY_TOKEN/);
+  assert.equal(fs.statSync(jsonc).mode & 0o777, 0o640);
+  assert.equal(fs.statSync(toml).mode & 0o777, 0o640);
+});
+
+test('registration transaction registers its inverse before mutation', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-registration-'));
+  const legacy = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, JSON.stringify({ env: { LOCAL_LLM_API_URL: 'http://localhost:8080/v1' } }));
+  const events: string[] = [];
+  await assert.rejects(() => migration.migrateInstallation({
+    home, clients: ['claude'], provider: 'local', skipLaunchctl: true,
+    clientRegistrationAdapter: { prepare: () => ({ apply: () => { events.push('apply'); throw new Error('registration failure'); }, rollback: () => { events.push('rollback'); } }) },
+  }), /registration failure/);
+  assert.deepEqual(events, ['apply', 'rollback']);
+  assert.equal(fs.readFileSync(legacy, 'utf8'), JSON.stringify({ env: { LOCAL_LLM_API_URL: 'http://localhost:8080/v1' } }));
+});
+
+for (const failedId of ['cleanup:legacy-provider-env', 'migrate:manifest']) {
+  test(`${failedId} failure restores cursor legacy state`, async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-late-failure-'));
+    const legacy = path.join(home, '.cursor', 'mcp.json');
+    fs.mkdirSync(path.dirname(legacy), { recursive: true });
+    fs.writeFileSync(legacy, JSON.stringify({ mcpServers: { token_optimizer: { env: { LLM_GATEWAY_TOKEN: 'fixture-secret' } } } }));
+    const before = fs.readFileSync(legacy, 'utf8');
+    await assert.rejects(() => migration.migrateInstallation({
+      home, clients: ['cursor'], credentialStore: 'config', skipClientCommands: true, skipLaunchctl: true,
+      healthProbe: async () => ({ ok: true }),
+      beforeOperation: (operation: any) => { if (operation.id === failedId) throw new Error(`simulated ${failedId}`); },
+    }), new RegExp(failedId));
+    assert.equal(fs.readFileSync(legacy, 'utf8'), before);
+    assert.equal(fs.existsSync(path.join(home, '.token-optimizer', 'migration-v2.json')), false);
+  });
+}
+
+test('service transaction captures rollback before a partial apply failure', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-service-'));
+  const legacy = path.join(home, '.cursor', 'mcp.json');
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, JSON.stringify({ mcpServers: { token_optimizer: { env: { LOCAL_LLM_API_URL: 'http://localhost:8080/v1' } } } }));
+  const events: string[] = [];
+  await assert.rejects(() => migration.migrateInstallation({
+    home, clients: ['cursor'], provider: 'local', skipClientCommands: true,
+    serviceTransactionAdapter: { prepare: () => ({ apply: () => { events.push('partial-apply'); throw new Error('service failure'); }, rollback: () => { events.push('restore-exact-state'); } }) },
+  }), /service failure/);
+  assert.deepEqual(events, ['partial-apply', 'restore-exact-state']);
+});
+
+for (const fixture of [
+  { mode: 'gateway-token', env: { LLM_GATEWAY_URL: 'https://gateway.test/v1', LLM_GATEWAY_TOKEN: 'secret' }, header: 'Authorization' },
+  { mode: 'gateway-byok', env: { LLM_GATEWAY_URL: 'https://gateway.test/v1', OPENROUTER_BYOK_KEY: 'secret' }, header: 'X-OpenRouter-Key' },
+  { mode: 'openrouter-direct', env: { OPENROUTER_API_KEY: 'secret' }, header: 'Authorization' },
+  { mode: 'local', env: { LOCAL_LLM_API_URL: 'http://localhost:8080/v1' } },
+  { mode: 'skip', env: {} },
+]) {
+  test(`provider apply matrix migrates ${fixture.mode}`, async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), `migration-provider-${fixture.mode}-`));
+    const legacy = path.join(home, '.cursor', 'mcp.json');
+    fs.mkdirSync(path.dirname(legacy), { recursive: true });
+    fs.writeFileSync(legacy, JSON.stringify({ mcpServers: { token_optimizer: { env: fixture.env } } }));
+    let request: any;
+    const result = await migration.migrateInstallation({ home, clients: ['cursor'], provider: fixture.mode, credentialStore: 'config', skipClientCommands: true, skipLaunchctl: true, healthProbe: async (_url: string, details: any) => { request = details; return { ok: true }; } });
+    assert.equal(result.status, 'migrated');
+    assert.equal(result.plan.effectiveProvider.mode, fixture.mode);
+    if (fixture.header) assert.ok(request.headers[fixture.header]);
+    else assert.equal(request, undefined);
+  });
+}
 
 test('the exact preview plan is executable and authenticates the migrated credential', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-exact-plan-'));

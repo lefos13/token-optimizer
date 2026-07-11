@@ -82,6 +82,9 @@ back client files, credentials, services, registrations, and ownership state.
 The JSON preview is the registered executable plan: apply uses those exact
 operation IDs and order, resolves the migrated credential for a mode-specific
 authenticated probe, then removes legacy credential keys structurally.
+Claude/Codex CLI registration and real macOS launchctl changes are fail-closed
+unless a reversible state-capturing adapter is available; automation without
+one must explicitly use `--skip-client-commands` and/or `--skip-launchctl`.
 
 ## Use it
 

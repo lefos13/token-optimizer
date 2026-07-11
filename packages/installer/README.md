@@ -178,6 +178,9 @@ The exact preview operation IDs execute in order; the doctor resolves the new
 credential reference and sends mode-appropriate authentication before
 structured cleanup. Repeated runs are no-ops and any failure restores
 pre-migration file, service, registration, credential, and manifest state.
+Migration refuses real Claude/Codex CLI or macOS launchctl mutation unless a
+reversible adapter captures the pre-state first. Use `--skip-client-commands`
+or `--skip-launchctl` explicitly when running without those adapters.
 
 Flow-specific commands:
 

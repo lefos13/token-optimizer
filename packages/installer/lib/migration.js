@@ -52,6 +52,8 @@ function planMigrationFromHome(options = {}) {
     ...install.operations,
     { id: "migrate:doctor", kind: "client-command", phase: "validation", client: "all", command: "authenticated-doctor" },
     ...(legacy.operations.some((item) => item.id === "cleanup:legacy-provider-env") ? [{ id: "cleanup:legacy-provider-env", kind: "managed-block", phase: "cleanup", path: "supported-client-configs", marker: "legacy-provider-env" }] : []),
+    { id: "migrate:manifest", kind: "write-file", phase: "commit", path: path.join(state.home, ".token-optimizer", "manifest.json") },
+    { id: "migrate:completion-marker", kind: "write-file", phase: "commit", path: path.join(state.home, ".token-optimizer", "migration-v2.json") },
   ];
   const plan = createChangePlan({ action: "migration", version: require("../package.json").version, clients: state.clients, effectiveProvider: legacy.effectiveProvider, warnings: legacy.warnings }, operations);
   const runtime = { state, options, providerOptions, backup: null, credentialRuntime: null, doctor: null };
@@ -81,32 +83,37 @@ async function executeMigrationPlan(plan, runtime) {
   const applied = []; const rolledBack = []; const manualRemediation = []; const externalRollbacks = [];
   let credentialRef = providerOptions.credentialRef || null; let credentialOwned = false;
   try {
+    preflightMigration(plan, runtime);
     for (const operation of plan.operations) {
+      if (options.beforeOperation) await options.beforeOperation(operation);
       if (operation.id === "migrate:backup") runtime.backup = createBackup(state, options);
       else if (operation.kind === "credential" && operation.phase === "credentials") {
         const credential = createMigrationCredential(state, providerOptions, options, plan.effectiveProvider.mode);
         credentialRef = credential.reference; credentialOwned = credential.owned; runtime.credentialRuntime = credential;
       } else if (operation.phase === "copy") installer.copyClientAssets(operation.client, migrationInstallOptions(runtime, credentialRef));
-      else if (operation.phase === "config") installer.configureMigratedClient(operation.client, migrationInstallOptions(runtime, credentialRef));
+      else if (operation.phase === "config") configureMigrationClient(operation.client, runtime, credentialRef);
       else if (operation.phase === "service") {
         const installOptions = migrationInstallOptions(runtime, credentialRef);
-        installer.applyLaunchctlValues(installer.buildProviderValues(installOptions), installOptions);
-        if (!options.skipLaunchctl) externalRollbacks.push({ operation, rollback: () => installer.applyLaunchctlValues(legacyProviderValues(state.env), installOptions) });
+        const transaction = options.serviceTransactionAdapter?.prepare(operation.client, installOptions);
+        if (transaction) { externalRollbacks.push({ operation, rollback: transaction.rollback }); await transaction.apply(); }
+        else installer.applyLaunchctlValues(installer.buildProviderValues(installOptions), installOptions);
       }
       else if (operation.phase === "command") {
-        const transaction = options.clientRegistrationAdapter
-          ? options.clientRegistrationAdapter(operation.client, migrationInstallOptions(runtime, credentialRef))
-          : installer.registerMigratedClient(operation.client, migrationInstallOptions(runtime, credentialRef));
-        if (transaction && typeof transaction.rollback === "function") externalRollbacks.push({ operation, rollback: transaction.rollback });
+        if (!options.skipClientCommands && ["claude", "codex"].includes(operation.client)) {
+          const transaction = options.clientRegistrationAdapter.prepare(operation.client, migrationInstallOptions(runtime, credentialRef));
+          externalRollbacks.push({ operation, rollback: transaction.rollback });
+          await transaction.apply();
+        } else installer.registerMigratedClient(operation.client, migrationInstallOptions(runtime, credentialRef));
       }
       else if (operation.id === "migrate:doctor") runtime.doctor = await authenticatedDoctor(plan, runtime, credentialRef);
       else if (operation.id === "cleanup:legacy-provider-env") cleanupLegacy(state);
+      else if (operation.id === "migrate:manifest") installer.persistInstallManifest({ ...options, ...providerOptions, credentialRef, credentialOwned }, state.clients);
+      else if (operation.id === "migrate:completion-marker") {
+        fs.mkdirSync(path.dirname(operation.path), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(operation.path, `${JSON.stringify({ schemaVersion: 1, migratedAt: new Date().toISOString(), clients: state.clients })}\n`, { mode: 0o600 });
+      }
       applied.push(operation);
     }
-    installer.persistInstallManifest({ ...options, ...providerOptions, credentialRef, credentialOwned }, state.clients);
-    const marker = path.join(state.home, ".token-optimizer", "migration-v2.json");
-    fs.mkdirSync(path.dirname(marker), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(marker, `${JSON.stringify({ schemaVersion: 1, migratedAt: new Date().toISOString(), clients: state.clients })}\n`, { mode: 0o600 });
     return { applied, rolledBack, manualRemediation, installedClients: [...state.clients], credentialRef, credentialOwned, backup: { directory: runtime.backup.directory, manifestPath: runtime.backup.manifestPath }, doctor: runtime.doctor };
   } catch (error) {
     for (const transaction of externalRollbacks.reverse()) {
@@ -124,15 +131,38 @@ async function executeMigrationPlan(plan, runtime) {
   }
 }
 
-function legacyProviderValues(env) {
-  const values = Object.fromEntries(installer.MANAGED_ENV_KEYS.map((key) => [key, ""]));
-  for (const key of installer.MANAGED_ENV_KEYS) if (env[key]) values[key] = env[key];
-  return values;
+function preflightMigration(plan, runtime) {
+  const needsRegistration = plan.operations.some((operation) => operation.phase === "command" && ["claude", "codex"].includes(operation.client));
+  if (needsRegistration && !runtime.options.skipClientCommands && (!runtime.options.clientRegistrationAdapter || typeof runtime.options.clientRegistrationAdapter.prepare !== "function")) {
+    throw new Error("reversible Claude/Codex registration requires a clientRegistrationAdapter or --skip-client-commands");
+  }
+  const mutatesDarwinService = process.platform === "darwin" && plan.operations.some((operation) => operation.phase === "service");
+  if (mutatesDarwinService && !runtime.options.skipLaunchctl && !runtime.options.launchctlStatePath && (!runtime.options.serviceTransactionAdapter || typeof runtime.options.serviceTransactionAdapter.prepare !== "function")) {
+    throw new Error("reversible launchctl migration requires a serviceTransactionAdapter, launchctlStatePath, or --skip-launchctl");
+  }
 }
 
 function migrationInstallOptions(runtime, credentialRef) {
   const values = installer.buildProviderValues({ ...runtime.options, ...runtime.providerOptions, credentialRef });
   return { ...runtime.options, ...runtime.providerOptions, clients: runtime.state.clients, home: runtime.state.home, installRoot: runtime.options.installRoot || path.join(runtime.state.home, ".token-optimizer"), assetsRoot: runtime.options.assetsRoot || path.join(__dirname, "..", "assets"), credentialRef, providerValues: values };
+}
+
+function configureMigrationClient(client, runtime, credentialRef) {
+  const installOptions = migrationInstallOptions(runtime, credentialRef);
+  const opencodeFile = path.join(runtime.state.home, ".config", "opencode", "opencode.jsonc");
+  const preserveJsonc = client === "opencode" && fs.existsSync(opencodeFile) && /\/\//.test(fs.readFileSync(opencodeFile, "utf8"));
+  const original = preserveJsonc ? fs.readFileSync(opencodeFile, "utf8") : null;
+  installer.configureMigratedClient(client, installOptions);
+  if (original != null) fs.writeFileSync(opencodeFile, patchJsoncProvider(original, installOptions.providerValues));
+}
+
+function patchJsoncProvider(content, values) {
+  let output = removeJsonProperties(content, LEGACY_SECRET_KEYS);
+  const additions = Object.entries(values).filter(([, value]) => value).map(([key, value]) => `"${key}": ${JSON.stringify(value)}`);
+  if (!additions.length) return output;
+  const environment = /(\"environment\"\s*:\s*{)/;
+  if (environment.test(output)) return output.replace(environment, `$1 ${additions.join(", ")},`);
+  return output;
 }
 
 function createMigrationCredential(state, providerOptions, options, mode) {
@@ -214,21 +244,28 @@ function cleanupLegacy(state) {
   for (const file of state.files) {
     const text = fs.readFileSync(file, "utf8");
     if (/\.toml$/i.test(file)) {
-      fs.writeFileSync(file, text.split(/\r?\n/).filter((line) => !LEGACY_SECRET_KEYS.some((key) => new RegExp(`^\\s*${key}\\s*=`).test(line))).join("\n"));
+      const newline = text.includes("\r\n") ? "\r\n" : "\n";
+      const trailing = text.endsWith("\n");
+      const lines = text.split(/\r?\n/).filter((line) => !LEGACY_SECRET_KEYS.some((key) => new RegExp(`^\\s*(?:["']${key}["']|${key})\\s*=`).test(line)));
+      fs.writeFileSync(file, lines.join(newline) + (trailing && lines.at(-1) !== "" ? newline : ""));
       continue;
     }
-    const parsed = JSON.parse(installer.stripJsonCommentsAndTrailingCommas(text));
-    removeLegacyKeys(parsed);
-    fs.writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`);
+    fs.writeFileSync(file, removeJsonProperties(text, LEGACY_SECRET_KEYS));
   }
 }
 
-function removeLegacyKeys(value) {
-  if (!value || typeof value !== "object") return;
-  for (const key of Object.keys(value)) {
-    if (LEGACY_SECRET_KEYS.includes(key)) delete value[key];
-    else removeLegacyKeys(value[key]);
+/* JSON and JSONC cleanup removes only complete target properties. It leaves
+   comments, whitespace, ordering, modes, and unrelated matching text intact. */
+function removeJsonProperties(content, keys) {
+  let output = content;
+  for (const key of keys) {
+    const quoted = `(?:"${key}"|'${key}'|${key})`;
+    const value = `(?:"(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|[^,}\\r\\n]+)`;
+    output = output.replace(new RegExp(`([,{]\\s*)${quoted}\\s*:\\s*${value}\\s*,`, "g"), "$1");
+    output = output.replace(new RegExp(`,([ \\t\\r\\n]*)${quoted}\\s*:\\s*${value}(?=\\s*})`, "g"), "$1");
+    output = output.replace(new RegExp(`({[ \\t\\r\\n]*)${quoted}\\s*:\\s*${value}(?=\\s*})`, "g"), "$1");
   }
+  return output;
 }
 
 function normalizeClients(clients, home) {
@@ -242,4 +279,4 @@ function walk(root, visit) {
   for (const entry of entries) { const item = path.join(root, entry.name); if (entry.isDirectory() && !entry.isSymbolicLink()) walk(item, visit); else if (entry.isFile() && fs.statSync(item).size < 1024 * 1024) visit(item); }
 }
 
-module.exports = { detectV1State, planMigrationFromHome, migrateInstallation };
+module.exports = { detectV1State, planMigrationFromHome, migrateInstallation, removeJsonProperties, preflightMigration };

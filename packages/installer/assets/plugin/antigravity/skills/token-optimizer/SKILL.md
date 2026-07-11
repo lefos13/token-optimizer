@@ -217,6 +217,9 @@ validation. The operation is transactional and idempotent.
 The preview itself is registered for execution, so apply does not recompute a
 hidden plan. Its rollback handles remain live through the authenticated probe
 and structured legacy-key cleanup.
+Claude/Codex registration and real macOS launchctl mutation fail preflight
+unless reversible adapters capture their exact pre-state. Pass the explicit
+skip flags when those external mutations are intentionally omitted.
 
 Re-running the npm installer refreshes all client assets: Antigravity, OpenCode,
 and Cursor replace their installer-managed local files; Claude uses its plugin
