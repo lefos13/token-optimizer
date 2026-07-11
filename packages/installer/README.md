@@ -140,6 +140,8 @@ managed paths, client commands, credential-store operations, and GUI-session
 environment changes. The ownership manifest at `~/.token-optimizer/manifest.json`
 stores paths, hashes, and references only—never raw API keys. Repair and
 uninstall operate only on matching managed hashes, preserving user edits.
+Rollback snapshots are scoped to selected client roots (and requested Cursor
+projects), avoiding unrelated macOS privacy-protected home directories.
 
 ```bash
 npx @softawarest/token-optimizer-installer install --local --dry-run

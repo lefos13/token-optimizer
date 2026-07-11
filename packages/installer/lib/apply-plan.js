@@ -14,6 +14,7 @@ function applyChangePlan(plan, adapters = {}) {
   const rolledBack = [];
   const manualRemediation = [];
   const inverses = [];
+  const commits = [];
   try {
     for (const operation of plan.operations) {
       const apply = adapters.applyOperation || adapters.apply;
@@ -23,9 +24,14 @@ function applyChangePlan(plan, adapters = {}) {
         ? adapters.prepareOperation(operation, plan)
         : (!apply && execution?.prepare ? execution.prepare(operation) : null);
       if (transaction && typeof transaction.inverse === "function") inverses.push({ operation, inverse: transaction.inverse });
+      if (transaction && typeof transaction.commit === "function") commits.push({ operation, commit: transaction.commit });
       const result = apply ? apply(operation, plan) : execution?.execute(operation);
       applied.push(operation);
       if (result && typeof result.inverse === "function") inverses.push({ operation, inverse: result.inverse });
+    }
+    for (const entry of commits) {
+      try { entry.commit(); }
+      catch { manualRemediation.push(entry.operation); }
     }
     return { applied, rolledBack, manualRemediation, installedClients: plan.clients ? [...plan.clients] : [] };
   } catch (error) {

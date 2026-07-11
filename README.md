@@ -58,6 +58,8 @@ The installer is lifecycle-safe: preview writes with `install --dry-run`, then
 use `status`, `doctor`, `repair --dry-run`, or `uninstall --dry-run` before any
 mutation. A manifest under `~/.token-optimizer/manifest.json` records owned
 paths and hashes without storing credentials; edited user files are preserved.
+Rollback snapshots are limited to the selected clients' managed roots, so the
+installer never scans unrelated privacy-protected home folders such as Music.
 Credential stores and any fallback are shown in the plan. Use
 `logs status|prune|purge --workspace <absolute-path>` for raw-log lifecycle.
 

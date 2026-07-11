@@ -204,7 +204,8 @@ to inspect all writes, ownership, credential-store operations, and GUI-session
 environment changes. Its manifest stores hashes and references, never secrets;
 repair and uninstall preserve user-modified files. `status` is read-only,
 `doctor --strict` adds provider health checks, and `repair --dry-run` previews
-targeted fixes. `logs status|prune|purge --workspace <absolute-path>` manages
+targeted fixes. Rollback snapshots cover only selected client roots and never
+scan unrelated protected home folders. `logs status|prune|purge --workspace <absolute-path>` manages
 raw logs while preserving baseline and analytics metadata unless explicitly
 requested for deletion.
 

@@ -36,3 +36,16 @@ test('apply registers inverse before a mutating operation throws', () => {
   assert.equal(value, 'before');
   assert.equal(result.rolledBack.length, 1);
 });
+
+test('apply commits prepared rollback snapshots after every operation succeeds', () => {
+  const plan = plans.createChangePlan({}, [{ kind: 'write-file', id: 'fixture:write' }]);
+  let committed = false;
+  applyPlan.registerPlan(plan, () => undefined, () => ({
+    inverse: () => undefined,
+    commit: () => { committed = true; },
+  }));
+
+  const result = applyPlan.applyChangePlan(plan);
+  assert.equal(result.error, undefined);
+  assert.equal(committed, true);
+});

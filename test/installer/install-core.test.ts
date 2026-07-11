@@ -528,3 +528,68 @@ test('plan preview is mutation-free and a later client failure restores prior wr
   assert.ok(result.rolledBack.length > 0);
   assert.deepEqual(fs.readdirSync(home), before);
 });
+
+test('install rollback snapshots never traverse unrelated protected home directories', () => {
+  const home = tmpDir('to-installer-protected-home-');
+  const assetsRoot = tmpDir('to-installer-protected-assets-');
+  const protectedMusic = path.join(home, 'Music', 'Music');
+  writeFixtureAssets(assetsRoot);
+  fs.mkdirSync(protectedMusic, { recursive: true });
+
+  /*
+   * macOS privacy controls reject recursive reads of protected home folders.
+   * Simulate that deterministic boundary while allowing installer-owned asset
+   * copies, so the test does not depend on the host's TCC permission state.
+   */
+  const mutableFs = require('node:fs');
+  const originalCopy = mutableFs.cpSync;
+  mutableFs.cpSync = (source: fs.PathLike, destination: fs.PathLike, options?: fs.CopySyncOptions) => {
+    if (path.resolve(String(source)) === path.resolve(home)) {
+      const error = new Error(`Operation not permitted: ${protectedMusic}`) as NodeJS.ErrnoException;
+      error.code = 'EPERM';
+      throw error;
+    }
+    return originalCopy(source, destination, options);
+  };
+
+  try {
+    const result = installer.applyChangePlan(installer.planInstallation({
+      home,
+      assetsRoot,
+      clients: ['opencode'],
+      provider: 'skip',
+      skipLaunchctl: true,
+      defaults: false,
+      skipClientCommands: true,
+    }));
+    assert.equal(result.error, undefined);
+    assert.ok(fs.existsSync(path.join(home, '.config', 'opencode', 'token-optimizer-server', 'start.js')));
+  } finally {
+    mutableFs.cpSync = originalCopy;
+  }
+});
+
+test('cursor rollback restores project-local targets without replacing the project', () => {
+  const home = tmpDir('to-installer-cursor-rollback-home-');
+  const assetsRoot = tmpDir('to-installer-cursor-rollback-assets-');
+  const project = tmpDir('to-installer-cursor-project-');
+  const userFile = path.join(project, 'user-work.txt');
+  writeFixtureAssets(assetsRoot);
+  fs.writeFileSync(userFile, 'keep me');
+
+  const result = installer.applyChangePlan(installer.planInstallation({
+    home,
+    assetsRoot,
+    clients: ['cursor', 'unsupported'],
+    cursorProjects: [project],
+    provider: 'skip',
+    skipLaunchctl: true,
+    defaults: false,
+    skipClientCommands: true,
+  }));
+
+  assert.ok(result.error);
+  assert.equal(fs.readFileSync(userFile, 'utf8'), 'keep me');
+  assert.ok(!fs.existsSync(path.join(project, '.cursor')));
+  assert.ok(!fs.existsSync(path.join(home, '.cursor')));
+});

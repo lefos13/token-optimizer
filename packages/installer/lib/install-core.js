@@ -161,7 +161,7 @@ function planInstallation(options = {}) {
   const paths = installerPaths(options);
   const clients = normalizeClients(options.clients, paths.home);
   const operations = clients.flatMap((client) => [
-    { id: `install:${client}:copy`, kind: "copy-tree", phase: "copy", client, path: paths.home, targets: clientTargets(client, paths) },
+    { id: `install:${client}:copy`, kind: "copy-tree", phase: "copy", client, path: paths.home, targets: clientTargets(client, paths, options) },
     { id: `install:${client}:config`, kind: "managed-block", phase: "config", client, path: paths.home },
     { id: `install:${client}:credentials`, kind: "credential", phase: "credentials", client, reference: `${client}/provider-env` },
     { id: `install:${client}:service`, kind: "platform-service", phase: "service", client, platform: process.platform },
@@ -178,8 +178,9 @@ function planInstallation(options = {}) {
     else if (operation.client === "codex") installCodex(installOptions);
     else throw new Error(`Unsupported client: ${operation.client}`);
   }, (operation) => {
-    const before = snapshotDirectory(paths.home);
-    return { inverse: () => restoreDirectory(paths.home, before) };
+    const boundaries = [paths.home, ...(options.cursorProjects || []).map((project) => path.resolve(project))];
+    const before = snapshotTargets(operation.targets || [], boundaries);
+    return { inverse: () => restoreTargets(before), commit: () => discardSnapshot(before) };
   });
   return plan;
 }
@@ -221,10 +222,13 @@ function persistInstallManifest(options = {}, clients = []) {
   writeManifest(paths.home, { schemaVersion: 2, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [paths.assetsRoot], managedBlocks, files });
 }
 
-function clientTargets(client, paths) {
+function clientTargets(client, paths, options = {}) {
   const roots = {
     opencode: [path.join(paths.home, ".config", "opencode")],
-    cursor: [path.join(paths.home, ".cursor")],
+    cursor: [
+      path.join(paths.home, ".cursor"),
+      ...(options.cursorProjects || []).map((project) => path.join(path.resolve(project), ".cursor")),
+    ],
     antigravity: [path.join(paths.home, ".gemini")],
     claude: [path.join(paths.home, ".claude"), paths.installRoot],
     codex: [path.join(paths.home, ".codex"), paths.installRoot],
@@ -232,17 +236,52 @@ function clientTargets(client, paths) {
   return roots[client] || [];
 }
 
-function snapshotDirectory(source) {
-  const snapshot = fs.mkdtempSync(path.join(os.tmpdir(), "token-optimizer-plan-"));
-  if (fs.existsSync(source)) fs.cpSync(source, path.join(snapshot, "tree"), { recursive: true });
-  return snapshot;
+/*
+ * Rollback snapshots are restricted to the client-owned roots listed in the
+ * plan. Traversing the whole home directory can cross unrelated macOS TCC
+ * boundaries such as Music, Photos, or other privacy-protected folders.
+ */
+function snapshotTargets(targets, boundaries = []) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "token-optimizer-plan-"));
+  try {
+    const entries = [...new Set(targets.map((target) => path.resolve(target)))].map((target, index) => {
+      const source = path.join(root, String(index));
+      const existed = fs.existsSync(target);
+      if (existed) fs.cpSync(target, source, { recursive: true });
+      const boundary = boundaries
+        .map((candidate) => path.resolve(candidate))
+        .filter((candidate) => target === candidate || target.startsWith(`${candidate}${path.sep}`))
+        .sort((left, right) => right.length - left.length)[0];
+      return { target, source, existed, boundary };
+    });
+    return { root, entries };
+  } catch (error) {
+    fs.rmSync(root, { recursive: true, force: true });
+    throw error;
+  }
 }
 
-function restoreDirectory(target, snapshot) {
-  fs.rmSync(target, { recursive: true, force: true });
-  const source = path.join(snapshot, "tree");
-  if (fs.existsSync(source)) fs.cpSync(source, target, { recursive: true });
-  fs.rmSync(snapshot, { recursive: true, force: true });
+function restoreTargets(snapshot) {
+  for (const entry of snapshot.entries) {
+    fs.rmSync(entry.target, { recursive: true, force: true });
+    if (entry.existed) fs.cpSync(entry.source, entry.target, { recursive: true });
+    else pruneEmptyParents(path.dirname(entry.target), entry.boundary);
+  }
+  fs.rmSync(snapshot.root, { recursive: true, force: true });
+}
+
+function discardSnapshot(snapshot) {
+  fs.rmSync(snapshot.root, { recursive: true, force: true });
+}
+
+function pruneEmptyParents(directory, boundary) {
+  let current = path.resolve(directory);
+  const stop = boundary ? path.resolve(boundary) : current;
+  while (current !== stop && current.startsWith(`${stop}${path.sep}`)) {
+    try { fs.rmdirSync(current); }
+    catch { break; }
+    current = path.dirname(current);
+  }
 }
 
 function normalizeClients(clients, home = process.env.HOME || os.homedir()) {
