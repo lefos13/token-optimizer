@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const installer = require('../../../packages/installer/lib/install-core.js');
 const migration = require('../../../packages/installer/lib/migration.js');
@@ -268,4 +269,52 @@ test('native-store failure rolls back without exposing or deleting the legacy se
   const before = fs.readFileSync(legacy, 'utf8');
   await assert.rejects(() => migration.migrateInstallation({ home, clients: ['claude'], credentialStore: 'native', credentialStoreOptions: { platform: 'unsupported' }, skipClientCommands: true, skipLaunchctl: true }), /rolled back/i);
   assert.equal(fs.readFileSync(legacy, 'utf8'), before);
+});
+
+test('detection and cleanup never inspect unrelated files below a client root', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-allowlist-'));
+  const config = path.join(home, '.claude', 'settings.json');
+  const conversation = path.join(home, '.claude', 'conversation.json');
+  fs.mkdirSync(path.dirname(config), { recursive: true });
+  fs.writeFileSync(config, JSON.stringify({ env: { LOCAL_LLM_API_URL: 'http://localhost:8080/v1' } }));
+  fs.writeFileSync(conversation, '{"message":"LLM_GATEWAY_TOKEN = conversation-secret"}\n');
+  const before = fs.readFileSync(conversation);
+  const state = migration.detectV1State({ home, clients: ['claude'] });
+  assert.deepEqual(state.files, [config]);
+  await migration.migrateInstallation({ home, clients: ['claude'], provider: 'local', skipClientCommands: true, skipLaunchctl: true });
+  assert.deepEqual(fs.readFileSync(conversation), before);
+});
+
+test('async adapter preparation is awaited and validated before apply', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-async-prepare-'));
+  const legacy = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, JSON.stringify({ env: { LOCAL_LLM_API_URL: 'http://localhost:8080/v1' } }));
+  const events: string[] = [];
+  const result = await migration.migrateInstallation({ home, clients: ['claude'], provider: 'local', skipLaunchctl: true, clientRegistrationAdapter: { prepare: async () => { await Promise.resolve(); events.push('prepared'); return { apply: () => events.push('applied'), rollback: () => events.push('rolled-back') }; } } });
+  assert.equal(result.status, 'migrated');
+  assert.deepEqual(events, ['prepared', 'applied']);
+});
+
+test('invalid async adapter shape fails before registration mutation', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-invalid-adapter-'));
+  const legacy = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, JSON.stringify({ env: { LOCAL_LLM_API_URL: 'http://localhost:8080/v1' } }));
+  const before = fs.readFileSync(legacy, 'utf8');
+  await assert.rejects(() => migration.migrateInstallation({ home, clients: ['claude'], provider: 'local', skipLaunchctl: true, clientRegistrationAdapter: { prepare: async () => ({ apply: () => undefined }) } }), /apply, rollback/);
+  assert.equal(fs.readFileSync(legacy, 'utf8'), before);
+  assert.equal(fs.existsSync(path.join(home, '.token-optimizer-mcp', 'backups')), false);
+});
+
+test('public CLI migration works without external command or launchctl adapters and reports follow-up', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-cli-default-'));
+  const legacy = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, JSON.stringify({ env: { LOCAL_LLM_API_URL: 'http://localhost:8080/v1' } }));
+  const result = spawnSync(process.execPath, [path.resolve(__dirname, '../../../packages/installer/bin/token-optimizer.js'), 'install', '--migrate', '--provider', 'local', '--clients', 'claude', '--home', home, '--skip-update-check'], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Migrated Token Optimizer/);
+  assert.match(result.stdout, /Follow-up:/);
+  assert.equal(fs.existsSync(path.join(home, '.token-optimizer', 'migration-v2.json')), true);
 });

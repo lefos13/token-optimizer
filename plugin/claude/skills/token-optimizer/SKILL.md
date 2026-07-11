@@ -217,9 +217,10 @@ validation. The operation is transactional and idempotent.
 The preview itself is registered for execution, so apply does not recompute a
 hidden plan. Its rollback handles remain live through the authenticated probe
 and structured legacy-key cleanup.
-Claude/Codex registration and real macOS launchctl mutation fail preflight
-unless reversible adapters capture their exact pre-state. Pass the explicit
-skip flags when those external mutations are intentionally omitted.
+The public CLI omits Claude/Codex registration and real macOS launchctl
+mutation during migration and reports a normal-install follow-up. Library
+callers need reversible adapters for those operations. Detection is restricted
+to known client configuration paths and never scans conversation/history data.
 Migration failures are sanitized before CLI and JSON output; do not bypass the
 structured result by printing adapter or provider exception objects directly.
 

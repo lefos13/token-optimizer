@@ -82,9 +82,11 @@ back client files, credentials, services, registrations, and ownership state.
 The JSON preview is the registered executable plan: apply uses those exact
 operation IDs and order, resolves the migrated credential for a mode-specific
 authenticated probe, then removes legacy credential keys structurally.
-Claude/Codex CLI registration and real macOS launchctl changes are fail-closed
-unless a reversible state-capturing adapter is available; automation without
-one must explicitly use `--skip-client-commands` and/or `--skip-launchctl`.
+The public migration CLI intentionally skips Claude/Codex CLI registration and
+real macOS launchctl changes, then reports a normal-install follow-up. Library
+callers may supply reversible state-capturing adapters; otherwise those
+external mutations fail preflight. Detection reads only known client config
+files and never recursively scans histories, conversations, or project data.
 Migration errors are sanitized against detected and selected credentials plus
 authorization-header patterns before they reach human or JSON CLI output.
 

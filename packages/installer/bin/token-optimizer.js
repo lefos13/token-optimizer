@@ -98,8 +98,8 @@ async function main() {
         ...providerOptions,
         credentialStore: normalizeCredentialStore(args["credential-store"]),
         cursorProjects: parseList(args["cursor-project"] || args.cursorProject || ""),
-        skipClientCommands: args["skip-client-commands"] === true,
-        skipLaunchctl: args["skip-launchctl"] === true,
+        skipClientCommands: true,
+        skipLaunchctl: true,
       };
       if (args["dry-run"] === true || args.json === true) {
         const plan = planMigrationFromHome(migrationOptions);
@@ -108,6 +108,7 @@ async function main() {
       }
       const result = await migrateInstallation(migrationOptions);
       console.log(result.status === "already-migrated" ? "Migration already complete; no changes applied." : `Migrated Token Optimizer for: ${result.plan.clients.join(", ")}`);
+      if (result.status !== "already-migrated") console.log("Follow-up: restart clients; run a normal install to perform client plugin registration and macOS GUI-session service setup.");
       return;
     }
     const providerOptions = await resolveProviderOptions(args, rl);
