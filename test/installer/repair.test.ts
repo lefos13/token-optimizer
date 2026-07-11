@@ -19,11 +19,13 @@ test('repair consumes stable operation hints and deduplicates exact external wor
     { code: 'STALE_REGISTRATION', client: 'codex', operation: 'rewrite-registration' },
     { code: 'PROVIDER_MISSING', operation: 'configure-provider' },
   ] }, manifest);
-  assert.deepEqual(plan.operations, [{ kind: 'client-command', client: 'codex', command: 'rewrite-registration' }]);
+  assert.deepEqual(plan.operations, [{ kind: 'client-command', client: 'codex', command: 'rewrite-registration', paths: [] }]);
 });
 
 test('repair removes an incomplete dependency cache so launcher bootstrap can rebuild it', () => {
-  const manifest = { schemaVersion: 2, roots: ['/managed'], files: [] };
-  const plan = planRepair({ findings: [{ code: 'DEPENDENCY_CACHE_INCOMPLETE', path: '/managed/.data/node_modules', operation: 'refresh-runtime' }] }, manifest);
-  assert.deepEqual(plan.operations, [{ kind: 'remove-file', path: '/managed/.data/node_modules' }]);
+  const fs = require('node:fs'); const os = require('node:os'); const path = require('node:path'); const root = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-runtime-')); const cache = path.join(root, '.data', 'node_modules');
+  const manifest = { schemaVersion: 2, roots: [root], files: [] };
+  const plan = planRepair({ findings: [{ code: 'DEPENDENCY_CACHE_INCOMPLETE', path: cache, operation: 'refresh-runtime' }] }, manifest, { managedRoots: [root] });
+  assert.deepEqual(plan.operations, [{ kind: 'remove-file', path: cache }]);
+  assert.throws(() => planRepair({ findings: [{ code: 'DEPENDENCY_CACHE_INCOMPLETE', path: '/tmp/arbitrary/.data/node_modules', operation: 'refresh-runtime' }] }, manifest, { managedRoots: [root] }), /outside managed roots/);
 });

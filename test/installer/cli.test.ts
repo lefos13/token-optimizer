@@ -125,11 +125,14 @@ test('spawned CLI completes install, doctor, repair, uninstall, and repeated uni
     const doctor = spawnSync(process.execPath, [bin, 'doctor', '--home', home, '--json'], base);
     assert.ok([0, 1].includes(doctor.status), `${client} doctor: ${doctor.stderr}`);
     assert.doesNotThrow(() => JSON.parse(doctor.stdout));
-    const repair = spawnSync(process.execPath, [bin, 'repair', '--home', home, '--dry-run', '--json'], base);
+    const repair = spawnSync(process.execPath, [bin, 'repair', '--home', home], base);
     assert.equal(repair.status, 0, `${client} repair: ${repair.stderr}`);
+    const postRepair = spawnSync(process.execPath, [bin, 'status', '--home', home, '--json'], base);
+    assert.ok([0, 1].includes(postRepair.status), `${client} post-repair status: ${postRepair.stderr}`);
+    assert.ok(!JSON.parse(postRepair.stdout).findings.some((item: any) => item.code === 'STALE_REGISTRATION'));
     const uninstall = spawnSync(process.execPath, [bin, 'uninstall', '--home', home], base);
     assert.equal(uninstall.status, 0, `${client} uninstall: ${uninstall.stderr}`);
     const repeated = spawnSync(process.execPath, [bin, 'uninstall', '--home', home, '--json'], base);
-    assert.equal(JSON.parse(repeated.stdout).status, 'already-uninstalled');
+    assert.equal(JSON.parse(repeated.stdout).status, 'already-uninstalled', `${client}: ${repeated.stdout} ${repeated.stderr}`);
   }
 });

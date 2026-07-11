@@ -56,9 +56,9 @@ function planRepair(report = {}, manifest, options = {}) {
     else if (file.kind === 'copy-tree' && file.sourcePath) operations.push(copyTreeOperation(trustedRepairSource({ ...file, source: file.sourcePath }, manifest, options), file.path));
   }
   for (const finding of actionable) {
-    if (finding.operation === 'refresh-runtime' && finding.code === 'DEPENDENCY_CACHE_INCOMPLETE' && finding.path) operations.push(removeFileOperation(finding.path));
-    if (['rewrite-registration', 'deduplicate-registration', 'install-client'].includes(finding.operation) && finding.client) operations.push(clientCommandOperation(finding.client, finding.operation));
-    if (['rewrite-launch-agent', 'reload-launch-agent'].includes(finding.operation)) operations.push(platformServiceOperation('darwin', finding.operation));
+    if (finding.operation === 'refresh-runtime' && finding.code === 'DEPENDENCY_CACHE_INCOMPLETE' && finding.path) operations.push(removeFileOperation(trustedRuntimeCache(finding.path, options)));
+    if (['rewrite-registration', 'deduplicate-registration', 'install-client'].includes(finding.operation) && finding.client) operations.push(clientCommandOperation(finding.client, finding.operation, { paths: finding.paths || (finding.path ? [finding.path] : []) }));
+    if (['rewrite-launch-agent', 'reload-launch-agent'].includes(finding.operation)) { const service = (manifest.platformServices || []).find((item) => item.path === finding.path) || {}; operations.push(platformServiceOperation('darwin', service.service || 'com.softawarest.token-optimizer.env', { path: finding.path || service.path, action: finding.operation })); }
   }
   return createChangePlan({ action: 'repair', findings: actionable.map((item) => item.code).filter(Boolean) }, deduplicateOperations(operations));
 }
@@ -78,6 +78,8 @@ function trustedRepairSource(file, manifest, options) {
   if (!(source === trustedRoot || source.startsWith(`${trustedRoot}${path.sep}`)) || !fs.existsSync(source)) throw Object.assign(new Error('packaged repair source is unavailable'), { code: 'REPAIR_SOURCE_UNAVAILABLE' });
   return source;
 }
+
+function trustedRuntimeCache(candidate, options) { const target = path.resolve(candidate); if (!target.endsWith(`${path.sep}.data${path.sep}node_modules`)) throw Object.assign(new Error('runtime cache path is not launcher-owned'), { code: 'REPAIR_RUNTIME_PATH_UNTRUSTED' }); const roots = (options.managedRoots || []).map((root) => path.resolve(root)); if (!roots.some((root) => target.startsWith(`${root}${path.sep}`))) throw Object.assign(new Error('runtime cache path is outside managed roots'), { code: 'REPAIR_RUNTIME_PATH_UNTRUSTED' }); let current = target; while (!fs.existsSync(current)) current = path.dirname(current); const real = fs.realpathSync.native(current); const canonicalRoots = roots.map((root) => { let existing = root; while (!fs.existsSync(existing)) existing = path.dirname(existing); return path.join(fs.realpathSync.native(existing), path.relative(existing, root)); }); if (!canonicalRoots.some((root) => real === root || real.startsWith(`${root}${path.sep}`) || root.startsWith(`${real}${path.sep}`))) throw Object.assign(new Error('runtime cache canonical path is outside managed roots'), { code: 'REPAIR_RUNTIME_PATH_UNTRUSTED' }); return target; }
 
 function assertManifest(manifest) {
   if (!manifest || !Array.isArray(manifest.files)) throw new TypeError('manifest with files is required');

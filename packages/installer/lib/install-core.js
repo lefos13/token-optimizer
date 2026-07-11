@@ -365,7 +365,7 @@ function persistInstallManifest(options = {}, clients = []) {
     .concat((options.lifecycleRegistrations || []).map((registration) => ({ ...registration, ownership: "installer" })));
   const launchAgent = path.join(paths.home, "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`);
   const platformServices = process.platform === "darwin" && fs.existsSync(launchAgent)
-    ? [{ platform: "darwin", service: LAUNCH_AGENT_LABEL, path: launchAgent, ownership: "installer" }]
+    ? [{ platform: "darwin", service: LAUNCH_AGENT_LABEL, path: launchAgent, content: fs.readFileSync(launchAgent, "utf8"), ownership: "installer" }]
     : [];
   writeManifest(paths.home, { schemaVersion: 2, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [paths.assetsRoot], managedBlocks, credentials, registrations, platformServices, files });
 }

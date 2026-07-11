@@ -5,7 +5,7 @@ const { applyLifecyclePlan } = require('../../../packages/installer/lib/uninstal
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createRegistrationAdapter } = require('../../../packages/installer/lib/lifecycle-adapters.js');
+const { createRegistrationAdapter, createServiceAdapter, removeRegistration } = require('../../../packages/installer/lib/lifecycle-adapters.js');
 
 test('uninstall emits a warning and preserves user-modified files', () => {
   const file = '/managed/user-edited';
@@ -57,4 +57,15 @@ test('marketplace registration adapter removes and re-adds Claude and Codex on r
     const state = adapter.capture(operation); adapter.apply(operation); adapter.restore(operation, state);
     assert.deepEqual(calls.map((call) => call.slice(0, 2)), [[client, recipe.remove], [client, recipe.restore]]);
   }
+});
+
+test('JSON registration cleanup preserves comments, formatting, and unrelated servers', () => {
+  for (const client of ['opencode', 'cursor', 'antigravity']) { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'registration-bytes-')); const file = path.join(home, 'config.jsonc'); const original = '{\n  // keep this comment\n  "mcpServers": {\n    "other": { "command": "keep" },\n    "token_optimizer": { "command": "remove" }\n  },\n  "untouched": true\n}\n'; fs.writeFileSync(file, original); removeRegistration(file, client); const actual = fs.readFileSync(file, 'utf8'); assert.ok(actual.includes('// keep this comment')); assert.ok(actual.includes('"other": { "command": "keep" }')); assert.ok(actual.includes('"untouched": true')); assert.ok(!actual.includes('token_optimizer')); }
+});
+
+test('LaunchAgent permission failure leaves plist untouched', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'launchagent-permission-')); const file = path.join(home, 'agent.plist'); fs.writeFileSync(file, 'owned');
+  const adapter = createServiceAdapter({ execFileSync: (_cmd: string, args: string[]) => { if (args[0] === 'print') return ''; const error: any = new Error('Operation not permitted'); error.stderr = 'Operation not permitted'; throw error; } });
+  const operation = { kind: 'platform-service', service: 'fixture', path: file };
+  assert.throws(() => adapter.apply(operation), /permitted/); assert.equal(fs.readFileSync(file, 'utf8'), 'owned');
 });

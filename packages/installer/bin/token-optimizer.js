@@ -21,7 +21,7 @@ const {
   applyDefaultDirectives,
 } = require("../lib/install-core");
 const { inspectInstallation } = require("../lib/doctor");
-const { readManifest, manifestPath } = require("../lib/manifest");
+const { readManifest, writeManifest, manifestPath } = require("../lib/manifest");
 const { planRepair, planUninstall, currentStateFromManifest, applyLifecyclePlan } = require("../lib/uninstall");
 const { statusLogs, pruneLogs, purgeLogs } = require("../lib/logs");
 const { planMigrationFromHome, migrateInstallation } = require("../lib/migration");
@@ -76,12 +76,17 @@ async function main() {
     }
     const report = command === "repair" ? await inspectInstallation({ home, performHealthProbe: false }) : null;
     const assetsRoot = require("path").resolve(__dirname, "..", "assets");
-    const plan = command === "repair" ? planRepair(report, manifest, { assetsRoot }) : planUninstall(manifest, currentStateFromManifest(manifest), { manifestPath: manifestPath(home) });
+    const managedRoots = [require("path").join(home || process.env.HOME, ".token-optimizer"), require("path").join(home || process.env.HOME, ".config", "opencode"), require("path").join(home || process.env.HOME, ".cursor"), require("path").join(home || process.env.HOME, ".gemini"), require("path").join(home || process.env.HOME, ".claude"), require("path").join(home || process.env.HOME, ".codex")];
+    const plan = command === "repair" ? planRepair(report, manifest, { assetsRoot, managedRoots }) : planUninstall(manifest, currentStateFromManifest(manifest), { manifestPath: manifestPath(home) });
     if (args["dry-run"] === true || args.json === true) {
       console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
       return;
     }
-    applyLifecyclePlan(plan, { requireExternalAdapters: true, registrationAdapter: createRegistrationAdapter(), serviceAdapter: createServiceAdapter(), manifest, home, planWarnings: plan.warnings || [] });
+    applyLifecyclePlan(plan, { requireExternalAdapters: true, registrationAdapter: createRegistrationAdapter(), serviceAdapter: createServiceAdapter({ services: manifest.platformServices || [] }), manifest, home, planWarnings: plan.warnings || [] });
+    if (command === "repair") {
+      const crypto = require("crypto"); const fs = require("fs");
+      writeManifest(home, { ...manifest, files: manifest.files.map((file) => fs.existsSync(file.path) ? { ...file, sha256: crypto.createHash("sha256").update(fs.readFileSync(file.path)).digest("hex") } : file) });
+    }
     console.log(`${command}: applied ${plan.operations.length} operation(s).`);
     return;
   }
