@@ -81,6 +81,7 @@ const child = spawn(process.execPath, [path.join(__dirname, "index.js")], {
         try {
           if (process.platform === "darwin") secret = execFileSync("security", ["find-generic-password", "-s", parsed.service || "token-optimizer", "-a", parsed.account || "", "-w"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
           else if (process.platform === "linux") secret = execFileSync("secret-tool", ["lookup", "service", parsed.service || "token-optimizer", "account", parsed.account || ""], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+          else if (process.platform === "win32") secret = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; $s=Get-Content -Raw -LiteralPath $env:TOKEN_OPTIMIZER_CREDENTIALS_FILE | ConvertFrom-Json; $s.($args[0])", (parsed.service || "token-optimizer") + ":" + (parsed.account || "")], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
         } catch {}
       }
       if (secret) {

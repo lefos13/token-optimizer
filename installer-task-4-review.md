@@ -2,11 +2,11 @@
 
 ## Decision
 
-Not approved yet. The amended commit fixes the generated-asset/version gap and adds the requested migration fixtures, but credential lookup coverage and the canonical CLI test suite are still incomplete.
+Not approved yet. Alpha.5 assets and native lookup support improved, but the core API, destination/idempotence coverage, and canonical CLI suite still have gaps.
 
 ## Findings
 
-1. **Important — native credential references still cannot be resolved.** The generated launchers now resolve serialized `env` and `config` references, but `credential-store.js` also emits native references for macOS Keychain, Linux Secret Service, and Windows DPAPI. No launcher path invokes those native stores, and there is no child-only native lookup test. A migrated native reference therefore yields no provider secret. Add a platform-neutral launcher resolver/bridge (or explicitly constrain references to stores the launcher supports) and tests for config plus each native adapter without exposing the secret to the parent/config.
+1. **Important — Windows native credential references still cannot be resolved.** The generated launchers now resolve serialized `env`, `config`, macOS Keychain, and Linux Secret Service references, but the `native` branch has no Windows/DPAPI path even though `credential-store-windows.js` emits native references. A Windows migration therefore yields no provider secret. Add a DPAPI lookup bridge or explicitly reject unsupported native references, with child-only tests.
 
 2. **Important — migration fixtures do not exercise actual client destinations or idempotency.** `test/installer/migration.test.ts` loops over five client labels, but `planMigration` ignores `client`; each case is the same pure object assertion. There is no fixture that reads/writes Claude, Codex, Antigravity, OpenCode, or Cursor config, and no repeated migration/apply assertion. Add per-client destination fixtures and an idempotency check.
 

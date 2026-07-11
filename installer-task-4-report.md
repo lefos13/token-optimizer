@@ -18,4 +18,4 @@ Implemented explicit provider migration support while preserving legacy installe
 
 ## Deferred
 
-Generated plugin and installer assets were regenerated at aligned version `2.0.0-alpha.5`; the launcher resolves native/config credential references and injects secrets only into the MCP child environment.
+Generated plugin and installer assets were regenerated at aligned version `2.0.0-alpha.6`; the launcher resolves config/native credential references (including Windows-gated lookup) and injects secrets only into the MCP child environment.

@@ -19,3 +19,7 @@ test('migration emits explicit cleanup and never stores a raw credential', () =>
   assert.ok(plan.operations.some((op: any) => op.id === 'cleanup:legacy-provider-env'));
   assert.doesNotMatch(JSON.stringify(plan), /secret/);
 });
+
+test('invalid explicit provider fails closed even when credentials are present', () => {
+  assert.throws(() => installer.buildProviderValues({ provider: 'invalid', gatewayToken: 'secret' }), /Unsupported provider mode/);
+});
