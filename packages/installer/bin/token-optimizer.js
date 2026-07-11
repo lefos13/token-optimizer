@@ -114,7 +114,7 @@ async function resolveProviderOptions(args, rl) {
     };
   }
   const byokKeyFlag = args["byok-key"] || args.byokKey;
-  if (explicit === "byok" || byokKeyFlag) {
+  if (explicit === "gateway-byok" || explicit === "openrouter-direct" || byokKeyFlag) {
     const byokKey = byokKeyFlag || await askRequired(rl, "Your OpenRouter API key (sk-or-...): ");
     const modelFlag = args["byok-model"] ?? args.byokModel;
     const byokModel = modelFlag !== undefined
@@ -123,16 +123,17 @@ async function resolveProviderOptions(args, rl) {
         ? ""
         : await askOptional(rl, "OpenRouter model ID (optional; Enter for gateway default): ");
     return {
-      provider: "byok",
+      provider: explicit === "openrouter-direct" ? "openrouter-direct" : (args.provider === "byok" ? "byok" : "gateway-byok"),
       gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL,
+      openrouterUrl: args["openrouter-url"] || args.openrouterUrl,
       byokKey,
       byokModel,
     };
   }
-  if (explicit === "gateway" || args.token || process.env.LLM_GATEWAY_TOKEN) {
+  if (explicit === "gateway-token" || args.token || process.env.LLM_GATEWAY_TOKEN) {
     const gatewayToken = args.token || process.env.LLM_GATEWAY_TOKEN || await askRequired(rl, "Gateway access token: ");
     return {
-      provider: "gateway",
+      provider: args.provider === "gateway" ? "gateway" : "gateway-token",
       gatewayToken,
       gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL,
     };
@@ -153,7 +154,8 @@ async function promptForProviderInteractive(args, rl) {
     const byokModel = await askOptional(rl, "OpenRouter model ID (optional; Enter for gateway default): ");
     console.log("No proxy token needed: calls are billed to your OpenRouter account, unlimited.");
     return {
-      provider: "byok",
+      provider: "openrouter-direct",
+      openrouterUrl: args["openrouter-url"] || args.openrouterUrl || "https://openrouter.ai/api/v1",
       gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL,
       byokKey,
       byokModel,

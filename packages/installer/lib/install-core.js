@@ -14,12 +14,15 @@ const DEFAULT_LOCAL_LLM_MODEL = "local-model";
    picking a provider, and switching providers later cleanly clears whatever
    the previous choice left behind. */
 const MANAGED_ENV_KEYS = [
+  "TOKEN_OPTIMIZER_PROVIDER_MODE",
+  "TOKEN_OPTIMIZER_CREDENTIAL_REF",
   "LLM_GATEWAY_URL",
   "LLM_GATEWAY_TOKEN",
   "OPENROUTER_BYOK_KEY",
   "OPENROUTER_BYOK_MODEL",
   "LOCAL_LLM_API_URL",
   "LOCAL_LLM_MODEL",
+  "OPENROUTER_API_KEY",
 ];
 
 function emptyManagedValues() {
@@ -38,21 +41,30 @@ function emptyManagedValues() {
      shape, so callers can still register the MCP server entry itself without
      ever requiring a token. */
 function buildProviderValues(options) {
-  const provider = normalizeProviderChoice(options.provider) || inferProvider(options);
+  const requested = options.provider;
+  const provider = normalizeProviderChoice(requested) || inferProvider(options);
   const values = emptyManagedValues();
-  if (provider === "gateway") {
-    if (!options.gatewayToken) {
+  values.TOKEN_OPTIMIZER_PROVIDER_MODE = provider === "skip" ? "" : provider;
+  values.TOKEN_OPTIMIZER_CREDENTIAL_REF = options.credentialRef || "";
+  if (provider === "gateway-token") {
+    if (!options.gatewayToken && !options.credentialRef) {
       throw new Error("gatewayToken is required for provider 'gateway'");
     }
     values.LLM_GATEWAY_URL = options.gatewayUrl || DEFAULT_GATEWAY_URL;
-    values.LLM_GATEWAY_TOKEN = options.gatewayToken;
-  } else if (provider === "byok") {
-    if (!options.byokKey) {
+    if (!options.credentialRef) values.LLM_GATEWAY_TOKEN = options.gatewayToken;
+  } else if (provider === "gateway-byok") {
+    if (!options.byokKey && !options.credentialRef) {
       throw new Error("byokKey is required for provider 'byok'");
     }
     values.LLM_GATEWAY_URL = options.gatewayUrl || DEFAULT_GATEWAY_URL;
-    values.OPENROUTER_BYOK_KEY = options.byokKey;
+    if (!options.credentialRef) values.OPENROUTER_BYOK_KEY = options.byokKey;
     values.OPENROUTER_BYOK_MODEL = String(options.byokModel || "").trim();
+  } else if (provider === "openrouter-direct") {
+    if (!options.byokKey && !options.openrouterKey && !options.credentialRef) {
+      throw new Error("byokKey is required for provider 'openrouter-direct'");
+    }
+    if (!options.credentialRef) values.OPENROUTER_API_KEY = options.openrouterKey || options.byokKey;
+    values.LLM_GATEWAY_URL = options.openrouterUrl || "https://openrouter.ai/api/v1";
   } else if (provider === "local") {
     values.LOCAL_LLM_API_URL = options.localApiUrl || "";
     values.LOCAL_LLM_MODEL = options.localModel || "";
@@ -65,16 +77,41 @@ function normalizeProviderChoice(provider) {
     return null;
   }
   const normalized = String(provider).trim().toLowerCase();
-  return ["gateway", "byok", "local", "skip"].includes(normalized) ? normalized : null;
+  const aliases = { gateway: "gateway-token", byok: "gateway-byok", direct: "openrouter-direct" };
+  const canonical = aliases[normalized] || normalized;
+  return ["gateway-token", "gateway-byok", "openrouter-direct", "local", "skip"].includes(canonical) ? canonical : null;
 }
 
 /* Callers that don't pass an explicit provider get one inferred from which
    values they supplied, so existing gatewayToken-only call sites keep working. */
 function inferProvider(options) {
-  if (options.byokKey) return "byok";
-  if (options.gatewayToken) return "gateway";
+  if (options.byokKey) return "gateway-byok";
+  if (options.gatewayToken) return "gateway-token";
   if (options.localApiUrl || options.localModel) return "local";
   return "skip";
+}
+
+/* Translate legacy v1 environment state into an explicit provider without
+   changing its inference destination. Secrets remain represented by a
+   credential reference in the returned plan. */
+function planMigration(v1State = {}, choices = {}) {
+  const env = v1State.env || v1State.environment || v1State;
+  const selected = normalizeProviderChoice(choices.provider);
+  const gatewayUrl = env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL;
+  const hasByok = Boolean(env.OPENROUTER_BYOK_KEY || env.OPENROUTER_API_KEY || choices.byokKey);
+  const inferred = selected || (env.LOCAL_LLM_API_URL ? "local" : env.LLM_GATEWAY_TOKEN ? "gateway-token" : hasByok ? "gateway-byok" : "skip");
+  const mode = inferred;
+  const effectiveProvider = { mode, apiUrl: mode === "openrouter-direct" ? (choices.openrouterUrl || "https://openrouter.ai/api/v1") : mode === "local" ? (env.LOCAL_LLM_API_URL || DEFAULT_LOCAL_LLM_URL) : gatewayUrl };
+  if (env.OPENROUTER_BYOK_MODEL || choices.byokModel) effectiveProvider.model = env.OPENROUTER_BYOK_MODEL || choices.byokModel;
+  if (env.TOKEN_OPTIMIZER_CREDENTIAL_REF || choices.credentialRef) effectiveProvider.credentialRef = env.TOKEN_OPTIMIZER_CREDENTIAL_REF || choices.credentialRef;
+  const warnings = [];
+  if (!selected && hasByok && env.LLM_GATEWAY_URL) warnings.push("Legacy BYOK credentials remain routed through the gateway; key is stored as a gateway credential reference.");
+  if (env.LLM_GATEWAY_TOKEN && !selected) warnings.push("Legacy gateway token migrated to gateway-token; review credential storage before cleanup.");
+  const operations = [{ id: "migrate:provider", kind: "credential", phase: "credentials", provider: mode, reference: effectiveProvider.credentialRef || "provider-env" }];
+  if (env.LLM_GATEWAY_TOKEN || env.OPENROUTER_BYOK_KEY || env.OPENROUTER_API_KEY) {
+    operations.push({ id: "cleanup:legacy-provider-env", kind: "managed-block", phase: "cleanup", path: "provider-env", marker: "TOKEN_OPTIMIZER_PROVIDER_MODE" });
+  }
+  return createChangePlan({ action: "migration", effectiveProvider, warnings }, operations);
 }
 const CLAUDE_MARKETPLACE_NAME = "token-optimizer-marketplace";
 const CODEX_MARKETPLACE_NAME = "Softaware-marketplace";
@@ -814,6 +851,7 @@ module.exports = {
   emptyManagedValues,
   buildProviderValues,
   normalizeProviderChoice,
+  planMigration,
   DIRECTIVE_MARKER_START,
   installerPaths,
   planInstallation,

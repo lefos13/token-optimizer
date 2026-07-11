@@ -70,7 +70,21 @@ if (!upToDate) {
 
 const child = spawn(process.execPath, [path.join(__dirname, "index.js")], {
   stdio: "inherit",
-  env: { ...process.env, NODE_PATH: path.join(data, "node_modules") },
+  env: (() => {
+    /* Resolve credential references only for the child process. The launcher
+       itself never writes the secret back to a client config or stdout. */
+    const env = { ...process.env, NODE_PATH: path.join(data, "node_modules") };
+    const ref = env.TOKEN_OPTIMIZER_CREDENTIAL_REF;
+    if (ref) {
+      const secret = env[ref] || env[ref.replace(/^env:/, "")];
+      if (secret) {
+        const mode = env.TOKEN_OPTIMIZER_PROVIDER_MODE;
+        const key = mode === "gateway-token" ? "LLM_GATEWAY_TOKEN" : mode === "openrouter-direct" ? "OPENROUTER_API_KEY" : "OPENROUTER_BYOK_KEY";
+        env[key] = secret;
+      }
+    }
+    return env;
+  })(),
 });
 child.on("exit", (code, signal) => process.exit(signal ? 1 : code == null ? 1 : code));
 child.on("error", (error) => {
