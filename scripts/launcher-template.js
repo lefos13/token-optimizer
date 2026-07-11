@@ -17,7 +17,7 @@ function buildStartJs() {
    JSON-RPC channel, so all npm output is routed to stderr. */
 const fs = require("fs");
 const path = require("path");
-const { spawn, spawnSync } = require("child_process");
+const { spawn, spawnSync, execFileSync } = require("child_process");
 
 /* start.js always sits in the same directory as index.js and package.json,
    in every bundle layout, so everything resolves from __dirname. */
@@ -70,7 +70,40 @@ if (!upToDate) {
 
 const child = spawn(process.execPath, [path.join(__dirname, "index.js")], {
   stdio: "inherit",
-  env: { ...process.env, NODE_PATH: path.join(data, "node_modules") },
+  env: (() => {
+    /* Resolve credential references only for the child process. The launcher
+       itself never writes the secret back to a client config or stdout. */
+    const env = { ...process.env, NODE_PATH: path.join(data, "node_modules") };
+    const ref = env.TOKEN_OPTIMIZER_CREDENTIAL_REF;
+    if (ref) {
+      let secret = env[ref] || env[ref.replace(/^env:/, "")];
+      let parsed = ref;
+      try { parsed = JSON.parse(ref); } catch {}
+      if (!secret && parsed && typeof parsed === "object") {
+        if (parsed.store === "env") secret = env[parsed.account || parsed.variable || "TOKEN_OPTIMIZER_CREDENTIAL"];
+      if (!secret && (parsed.store === "config" || parsed.store === "protected-config")) {
+          try {
+            const file = env.TOKEN_OPTIMIZER_CREDENTIALS_FILE || path.join(require("os").homedir(), ".token-optimizer", "credentials.json");
+            const values = JSON.parse(fs.readFileSync(file, "utf8"));
+            secret = values[(parsed.service || "token-optimizer") + ":" + (parsed.account || require("os").userInfo().username)];
+          } catch {}
+        }
+      }
+      if (!secret && parsed.store === "native") {
+        try {
+          if (process.platform === "darwin") secret = execFileSync("security", ["find-generic-password", "-s", parsed.service || "token-optimizer", "-a", parsed.account || "", "-w"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+          else if (process.platform === "linux") secret = execFileSync("secret-tool", ["lookup", "service", parsed.service || "token-optimizer", "account", parsed.account || ""], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+          else if (process.platform === "win32" && parsed.store === "windows-dpapi") secret = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String((Get-Content -Raw -LiteralPath $args[0])), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))", parsed.path || parsed.filePath || path.join(require("os").homedir(), ".token-optimizer", "credential.dpapi")], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+        } catch {}
+      }
+      if (secret) {
+        const mode = env.TOKEN_OPTIMIZER_PROVIDER_MODE;
+        const key = mode === "gateway-token" ? "LLM_GATEWAY_TOKEN" : mode === "openrouter-direct" ? "OPENROUTER_API_KEY" : "OPENROUTER_BYOK_KEY";
+        env[key] = secret;
+      }
+    }
+    return env;
+  })(),
 });
 child.on("exit", (code, signal) => process.exit(signal ? 1 : code == null ? 1 : code));
 child.on("error", (error) => {

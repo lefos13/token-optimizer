@@ -53,9 +53,6 @@ const MAX_RECORDS = 200;
 function analyticsStoreRoot(targetWorkspacePath) {
     return targetWorkspacePath;
 }
-function analyticsDir(targetWorkspacePath) {
-    return path.join(analyticsStoreRoot(targetWorkspacePath), LOG_DIR);
-}
 function readRecords(filePath) {
     if (!fs.existsSync(filePath)) {
         return [];
@@ -67,6 +64,40 @@ function readRecords(filePath) {
     catch {
         return [];
     }
+}
+/* Metadata writes stay within a canonical, non-symlinked directory. The target
+   is checked before replacement and the temporary file is created beside it so
+   rename remains atomic without following an attacker-controlled link. */
+function safeAtomicWrite(filePath, value) {
+    const parent = path.dirname(filePath);
+    const parentStat = fs.lstatSync(parent);
+    if (parentStat.isSymbolicLink() || !parentStat.isDirectory())
+        throw new Error('unsafe analytics directory');
+    try {
+        const target = fs.lstatSync(filePath);
+        if (target.isSymbolicLink() || !target.isFile())
+            throw new Error('unsafe analytics target');
+    }
+    catch (error) {
+        if (error?.code !== 'ENOENT')
+            throw error;
+    }
+    const temp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(temp, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(temp, filePath);
+}
+function ensureSafeRoot(targetWorkspacePath) {
+    const workspace = fs.realpathSync(targetWorkspacePath);
+    const root = path.resolve(targetWorkspacePath, LOG_DIR);
+    fs.mkdirSync(root, { recursive: true });
+    const stat = fs.lstatSync(root);
+    if (stat.isSymbolicLink() || !stat.isDirectory())
+        throw new Error('managed analytics directory must be a real directory');
+    const realRoot = fs.realpathSync(root);
+    if (!(realRoot === workspace || realRoot.startsWith(`${workspace}${path.sep}`))) {
+        throw new Error('managed analytics directory escapes workspace');
+    }
+    return realRoot;
 }
 function summarize(records) {
     const summary = {
@@ -103,7 +134,7 @@ function inferWorkspaceFromLogPath(absLogPath) {
     return path.dirname(absLogPath);
 }
 function buildAnalyticsRecord(input) {
-    const rawSourceTokens = (0, runner_1.estimateTokens)(input.rawSourceText);
+    const rawSourceTokens = input.rawSourceTokens ?? (input.rawSourceBytes !== undefined ? Math.ceil(input.rawSourceBytes / 4) : (0, runner_1.estimateTokens)(input.rawSourceText));
     const returnedToMainTokens = (0, runner_1.estimateTokens)(input.responseText);
     const estimatedInputTokens = (0, runner_1.estimateTokens)(input.llmInputText || '');
     const usage = input.llmUsage;
@@ -200,16 +231,13 @@ function shareAnalyticsRecord(record) {
 function recordAnalytics(targetWorkspacePath, record) {
     shareAnalyticsRecord(record);
     try {
-        const dir = analyticsDir(targetWorkspacePath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
+        const dir = ensureSafeRoot(targetWorkspacePath);
         const analyticsPath = path.join(dir, ANALYTICS_FILE);
         const records = readRecords(analyticsPath);
         records.push(record);
         const trimmed = records.length > MAX_RECORDS ? records.slice(records.length - MAX_RECORDS) : records;
-        fs.writeFileSync(analyticsPath, JSON.stringify(trimmed, null, 2), 'utf8');
-        fs.writeFileSync(path.join(dir, SUMMARY_FILE), JSON.stringify(summarize(trimmed), null, 2), 'utf8');
+        safeAtomicWrite(analyticsPath, trimmed);
+        safeAtomicWrite(path.join(dir, SUMMARY_FILE), summarize(trimmed));
     }
     catch {
         /* ignore analytics write failures */

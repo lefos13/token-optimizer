@@ -1,6 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveProvider, GATEWAY_PROVIDER_NAME, queryLocalLLM } from '../../src/llm';
+import type { ProviderConfig } from '../../src/providers';
+
+function directConfig(key: string): ProviderConfig {
+  process.env.OPENROUTER_API_KEY = key;
+  return { mode: 'openrouter-direct', apiUrl: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o-mini', credentialEnv: 'OPENROUTER_API_KEY' };
+}
+
+function gatewayByokConfig(key: string): ProviderConfig {
+  process.env.OPENROUTER_BYOK_KEY = key;
+  return { mode: 'gateway-byok', apiUrl: 'https://llm-proxy.lnf.gr/v1', model: 'gateway-managed', credentialEnv: 'OPENROUTER_BYOK_KEY' };
+}
 
 function clearEnv(): void {
   delete process.env.LLM_GATEWAY_URL;
@@ -21,6 +32,31 @@ test('resolveProvider prefers the gateway when its token+url are set', () => {
   assert.equal(p.authHeaders['Authorization'], 'Bearer shared-token');
   assert.equal(p.authHeaders['X-Task-Type'], 'verdict');
   clearEnv();
+});
+
+test('openrouter-direct sends bearer auth directly to OpenRouter', () => {
+  clearEnv();
+  const provider = resolveProvider(directConfig('sk-or-user'), 'triage');
+  assert.equal(provider.mode, 'openrouter-direct');
+  assert.equal(provider.apiUrl, 'https://openrouter.ai/api/v1');
+  assert.equal(provider.authHeaders.Authorization, 'Bearer sk-or-user');
+  assert.ok(!('X-OpenRouter-Key' in provider.authHeaders));
+  clearEnv();
+});
+
+test('gateway-byok carries an explicit trust disclosure', () => {
+  clearEnv();
+  const provider = resolveProvider(gatewayByokConfig('sk-or-user'), 'triage');
+  assert.match(provider.warnings.join('\n'), /key.*gateway/i);
+  clearEnv();
+});
+
+test('explicit credentialEnv selects the configured direct-provider secret', () => {
+  clearEnv();
+  process.env.CUSTOM_OPENROUTER_SECRET = 'sk-custom';
+  const provider = resolveProvider({ mode: 'openrouter-direct', apiUrl: 'https://openrouter.ai/api/v1', model: 'm', credentialEnv: 'CUSTOM_OPENROUTER_SECRET' }, 'triage');
+  assert.equal(provider.authHeaders.Authorization, 'Bearer sk-custom');
+  delete process.env.CUSTOM_OPENROUTER_SECRET;
 });
 
 test('resolveProvider adds X-OpenRouter-Key when OPENROUTER_BYOK_KEY is set, omits it otherwise', () => {
@@ -106,6 +142,23 @@ test('gateway result reports the model from the response body', async () => {
   }
 });
 
+test('invalid remote output returns conservative fallback with validation metadata', async () => {
+  clearEnv();
+  process.env.LLM_GATEWAY_URL = 'https://llm-proxy.lnf.gr/v1';
+  process.env.LLM_GATEWAY_TOKEN = 'shared-token';
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"verdict":"pass"}' } }] }), { status: 200 })) as typeof fetch;
+  try {
+    const result = await queryLocalLLM('t', [], {}, [], 'logs', 'verdict');
+    assert.equal(result.verdict, 'uncertain');
+    assert.ok(result.validationErrors && result.validationErrors.length > 0);
+    assert.equal(result.llmAvailable, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearEnv();
+  }
+});
+
 test('gateway failure falls back to the local model', async () => {
   clearEnv();
   process.env.LLM_GATEWAY_URL = 'https://llm-proxy.lnf.gr/v1';
@@ -132,6 +185,30 @@ test('gateway failure falls back to the local model', async () => {
     assert.match(String(result.fallbackReason), /failed/i);
   } finally {
     globalThis.fetch = orig;
+    clearEnv();
+  }
+});
+
+test('local fallback prefers the task-specific model environment', async () => {
+  clearEnv();
+  process.env.LLM_GATEWAY_URL = 'https://llm-proxy.lnf.gr/v1';
+  process.env.LLM_GATEWAY_TOKEN = 'shared-token';
+  process.env.LOCAL_LLM_MODEL = 'shared-local';
+  process.env.LOCAL_LLM_TRIAGE_MODEL = 'triage-local';
+  const orig = globalThis.fetch;
+  let call = 0;
+  globalThis.fetch = (async (_url: any, init?: any) => {
+    call++;
+    if (call === 1) return new Response('nope', { status: 502 });
+    assert.equal(JSON.parse(init.body).model, 'triage-local');
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"verdict":"pass","confidence":0.9,"summary":"ok","likelyRelevantToRecentChanges":false,"failures":[],"needsRawLogs":false}' } }] }), { status: 200 });
+  }) as typeof fetch;
+  try {
+    await queryLocalLLM('t', ['npm test'], { 'npm test': 0 }, [], 'logs', 'triage');
+  } finally {
+    globalThis.fetch = orig;
+    delete process.env.LOCAL_LLM_MODEL;
+    delete process.env.LOCAL_LLM_TRIAGE_MODEL;
     clearEnv();
   }
 });

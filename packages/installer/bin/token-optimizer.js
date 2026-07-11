@@ -9,10 +9,18 @@ const {
   DEFAULT_LOCAL_LLM_URL,
   DEFAULT_LOCAL_LLM_MODEL,
   normalizeProviderChoice,
+  planInstallation,
+  applyChangePlan,
+  formatChangePlan,
   installSelectedClients,
+  persistInstallManifest,
   applyGatewayConfig,
   applyDefaultDirectives,
 } = require("../lib/install-core");
+const { inspectInstallation } = require("../lib/doctor");
+const { readManifest } = require("../lib/manifest");
+const { planRepair, planUninstall, currentStateFromManifest, applyLifecyclePlan } = require("../lib/uninstall");
+const { statusLogs, pruneLogs, purgeLogs } = require("../lib/logs");
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -20,6 +28,52 @@ async function main() {
 
   if (args.help || command === "help") {
     printHelp();
+    return;
+  }
+
+  if (command === "status" || command === "doctor") {
+    const report = await inspectInstallation({
+      home: args.home,
+      installedVersion: args["installed-version"],
+      expectedVersion: args["expected-version"] || pkg.version,
+      provider: args.provider,
+      profile: args.profile,
+      logDirectory: args["log-directory"],
+      performHealthProbe: command === "doctor",
+    });
+    if (args.json === true) console.log(JSON.stringify(report, null, 2));
+    else printInspection(report, command);
+    if (command === "doctor") {
+      const errors = report.findings.some((item) => item.severity === "error");
+      const warnings = report.findings.some((item) => item.severity === "warning");
+      process.exitCode = errors ? 1 : warnings && args.strict === true ? 2 : 0;
+    }
+    return;
+  }
+
+  if (command === "logs") {
+    const workspace = args.workspace;
+    if (!workspace || !require("path").isAbsolute(workspace)) throw new Error("logs commands require --workspace <absolute-path>");
+    const action = args._[1] || "status";
+    const operation = action === "status" ? statusLogs(workspace) : action === "prune" ? pruneLogs(workspace) : action === "purge" ? purgeLogs(workspace, { includeBaseline: args["include-baseline"] === true, includeAnalytics: args["include-analytics"] === true }) : null;
+    if (!operation) throw new Error(`Unsupported logs command: ${action}`);
+    const report = await operation;
+    console.log(args.json === true ? JSON.stringify(report, null, 2) : `${action}: ${report.removed.length} removed, ${report.freedBytes} bytes freed`);
+    return;
+  }
+
+  if (command === "repair" || command === "uninstall") {
+    const home = args.home;
+    const manifest = readManifest(home);
+    if (!manifest) throw new Error("No Token Optimizer ownership manifest found");
+    const report = command === "repair" ? await inspectInstallation({ home, performHealthProbe: false }) : null;
+    const plan = command === "repair" ? planRepair(report, manifest) : planUninstall(manifest, currentStateFromManifest(manifest));
+    if (args["dry-run"] === true || args.json === true) {
+      console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
+      return;
+    }
+    applyLifecyclePlan(plan);
+    console.log(`${command}: applied ${plan.operations.length} operation(s).`);
     return;
   }
 
@@ -43,7 +97,22 @@ async function main() {
     };
 
     if (command === "install") {
-      const installed = installSelectedClients(options);
+      const plan = planInstallation(options);
+      if (args["dry-run"] === true) {
+        console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
+        return;
+      }
+      const applyResult = applyChangePlan(plan);
+      if (applyResult.error) {
+        const rolled = applyResult.rolledBack.length;
+        const manual = applyResult.manualRemediation.length;
+        console.error(`Installation failed: ${applyResult.error.message}`);
+        console.error(`Rollback applied to ${rolled} operation(s); manual remediation required for ${manual}.`);
+        process.exitCode = 1;
+        return;
+      }
+      persistInstallManifest(options, applyResult.installedClients);
+      const installed = applyResult.installedClients;
       console.log(`Installed Token Optimizer for: ${installed.join(", ")}`);
       if (clients.includes("all") || clients.includes("cursor")) {
         console.log("Cursor MCP is configured globally; copy the generated Cursor rule into projects or pass --cursor-project for project rules.");
@@ -86,6 +155,9 @@ async function main() {
      finished later with `token-optimizer config`. */
 async function resolveProviderOptions(args, rl) {
   const explicit = normalizeProviderChoice(args.provider);
+  if (args.provider !== undefined && !explicit) {
+    throw new Error(`Unsupported provider mode: ${args.provider}. Choose local, gateway-token, gateway-byok, openrouter-direct, or skip.`);
+  }
   if (explicit === "skip") {
     return { provider: "skip" };
   }
@@ -97,7 +169,7 @@ async function resolveProviderOptions(args, rl) {
     };
   }
   const byokKeyFlag = args["byok-key"] || args.byokKey;
-  if (explicit === "byok" || byokKeyFlag) {
+  if (explicit === "gateway-byok" || explicit === "openrouter-direct" || byokKeyFlag) {
     const byokKey = byokKeyFlag || await askRequired(rl, "Your OpenRouter API key (sk-or-...): ");
     const modelFlag = args["byok-model"] ?? args.byokModel;
     const byokModel = modelFlag !== undefined
@@ -106,16 +178,17 @@ async function resolveProviderOptions(args, rl) {
         ? ""
         : await askOptional(rl, "OpenRouter model ID (optional; Enter for gateway default): ");
     return {
-      provider: "byok",
+      provider: explicit === "openrouter-direct" ? "openrouter-direct" : "gateway-byok",
       gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL,
+      openrouterUrl: args["openrouter-url"] || args.openrouterUrl,
       byokKey,
       byokModel,
     };
   }
-  if (explicit === "gateway" || args.token || process.env.LLM_GATEWAY_TOKEN) {
+  if (explicit === "gateway-token" || args.token || process.env.LLM_GATEWAY_TOKEN) {
     const gatewayToken = args.token || process.env.LLM_GATEWAY_TOKEN || await askRequired(rl, "Gateway access token: ");
     return {
-      provider: "gateway",
+      provider: args.provider === "gateway" ? "gateway" : "gateway-token",
       gatewayToken,
       gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL,
     };
@@ -136,7 +209,8 @@ async function promptForProviderInteractive(args, rl) {
     const byokModel = await askOptional(rl, "OpenRouter model ID (optional; Enter for gateway default): ");
     console.log("No proxy token needed: calls are billed to your OpenRouter account, unlimited.");
     return {
-      provider: "byok",
+      provider: "openrouter-direct",
+      openrouterUrl: args["openrouter-url"] || args.openrouterUrl || "https://openrouter.ai/api/v1",
       gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL,
       byokKey,
       byokModel,
@@ -291,9 +365,16 @@ function printHelp() {
   console.log(`Usage:
   npx @softawarest/token-optimizer-installer [install] [options]
   token-optimizer install --clients opencode,cursor
+  token-optimizer install --dry-run [--json]
   token-optimizer install --local
   token-optimizer config --token <token>
   token-optimizer defaults --clients claude,codex,opencode
+  token-optimizer status [--json]
+  token-optimizer doctor [--json] [--strict]
+  token-optimizer repair [--home <path>] [--dry-run]
+  token-optimizer uninstall [--home <path>] [--dry-run]
+  token-optimizer uninstall --dry-run
+  token-optimizer logs status|prune|purge --workspace <absolute-path>
 
 No token is required to use this tool. With no provider flags, the installer
 prompts for one of three providers, plus a skip option:
@@ -328,6 +409,15 @@ Options:
 `);
 }
 
+function printInspection(report, command) {
+  console.log(`${command === "doctor" ? "Doctor" : "Status"}: ${report.healthy ? "healthy" : "unhealthy"}`);
+  console.log(`Provider: ${report.provider.mode || "none"} (${report.provider.credentialStore})`);
+  console.log(`Clients: ${report.clients.configured.join(", ") || "none"}`);
+  console.log(`Profile: ${report.effectiveProfile}`);
+  console.log(`Logs: ${report.logs.files} file(s), ${report.logs.bytes} bytes (${report.logs.usagePercent}% of quota)`);
+  for (const item of report.findings) console.log(`[${item.severity}] ${item.code}: ${item.message}`);
+}
+
 if (require.main === module) {
   main().catch((error) => {
     console.error(`Token Optimizer installer failed: ${error.message}`);
@@ -342,4 +432,6 @@ module.exports = {
   checkForUpdate,
   fetchLatestVersion,
   compareVersions,
+  printInspection,
+  main,
 };

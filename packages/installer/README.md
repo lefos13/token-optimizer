@@ -1,5 +1,9 @@
 # Token Optimizer Installer
 
+Execution `signal` is `null` when no OS signal was observed and is populated only for signal-terminated processes.
+
+Execution profiles (`safe`, `standard`, `unrestricted`) are deny-first policy controls, not an operating-system sandbox; lower-trust settings cannot elevate the user's ceiling. Logs default to 7-day retention and a 500 MB per-workspace quota, with expired/oldest logs pruned under `.codex-local-test-runs/`. Responses expose completed/blocked/timed_out/spawn_failed statuses, policy and auto-detection metadata, truncation, provider status, warnings, and redaction summaries.
+
 Optional one-command installer for Token Optimizer.
 
 Run it from outside a Token Optimizer source checkout so `npx` cannot prefer a
@@ -42,6 +46,27 @@ flags, the installer prompts for one of three providers, plus a skip option:
 | `gateway` | **Yes** — request + operator approval | The gateway operator | 20 calls/day by default (operator-adjustable) |
 | `byok` | **No, none at all** | You, via your own OpenRouter account | Unlimited |
 | `local` | **No, none at all** | Nobody — your own hardware | Unlimited |
+
+Provider privacy at inference time is explicit:
+
+| Provider mode | Inference destination | Remote payload | Credential boundary |
+| --- | --- | --- | --- |
+| `local` | Your local OpenAI-compatible endpoint | Nothing beyond that endpoint | No Token Optimizer credential |
+| `openrouter-direct` | OpenRouter | Redacted, bounded excerpts | OpenRouter key goes directly to OpenRouter |
+| `gateway-token` | Softaware gateway | Redacted, bounded excerpts | Gateway token; gateway-managed model |
+| `gateway-byok` | Softaware gateway → OpenRouter | Redacted, bounded excerpts plus BYOK key | BYOK key is visible to the Softaware gateway |
+
+Legacy v1 gateway + BYOK environment variables remain mapped to `gateway-byok`
+and produce a compatibility warning; migration does not silently change the
+destination. Remote results may include `redactionSummary` and
+`providerWarnings` metadata (never secret values). `raw-local` diagnostics can
+still contain secrets printed by commands. If inference is unavailable or model
+output fails schema validation, command exit codes remain authoritative and the
+installer-connected tools report a conservative `uncertain` result.
+
+In `gateway-byok` mode the OpenRouter key crosses the Softaware gateway before
+reaching OpenRouter; choose `openrouter-direct` when
+the key must go directly to OpenRouter.
 
 1. **Gateway access token** — shared infrastructure, requires an approved token.
    Request one at [https://llm-proxy.lnf.gr/](https://llm-proxy.lnf.gr/).
@@ -107,6 +132,32 @@ npx @softawarest/token-optimizer-installer config --token <token>
 npx @softawarest/token-optimizer-installer config --byok-key sk-or-...
 npx @softawarest/token-optimizer-installer defaults --clients claude,codex,opencode
 ```
+
+## Inspect, repair, and remove safely
+
+Preview every mutation with `--dry-run` (or `--json` for automation), including
+managed paths, client commands, credential-store operations, and GUI-session
+environment changes. The ownership manifest at `~/.token-optimizer/manifest.json`
+stores paths, hashes, and references only—never raw API keys. Repair and
+uninstall operate only on matching managed hashes, preserving user edits.
+Rollback snapshots are scoped to selected client roots (and requested Cursor
+projects), avoiding unrelated macOS privacy-protected home directories.
+
+```bash
+npx @softawarest/token-optimizer-installer install --local --dry-run
+npx @softawarest/token-optimizer-installer status
+npx @softawarest/token-optimizer-installer doctor --strict
+npx @softawarest/token-optimizer-installer repair --dry-run
+npx @softawarest/token-optimizer-installer uninstall --dry-run
+```
+
+`status` is read-only; `doctor` performs a provider health check and exits `1`
+for errors, `2` for warnings with `--strict`, and `0` when healthy. Credential
+stores prefer macOS Keychain, Windows DPAPI/Credential Manager, and Linux
+Secret Service/libsecret; any fallback is visible in the dry-run plan. Legacy
+provider migration removes only superseded managed keys. Raw logs are scoped to
+an absolute workspace and managed with `logs status|prune|purge`; purge keeps
+baseline and analytics metadata unless explicit include flags are supplied.
 
 Flow-specific commands:
 

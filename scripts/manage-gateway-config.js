@@ -18,6 +18,10 @@ const MANAGED_ENV_KEYS = [
   "LOCAL_LLM_API_URL",
   "LOCAL_LLM_MODEL",
 ];
+/* New explicit-mode metadata is additive so callers relying on the v1 key
+   list continue to work while migrations can persist mode and references. */
+const PROVIDER_META_KEYS = ["TOKEN_OPTIMIZER_PROVIDER_MODE", "TOKEN_OPTIMIZER_CREDENTIAL_REF", "OPENROUTER_API_KEY"];
+const ALL_MANAGED_ENV_KEYS = [...MANAGED_ENV_KEYS, ...PROVIDER_META_KEYS];
 const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
 const DEFAULT_LOCAL_LLM_URL = "http://localhost:8080/v1";
 const DEFAULT_LOCAL_LLM_MODEL = "local-model";
@@ -26,7 +30,7 @@ const DEFAULT_LOCAL_LLM_MODEL = "local-model";
 const LAUNCH_AGENT_LABEL = "com.softawarest.token-optimizer.env";
 
 function emptyManagedValues() {
-  return Object.fromEntries(MANAGED_ENV_KEYS.map((key) => [key, ""]));
+  return Object.fromEntries(ALL_MANAGED_ENV_KEYS.map((key) => [key, ""]));
 }
 
 const DIRECTIVE_MARKER_START = "<!-- TOKEN_OPTIMIZER_START -->";
@@ -413,6 +417,7 @@ async function promptForProviderMode(rl) {
 
 async function collectGatewayValues(rl, existing) {
   const values = emptyManagedValues();
+  values.TOKEN_OPTIMIZER_PROVIDER_MODE = "gateway-token";
   values.LLM_GATEWAY_TOKEN = await askRequired(
     rl,
     `Gateway proxy token${existing.LLM_GATEWAY_TOKEN ? " [press Enter to keep current]" : ""}: `,
@@ -426,6 +431,7 @@ async function collectGatewayValues(rl, existing) {
 
 async function collectByokValues(rl, existing) {
   const values = emptyManagedValues();
+  values.TOKEN_OPTIMIZER_PROVIDER_MODE = "gateway-byok";
   const currentUrl = existing.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL;
   const urlAnswer = (await ask(rl, `Gateway URL [${currentUrl}]: `)).trim();
   values.LLM_GATEWAY_URL = urlAnswer || currentUrl;
@@ -446,6 +452,7 @@ async function collectByokValues(rl, existing) {
 
 async function collectLocalValues(rl, existing) {
   const values = emptyManagedValues();
+  values.TOKEN_OPTIMIZER_PROVIDER_MODE = "local";
   const currentUrl = existing.LOCAL_LLM_API_URL || DEFAULT_LOCAL_LLM_URL;
   const urlAnswer = (await ask(rl, `Local LLM endpoint [${currentUrl}]: `)).trim();
   values.LOCAL_LLM_API_URL = urlAnswer || currentUrl;
@@ -530,7 +537,7 @@ function printStatus(home) {
 }
 
 function summarizeValues(values) {
-  if (!MANAGED_ENV_KEYS.some((key) => values[key])) {
+  if (!ALL_MANAGED_ENV_KEYS.some((key) => values[key])) {
     return "not configured";
   }
   const parts = [];
@@ -717,7 +724,7 @@ function stripTrailingCommas(content) {
 function mergeManagedEnvValues(existingEnv, incomingValues) {
   const next = { ...existingEnv };
 
-  for (const envKey of MANAGED_ENV_KEYS) {
+  for (const envKey of [...MANAGED_ENV_KEYS, "TOKEN_OPTIMIZER_PROVIDER_MODE", "TOKEN_OPTIMIZER_CREDENTIAL_REF"]) {
     const value = incomingValues[envKey];
     if (value) {
       next[envKey] = value;
@@ -731,7 +738,7 @@ function mergeManagedEnvValues(existingEnv, incomingValues) {
 
 function sanitizeEnvObject(envObject) {
   const next = {};
-  for (const envKey of MANAGED_ENV_KEYS) {
+  for (const envKey of [...MANAGED_ENV_KEYS, "TOKEN_OPTIMIZER_PROVIDER_MODE", "TOKEN_OPTIMIZER_CREDENTIAL_REF"]) {
     if (typeof envObject[envKey] === "string" && envObject[envKey].trim() !== "") {
       next[envKey] = envObject[envKey];
     }
@@ -766,7 +773,7 @@ function ensureDirectory(dirPath) {
    same values when started from the Dock, Finder, Spotlight, or their own
    launchers, even after a restart. */
 function applyLaunchctlValues(values) {
-  for (const envKey of MANAGED_ENV_KEYS) {
+  for (const envKey of ALL_MANAGED_ENV_KEYS) {
     const value = values[envKey];
     if (value) {
       runLaunchctl(["setenv", envKey, value]);
@@ -778,7 +785,7 @@ function applyLaunchctlValues(values) {
 }
 
 function clearLaunchctlValues() {
-  for (const envKey of MANAGED_ENV_KEYS) {
+  for (const envKey of ALL_MANAGED_ENV_KEYS) {
     runLaunchctl(["unsetenv", envKey], { allowFailure: true });
   }
   writePersistentLaunchAgent(emptyManagedValues());
@@ -802,7 +809,7 @@ function writePersistentLaunchAgent(values) {
     process.env.LOCAL_OPTIMIZER_LAUNCHCTL_STATE_PATH ||
     process.env.LOCAL_TESTER_LAUNCHCTL_STATE_PATH;
   const plistPath = launchAgentPlistPath();
-  const hasAny = MANAGED_ENV_KEYS.some((envKey) => values[envKey]);
+  const hasAny = ALL_MANAGED_ENV_KEYS.some((envKey) => values[envKey]);
   if (!hasAny) {
     if (fs.existsSync(plistPath)) {
       fs.rmSync(plistPath, { force: true });
@@ -822,7 +829,7 @@ function writePersistentLaunchAgent(values) {
 
 function buildLaunchAgentPlist(values) {
   const shQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
-  const command = MANAGED_ENV_KEYS
+  const command = ALL_MANAGED_ENV_KEYS
     .filter((envKey) => values[envKey])
     .map((envKey) => `launchctl setenv ${envKey} ${shQuote(values[envKey])}`)
     .join("; ");
@@ -869,7 +876,7 @@ function reloadLaunchAgent(plistPath, remove, usingStateHook) {
 
 function readLaunchctlValues() {
   const values = {};
-  for (const envKey of MANAGED_ENV_KEYS) {
+  for (const envKey of ALL_MANAGED_ENV_KEYS) {
     const value = runLaunchctl(["printenv", envKey], {
       allowFailure: true,
       captureOutput: true,
@@ -978,7 +985,9 @@ if (require.main === module) {
 }
 
 module.exports = {
-  MANAGED_ENV_KEYS,
+  MANAGED_ENV_KEYS: ALL_MANAGED_ENV_KEYS,
+  PROVIDER_META_KEYS,
+  ALL_MANAGED_ENV_KEYS,
   DEFAULT_GATEWAY_URL,
   DEFAULT_LOCAL_LLM_URL,
   DEFAULT_LOCAL_LLM_MODEL,

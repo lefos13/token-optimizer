@@ -45,6 +45,12 @@ const MAX_RECORDS = 200;
 function indexPath(workspacePath) {
     return path.join(workspacePath, LOG_DIR, INDEX_FILE);
 }
+function writeIndexAtomic(file, records) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(temp, JSON.stringify(records, null, 2), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(temp, file);
+}
 function readRecords(workspacePath) {
     const file = indexPath(workspacePath);
     if (!fs.existsSync(file)) {
@@ -61,10 +67,27 @@ function readRecords(workspacePath) {
 }
 /* Append a run to the per-workspace index so every stored log gets a stable, resolvable runId handle. Best-effort: callers must not let an index failure break the underlying run. */
 function appendRun(workspacePath, record) {
-    const records = readRecords(workspacePath);
-    records.push(record);
-    const trimmed = records.length > MAX_RECORDS ? records.slice(records.length - MAX_RECORDS) : records;
-    fs.writeFileSync(indexPath(workspacePath), JSON.stringify(trimmed, null, 2), 'utf8');
+    const lock = `${indexPath(workspacePath)}.lock`;
+    fs.mkdirSync(path.dirname(lock), { recursive: true });
+    const wait = new Int32Array(new SharedArrayBuffer(4));
+    while (true) {
+        try {
+            fs.mkdirSync(lock);
+            break;
+        }
+        catch {
+            Atomics.wait(wait, 0, 0, 5);
+        }
+    }
+    try {
+        const records = readRecords(workspacePath);
+        records.push(record);
+        const trimmed = records.length > MAX_RECORDS ? records.slice(records.length - MAX_RECORDS) : records;
+        writeIndexAtomic(indexPath(workspacePath), trimmed);
+    }
+    finally {
+        fs.rmSync(lock, { recursive: true, force: true });
+    }
 }
 function loadRun(workspacePath, runId) {
     const records = readRecords(workspacePath);
@@ -77,13 +100,41 @@ function loadRun(workspacePath, runId) {
 }
 /* Resolve an absolute log path from either an explicit logPath (absolute or workspace-relative) or a runId looked up in the index. Returns null when neither resolves. */
 function resolveLogPath(workspacePath, opts) {
+    try {
+        const root = path.resolve(workspacePath, LOG_DIR);
+        if (fs.existsSync(root) && fs.lstatSync(root).isSymbolicLink())
+            return null;
+    }
+    catch {
+        return null;
+    }
     if (opts.logPath) {
-        return path.isAbsolute(opts.logPath) ? opts.logPath : path.resolve(workspacePath, opts.logPath);
+        const candidate = path.isAbsolute(opts.logPath) ? path.resolve(opts.logPath) : path.resolve(workspacePath, opts.logPath);
+        const root = path.resolve(workspacePath, LOG_DIR);
+        if (candidate !== root && !candidate.startsWith(`${root}${path.sep}`))
+            return null;
+        try {
+            const real = fs.realpathSync(candidate);
+            const canonicalRoot = fs.realpathSync(root);
+            return real === canonicalRoot || real.startsWith(`${canonicalRoot}${path.sep}`) ? real : null;
+        }
+        catch {
+            return null;
+        }
     }
     if (opts.runId) {
         const rec = loadRun(workspacePath, opts.runId);
         if (rec) {
-            return path.resolve(workspacePath, rec.rawLogPath);
+            const candidate = path.resolve(workspacePath, rec.rawLogPath);
+            const root = path.resolve(workspacePath, LOG_DIR);
+            try {
+                const real = fs.realpathSync(candidate);
+                const canonicalRoot = fs.realpathSync(root);
+                return real === canonicalRoot || real.startsWith(`${canonicalRoot}${path.sep}`) ? real : null;
+            }
+            catch {
+                return null;
+            }
         }
     }
     return null;

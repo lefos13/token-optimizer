@@ -36,8 +36,17 @@ const distDir = path.join(rootDir, "dist");
 const SERVER_FILES = [
   "index.js",
   "analytics.js",
+  "command-policy.js",
+  "execution-metadata.js",
+  "log-excerpt.js",
+  "log-store.js",
+  "process-tree.js",
   "detector.js",
   "llm.js",
+  "providers.js",
+  "llm-schemas.js",
+  "redaction.js",
+  "config.js",
   "registry.js",
   "runner.js",
   "types.js",
@@ -55,7 +64,7 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "1.12.1";
+  const VERSION = "2.0.0-beta.2";
 
   const sdkVersion = require(
     path.join(rootDir, "node_modules", "@modelcontextprotocol", "sdk", "package.json"),

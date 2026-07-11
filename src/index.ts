@@ -9,14 +9,17 @@ import { runSuite, trimLog, numberLines, getGitDiff, gatherCandidates } from './
 import { queryLocalLLM, queryCodeReview, queryCommandDigest, queryLogQuestion, queryScout, getLLMUsage, getLLMMetadata, attachLLMUsage, combineLLMUsage, checkLocalLLMHealth } from './llm';
 import { resolveLogPath, grepLog } from './registry';
 import { RunTestVerdictArgs, RunCommandDigestArgs, RunScoutArgs } from './types';
+import { resolveEffectiveConfig } from './config';
 import { buildAnalyticsRecord, inferWorkspaceFromLogPath, recordAnalytics } from './analytics';
 import * as fs from 'fs';
 import * as path from 'path';
+import { buildExecutionMetadata } from './execution-metadata';
+import { ensureSafeRoot, atomicWriteJson } from './log-store';
 
 const server = new Server(
   {
     name: 'token-optimizer-mcp',
-    version: '1.12.1',
+    version: '2.0.0-beta.2',
   },
   {
     capabilities: {
@@ -29,10 +32,14 @@ function jsonText(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
+/* Normalize execution outcomes into additive metadata while keeping legacy fields stable. */
+const executionMetadata = buildExecutionMetadata;
+
 /* Tool handlers build the exact MCP response text first, then persist separate analytics from that text and the local source material. */
 function recordToolAnalytics(workspacePath: string, input: {
   toolName: string;
   rawSourceText: string;
+  rawSourceBytes?: number;
   llmInputText?: string;
   responseText: string;
   llmResult?: unknown;
@@ -48,6 +55,7 @@ function recordToolAnalytics(workspacePath: string, input: {
   recordAnalytics(workspacePath, buildAnalyticsRecord({
     toolName: input.toolName,
     rawSourceText: input.rawSourceText,
+    rawSourceBytes: input.rawSourceBytes,
     llmInputText: input.llmInputText,
     responseText: input.responseText,
     llmUsage: getLLMUsage(input.llmResult),
@@ -112,6 +120,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             autoTriage: {
               type: 'boolean',
               description: 'Optional. When true, automatically triage failures/uncertainties internally and attach the results.'
+            },
+            executionProfile: {
+              type: 'string', enum: ['safe', 'standard', 'unrestricted'],
+              description: 'Optional execution profile; may narrow the configured user ceiling.'
+            },
+            allowedCommandPrefixes: {
+              type: 'array', items: { type: 'string' },
+              description: 'Optional command-prefix allowlist; may narrow the configured user allowlist.'
             }
           },
           required: ['workspacePath', 'taskSummary']
@@ -123,9 +139,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: 'object',
           properties: {
+            workspacePath: { type: 'string', description: 'Workspace containing the managed log store.' },
             logPath: { type: 'string', description: 'Path to log file.' }
           },
-          required: ['logPath']
+          required: ['workspacePath', 'logPath']
         }
       },
       {
@@ -150,7 +167,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         inputSchema: {
           type: 'object',
           properties: {
-            workspacePath: { type: 'string' }
+            workspacePath: { type: 'string' },
+            executionProfile: { type: 'string', enum: ['safe', 'standard', 'unrestricted'] },
+            allowedCommandPrefixes: { type: 'array', items: { type: 'string' } }
           },
           required: ['workspacePath']
         }
@@ -183,7 +202,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             maxOutputLines: {
               type: 'number',
               description: 'Optional cap on how many log lines are sent to the local model.'
-            }
+            },
+            executionProfile: { type: 'string', enum: ['safe', 'standard', 'unrestricted'] },
+            allowedCommandPrefixes: { type: 'array', items: { type: 'string' } }
           },
           required: ['workspacePath', 'command', 'intent']
         }
@@ -292,12 +313,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   };
 });
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+export async function handleToolCall(request: any) {
   const { name, arguments: args } = request.params;
 
   if (name === 'check_local_llm_health') {
     try {
-      const health = await checkLocalLLMHealth();
+      const health = await checkLocalLLMHealth(process.cwd());
       const text = jsonText(health);
       recordToolAnalytics(process.cwd(), {
         toolName: 'check_local_llm_health',
@@ -327,7 +348,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       maxOutputLines,
       timeoutMs,
       parallel,
-      autoTriage
+      autoTriage,
+      executionProfile,
+      allowedCommandPrefixes
     } = args as unknown as RunTestVerdictArgs;
 
     try {
@@ -367,7 +390,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // 2. Run commands
-      const suiteResult = await runSuite(commandsToRun, workspacePath, { maxOutputLines, timeoutMs, parallel });
+      const effective = resolveEffectiveConfig({ workspacePath, env: process.env, tool: { execution: { profile: executionProfile, allowedCommandPrefixes } } });
+      const execution = { ...effective.execution, autoDetectedCommands: testCommand ? [] : commandsToRun };
+      const suiteResult = await runSuite(commandsToRun, workspacePath, { maxOutputLines, timeoutMs, parallel, execution, storageMode: effective.logs.storageMode, retentionDays: effective.logs.retentionDays, maxDiskMb: effective.logs.maxDiskMb });
 
       // Create a dictionary of command -> exitCode for easy triaging
       const exitCodes: Record<string, number> = {};
@@ -385,8 +410,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         commandsToRun,
         exitCodes,
         changedFiles,
-        suiteResult.trimmedLogContent
-      );
+        suiteResult.trimmedLogContent,
+        undefined,
+        workspacePath);
 
       // Map local LLM verdict to overall result
       // Keep safety: command exit codes are authoritative and the local LLM cannot override them.
@@ -401,14 +427,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       let triageResult: any = undefined;
       if (autoTriage && (finalVerdict === 'fail' || finalVerdict === 'uncertain')) {
         const question = "which tests failed, on which lines, and what is the error message?";
-        const numbered = numberLines(suiteResult.rawLogContent);
+        const numbered = numberLines(fs.readFileSync(path.resolve(workspacePath, suiteResult.rawLogPath), 'utf8'));
         // Default log query budget is 1200 lines
         const budget = 1200;
         const startBudget = Math.max(1, Math.floor(budget / 3));
         const bounded = trimLog(numbered, startBudget, budget - startBudget);
 
         try {
-          triageResult = await queryLogQuestion(question, bounded);
+          triageResult = await queryLogQuestion(question, bounded, workspacePath);
         } catch (triageErr: any) {
           triageResult = {
             answer: `Failed to query log internally: ${triageErr.message || triageErr}`,
@@ -440,7 +466,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         rawLogPath: suiteResult.rawLogPath,
         needsRawLogs: triage.needsRawLogs,
         likelyRelevantToRecentChanges: triage.likelyRelevantToRecentChanges,
-        ...getLLMMetadata(triage)
+        ...getLLMMetadata(triage),
+        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, effective.warnings),
+        providerStatus: triage.llmAvailable === false ? 'unavailable' : (triage.fallbackReason ? 'fallback' : 'available')
       };
 
       if (triageResult) {
@@ -450,7 +478,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const text = jsonText(output);
       recordToolAnalytics(workspacePath, {
         toolName: 'run_test_verdict',
-        rawSourceText: suiteResult.rawLogContent,
+        rawSourceText: '',
+        rawSourceBytes: suiteResult.rawSourceBytes,
         llmInputText: suiteResult.trimmedLogContent,
         responseText: text,
         llmResult: triage,
@@ -486,9 +515,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   // Implement actual tool handlers
   if (name === 'run_failure_triage') {
-    const { logPath } = args as { logPath: string };
+    const { workspacePath, logPath, runId } = args as { workspacePath: string; logPath?: string; runId?: string };
     try {
-      const resolvedPath = path.resolve(logPath);
+      const resolvedPath = resolveLogPath(workspacePath, { logPath, runId });
+      if (!resolvedPath || !path.resolve(resolvedPath).startsWith(path.resolve(workspacePath, '.codex-local-test-runs') + path.sep)) throw new Error('Log path must be inside the managed workspace log directory.');
+      const st = fs.lstatSync(resolvedPath); if (st.isSymbolicLink() || !st.isFile()) throw new Error('Log path must be a regular file.');
       if (!fs.existsSync(resolvedPath)) {
         return {
           content: [
@@ -503,6 +534,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const logContent = fs.readFileSync(resolvedPath, 'utf8');
       const trimmed = trimLog(logContent);
+      const workspaceForAnalytics = workspacePath;
 
       const triage = await queryLocalLLM(
         "Triage request for log file",
@@ -510,9 +542,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         {},
         [],
         trimmed,
-        'triage'
-      );
-      const workspaceForAnalytics = inferWorkspaceFromLogPath(resolvedPath);
+        'triage',
+        workspaceForAnalytics);
       const output = {
         verdict: triage.verdict,
         confidence: triage.confidence,
@@ -611,7 +642,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      const review = await queryCodeReview(filesToReview);
+      const review = await queryCodeReview(filesToReview, workspacePath);
       const rawSourceText = filesToReview.map((f) => f.content).join('\n');
       const output = { ...review, skipped };
       const text = jsonText(output);
@@ -645,7 +676,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   if (name === 'run_regression_check') {
-    const { workspacePath } = args as { workspacePath: string };
+    const { workspacePath, executionProfile, allowedCommandPrefixes } = args as { workspacePath: string; executionProfile?: any; allowedCommandPrefixes?: string[] };
     try {
       const commandsToRun = await detectCommands(workspacePath);
       if (commandsToRun.length === 0) {
@@ -671,7 +702,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      const suiteResult = await runSuite(commandsToRun, workspacePath, {});
+      const effective = resolveEffectiveConfig({ workspacePath, env: process.env, tool: { execution: { profile: executionProfile, allowedCommandPrefixes } } });
+      const suiteResult = await runSuite(commandsToRun, workspacePath, { execution: { ...effective.execution, autoDetectedCommands: commandsToRun }, storageMode: effective.logs.storageMode, retentionDays: effective.logs.retentionDays, maxDiskMb: effective.logs.maxDiskMb });
       const exitCodes: Record<string, number> = {};
       let hasFailures = false;
       for (const res of suiteResult.results) {
@@ -691,7 +723,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         success: !hasFailures
       };
 
-      if (fs.existsSync(baselinePath)) {
+      let baselineIsSafe = false;
+      try { const st = fs.lstatSync(baselinePath); baselineIsSafe = st.isFile() && !st.isSymbolicLink(); } catch (e: any) { if (e?.code !== 'ENOENT') throw e; }
+      if (baselineIsSafe) {
         try {
           const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
           isRegression = hasFailures && baseline.success;
@@ -702,18 +736,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // Save current run as baseline for future checks
-      fs.writeFileSync(baselinePath, JSON.stringify(currentRunData, null, 2), 'utf8');
+      await ensureSafeRoot(workspacePath);
+      await atomicWriteJson(baselinePath, currentRunData);
       const runId = path.basename(suiteResult.rawLogPath).replace(/\.log$/, '');
       const output = {
         isRegression,
         comparison,
         currentRun: currentRunData,
-        rawLogPath: suiteResult.rawLogPath
+        rawLogPath: suiteResult.rawLogPath,
+        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, effective.warnings),
+        providerStatus: 'unknown'
       };
       const text = jsonText(output);
       recordToolAnalytics(workspacePath, {
         toolName: 'run_regression_check',
-        rawSourceText: suiteResult.rawLogContent,
+        rawSourceText: '',
+        rawSourceBytes: suiteResult.rawSourceBytes,
         responseText: text,
         runId,
         rawLogPath: suiteResult.rawLogPath,
@@ -744,7 +782,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   if (name === 'run_command_digest') {
-    const { workspacePath, command, intent, timeoutMs, maxOutputLines } = args as unknown as RunCommandDigestArgs;
+    const { workspacePath, command, intent, timeoutMs, maxOutputLines, executionProfile, allowedCommandPrefixes } = args as unknown as RunCommandDigestArgs;
     try {
       const commandsToRun = Array.isArray(command) ? command : [command];
       if (commandsToRun.length === 0 || commandsToRun.some((c) => typeof c !== 'string' || c.trim() === '')) {
@@ -754,7 +792,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      const suiteResult = await runSuite(commandsToRun, workspacePath, { maxOutputLines, timeoutMs });
+      const effective = resolveEffectiveConfig({ workspacePath, env: process.env, tool: { execution: { profile: executionProfile, allowedCommandPrefixes } } });
+      const suiteResult = await runSuite(commandsToRun, workspacePath, { maxOutputLines, timeoutMs, execution: effective.execution, storageMode: effective.logs.storageMode, retentionDays: effective.logs.retentionDays, maxDiskMb: effective.logs.maxDiskMb });
 
       /* Exit codes stay authoritative: report them verbatim and derive an effective code (non-zero if any command failed). The LLM only describes the output. */
       const exitCodes: Record<string, number> = {};
@@ -771,7 +810,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         commandsToRun,
         exitCodes,
         suiteResult.trimmedLogContent
-      );
+      , workspacePath);
 
       const runId = path.basename(suiteResult.rawLogPath).replace(/\.log$/, '');
 
@@ -784,12 +823,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         runId,
         rawLogPath: suiteResult.rawLogPath,
         needsRawLogs: digest.needsRawLogs,
-        ...getLLMMetadata(digest)
+        ...getLLMMetadata(digest),
+        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, effective.warnings),
+        providerStatus: digest.llmAvailable === false ? 'unavailable' : (digest.fallbackReason ? 'fallback' : 'available')
       };
       const text = jsonText(output);
       recordToolAnalytics(workspacePath, {
         toolName: 'run_command_digest',
-        rawSourceText: suiteResult.rawLogContent,
+        rawSourceText: '',
+        rawSourceBytes: suiteResult.rawSourceBytes,
         llmInputText: suiteResult.trimmedLogContent,
         responseText: text,
         llmResult: digest,
@@ -840,7 +882,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const startBudget = Math.max(1, Math.floor(budget / 3));
       const bounded = trimLog(numbered, startBudget, budget - startBudget);
 
-      const res = await queryLogQuestion(question, bounded);
+      const res = await queryLogQuestion(question, bounded, workspacePath);
       const output = { ...res, rawLogPath: path.relative(workspacePath, absLog) };
       const text = jsonText(output);
       recordToolAnalytics(workspacePath, {
@@ -956,7 +998,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: 'text', text }] };
       }
 
-      const scout = await queryScout(goal, gathered.candidates);
+      const scout = await queryScout(goal, gathered.candidates, workspacePath);
 
       const rawSourceText = gathered.candidates
         .map((c) => `${c.file}\n${c.regions.map((r) => r.snippet).join('\n')}`)
@@ -995,7 +1037,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   throw new Error(`Unknown tool: ${name}`);
-});
+}
+
+server.setRequestHandler(CallToolRequestSchema, handleToolCall);
 
 const STOP_WORDS = new Set([
   'the', 'and', 'for', 'with', 'where', 'what', 'which', 'how', 'does', 'this', 'that',
@@ -1022,7 +1066,11 @@ async function main() {
   await server.connect(transport);
 }
 
-main().catch((error) => {
-  console.error('Server execution error:', error);
-  process.exit(1);
-});
+if (process.env.TOKEN_OPTIMIZER_NO_AUTOSTART !== '1') {
+  main().catch((error) => {
+    console.error('Server execution error:', error);
+    process.exit(1);
+  });
+}
+
+export { server };

@@ -1,0 +1,69 @@
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+/* Ownership is persisted separately from installer execution so a later run
+   can distinguish files it owns from user edits. Replacement is atomic and
+   permissions are private because the manifest contains filesystem metadata. */
+const SCHEMA_VERSION = 2;
+function manifestPath(home) { return path.join(path.resolve(home || process.env.HOME || os.homedir()), ".token-optimizer", "manifest.json"); }
+
+function validateManifest(manifest, home) {
+  if (!manifest || manifest.schemaVersion !== SCHEMA_VERSION || !Array.isArray(manifest.files)) {
+    throw new Error(`invalid ownership manifest schema (expected ${SCHEMA_VERSION})`);
+  }
+  if (!Array.isArray(manifest.roots) || manifest.roots.length === 0 || manifest.roots.some((root) => typeof root !== "string" || !path.isAbsolute(root))) throw new Error("manifest requires absolute allowed roots");
+  const roots = manifest.roots.map((root) => path.resolve(root));
+  const rootRealpaths = roots.map((root) => realpathWithMissingTail(root));
+  for (const file of manifest.files) {
+    if (!file || typeof file.path !== "string" || !path.isAbsolute(file.path) || file.path.includes("\0") || file.path.split(path.sep).includes("..")) {
+      throw new Error("manifest contains an invalid path");
+    }
+    const resolved = path.resolve(file.path);
+    const canonical = realpathWithMissingTail(resolved);
+    if (!rootRealpaths.some((root) => canonical === root || canonical.startsWith(`${root}${path.sep}`))) throw new Error(`manifest path outside known roots: ${file.path}`);
+    if (typeof file.sha256 !== "string" || typeof file.ownership !== "string") throw new Error("manifest file entries require sha256 and ownership");
+  }
+  return manifest;
+}
+
+function realpathWithMissingTail(target) {
+  let current = path.resolve(target); const tail = [];
+  while (!fs.existsSync(current)) { const parent = path.dirname(current); if (parent === current) break; tail.unshift(path.basename(current)); current = parent; }
+  let resolved = fs.realpathSync.native(current);
+  for (const part of tail) resolved = path.join(resolved, part);
+  return resolved;
+}
+
+function ensurePrivate(filePath) {
+  const directory = path.dirname(filePath);
+  if (process.platform !== "win32") {
+    fs.chmodSync(directory, 0o700);
+    if (fs.existsSync(filePath)) fs.chmodSync(filePath, 0o600);
+    if ((fs.statSync(directory).mode & 0o777) !== 0o700 || (fs.existsSync(filePath) && (fs.statSync(filePath).mode & 0o777) !== 0o600)) throw new Error("ownership manifest permissions are not private");
+  }
+}
+
+function writeManifest(home, manifest) {
+  const filePath = manifestPath(home);
+  const validated = validateManifest(manifest, home);
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  ensurePrivate(filePath);
+  fs.writeFileSync(tempPath, `${JSON.stringify(validated, null, 2)}\n`, { mode: 0o600 });
+  try { fs.chmodSync(tempPath, 0o600); } catch { /* best effort on Windows */ }
+  fs.renameSync(tempPath, filePath);
+  return filePath;
+}
+
+function readManifest(home) {
+  const filePath = manifestPath(home);
+  let parsed;
+  try { parsed = JSON.parse(fs.readFileSync(filePath, "utf8")); }
+  catch (error) { if (error && error.code === "ENOENT") return null; throw new Error(`unable to read ownership manifest: ${error.message}`); }
+  const result = validateManifest(parsed, home);
+  ensurePrivate(filePath);
+  return result;
+}
+
+module.exports = { SCHEMA_VERSION, manifestPath, validateManifest, writeManifest, readManifest };

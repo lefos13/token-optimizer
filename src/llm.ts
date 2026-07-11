@@ -1,5 +1,12 @@
-import { FailureDetail, LogQueryResponse, ScoutResponse, ScoutPointer, LLMResponseMetadata } from './types';
+import { FailureDetail, LogQueryResponse, ScoutResponse, ScoutPointer, LLMResponseMetadata, LLMValidationError } from './types';
 import { FileCandidate } from './runner';
+import { LLMProvider, LLMHealthResponse, LLMTaskType, resolveProvider, providerHealth } from './providers';
+import { parseLLMResponse } from './llm-schemas';
+import { redactText, RedactionResult } from './redaction';
+import { resolveEffectiveConfig } from './config';
+import type { EffectiveConfig } from './types';
+export { resolveProvider, providerHealth } from './providers';
+export type { LLMProvider, LLMHealthResponse, LLMTaskType } from './providers';
 
 /* Token usage is attached as private metadata for analytics, while provider metadata is also copied onto MCP JSON responses so callers can tell which local model answered and whether a fallback path was used. */
 export interface LLMUsage {
@@ -17,23 +24,6 @@ interface ChatCompletionResult {
 
 const LLM_USAGE = Symbol('llmUsage');
 const LLM_METADATA = Symbol('llmMetadata');
-
-export type LLMTaskType = 'verdict' | 'triage' | 'review' | 'digest' | 'scout' | 'query' | 'health';
-
-interface LLMProvider {
-  taskType: LLMTaskType;
-  providerName: string;
-  apiUrl: string;
-  model: string;
-  authHeaders: Record<string, string>;
-}
-
-export interface LLMHealthResponse extends LLMResponseMetadata {
-  apiBase: string;
-  available: boolean;
-  error?: string;
-  skipped?: boolean;
-}
 
 const LOCAL_PROVIDER_NAME = 'local-openai-compatible';
 export const GATEWAY_PROVIDER_NAME = 'gateway';
@@ -102,7 +92,22 @@ function metadataFromProvider(provider: LLMProvider, latencyMs: number, fallback
     llmModel: provider.model,
     llmLatencyMs: latencyMs,
     llmTaskType: provider.taskType,
+    ...(provider.warnings.length ? { providerWarnings: provider.warnings } : {}),
     ...(fallbackReason ? { fallbackReason } : {})
+  };
+}
+
+function summarizeRedaction(systemPrompt: string, userPrompt: string): { systemPrompt: string; userPrompt: string; summary: RedactionResult } {
+  const system = redactText(systemPrompt);
+  const user = redactText(userPrompt);
+  return {
+    systemPrompt: system.text,
+    userPrompt: user.text,
+    summary: {
+      text: '',
+      count: system.count + user.count,
+      categories: [...new Set([...system.categories, ...user.categories])].sort()
+    }
   };
 }
 
@@ -116,15 +121,32 @@ function fallbackMetadata(provider: LLMProvider, error: unknown, latencyMs: numb
   return metadataFromProvider(provider, latencyMs, message);
 }
 
-function resolveLocalProvider(taskType: LLMTaskType): LLMProvider {
-  const modelEnvName = TASK_MODEL_ENV[taskType];
-  return {
-    taskType,
-    providerName: LOCAL_PROVIDER_NAME,
-    apiUrl: process.env.LOCAL_LLM_API_URL || DEFAULT_API_URL,
-    model: (modelEnvName && process.env[modelEnvName]) || process.env.LOCAL_LLM_MODEL || DEFAULT_MODEL,
-    authHeaders: {}
-  };
+class LLMValidationFailure extends Error {
+  constructor(public readonly validationErrors: LLMValidationError[]) {
+    super('LLM response failed schema validation');
+  }
+}
+
+function metadataForFailure(provider: LLMProvider, error: unknown, latencyMs: number, completion?: ChatCompletionResult): LLMResponseMetadata {
+  const metadata = completion?.metadata || fallbackMetadata(provider, error, latencyMs);
+  if (error instanceof LLMValidationFailure) metadata.validationErrors = error.validationErrors;
+  metadata.llmAvailable = false;
+  metadata.fallbackReason = error instanceof Error ? error.message : String(error);
+  return metadata;
+}
+
+type LLMContext = { workspacePath?: string; effectiveConfig?: EffectiveConfig };
+
+function resolveContextProvider(taskType: LLMTaskType, context: LLMContext = {}): LLMProvider {
+  const effective = context.effectiveConfig || resolveEffectiveConfig({ workspacePath: context.workspacePath });
+  return resolveProvider(effective.provider, taskType);
+}
+
+function resolveLocalProvider(taskType: LLMTaskType, context: LLMContext = {}): LLMProvider {
+  /* Leave model empty so the adapter applies task-specific LOCAL_LLM_<TASK>_MODEL
+     before the shared LOCAL_LLM_MODEL fallback. */
+  const effective = context.effectiveConfig || resolveEffectiveConfig({ workspacePath: context.workspacePath, env: process.env });
+  return resolveProvider({ ...effective.provider, mode: 'local', apiUrl: process.env.LOCAL_LLM_API_URL || DEFAULT_API_URL, model: '' }, taskType);
 }
 
 /* Gateway is the centralized proxy: it pins the model per task type via
@@ -137,6 +159,8 @@ function resolveLocalProvider(taskType: LLMTaskType): LLMProvider {
      model, it never authenticates a BYOK-only caller. An optional model
      header is sent only on the user-funded BYOK path. Either value alone is
      enough to engage the gateway; both may be set together. */
+/* Legacy environment resolution remains available through resolveProvider(taskType);
+   callers using EffectiveConfig should pass the provider object explicitly. */
 function resolveGatewayProvider(taskType: LLMTaskType): LLMProvider | null {
   const token = process.env.LLM_GATEWAY_TOKEN;
   const url = process.env.LLM_GATEWAY_URL;
@@ -145,26 +169,7 @@ function resolveGatewayProvider(taskType: LLMTaskType): LLMProvider | null {
   if (!url || (!token && !byokKey)) {
     return null;
   }
-  return {
-    taskType,
-    providerName: GATEWAY_PROVIDER_NAME,
-    apiUrl: url.replace(/\/+$/, ''),
-    model: 'gateway-managed',
-    authHeaders: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      'X-Task-Type': taskType,
-      ...(byokKey ? { 'X-OpenRouter-Key': byokKey } : {}),
-      ...(byokKey && byokModel ? { 'X-OpenRouter-Model': byokModel } : {})
-    }
-  };
-}
-
-export function resolveProvider(taskType: LLMTaskType): LLMProvider {
-  const gateway = resolveGatewayProvider(taskType);
-  if (gateway) {
-    return gateway;
-  }
-  return resolveLocalProvider(taskType);
+  return resolveProvider({ mode: token ? 'gateway-token' : 'gateway-byok', apiUrl: url, model: 'gateway-managed', credentialEnv: token ? 'LLM_GATEWAY_TOKEN' : 'OPENROUTER_BYOK_KEY' }, taskType);
 }
 
 export function combineLLMUsage(usage1?: LLMUsage, usage2?: LLMUsage): LLMUsage | undefined {
@@ -235,8 +240,13 @@ function normalizeUsage(data: any, systemPrompt: string, userPrompt: string, raw
 }
 
 /* Shared transport for every LLM call: accepts an already-resolved provider, builds the OpenAI-compatible request, and returns raw message content plus token/provider accounting. */
-async function callChatCompletion(provider: LLMProvider, systemPrompt: string, userPrompt: string): Promise<ChatCompletionResult> {
+async function callChatCompletion(provider: LLMProvider, systemPrompt: string, userPrompt: string, inheritedRedaction?: RedactionResult): Promise<ChatCompletionResult> {
   const start = Date.now();
+  /* Redact only at the final remote boundary. Local providers retain the full
+     diagnostic payload so offline development and local models are unchanged. */
+  const outbound = provider.mode === 'local'
+    ? { systemPrompt, userPrompt, redaction: inheritedRedaction }
+    : (() => { const result = summarizeRedaction(systemPrompt, userPrompt); return { ...result, redaction: result.summary }; })();
 
   const response = await fetch(`${provider.apiUrl}/chat/completions`, {
     method: 'POST',
@@ -247,8 +257,8 @@ async function callChatCompletion(provider: LLMProvider, systemPrompt: string, u
     body: JSON.stringify({
       model: provider.model,
       messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
+        { role: 'system', content: outbound.systemPrompt },
+        { role: 'user', content: outbound.userPrompt }
       ],
       temperature: 0.1,
       response_format: { type: 'json_object' }
@@ -268,26 +278,29 @@ async function callChatCompletion(provider: LLMProvider, systemPrompt: string, u
      analytics/metadata reflect central config without any client update. */
   const responseModel = typeof data.model === 'string' && data.model ? data.model : provider.model;
   const metadata = metadataFromProvider(provider, Date.now() - start);
+  if (provider.mode !== 'local' && outbound.redaction) {
+    metadata.redactionSummary = { count: outbound.redaction.count, categories: outbound.redaction.categories };
+  }
   metadata.llmModel = responseModel;
   return {
     content: rawContent,
-    usage: normalizeUsage(data, systemPrompt, userPrompt, rawContent),
+    usage: normalizeUsage(data, outbound.systemPrompt, outbound.userPrompt, rawContent),
     metadata
   };
 }
 
 /* Resolve provider, attempt the call. If the primary provider is the gateway and the call
    fails, retry once with the local provider and surface the fallback reason in metadata. */
-async function callWithFallback(taskType: LLMTaskType, systemPrompt: string, userPrompt: string): Promise<ChatCompletionResult> {
-  const provider = resolveProvider(taskType);
-  const isRemote = provider.providerName === GATEWAY_PROVIDER_NAME;
+async function callWithFallback(taskType: LLMTaskType, systemPrompt: string, userPrompt: string, context: LLMContext = {}): Promise<ChatCompletionResult> {
+  const provider = resolveContextProvider(taskType, context);
+  const isRemote = provider.mode !== 'local';
   try {
     return await callChatCompletion(provider, systemPrompt, userPrompt);
   } catch (error) {
     if (!isRemote) {
       throw error;
     }
-    const localProvider = resolveLocalProvider(taskType);
+    const localProvider = resolveLocalProvider(taskType, context);
     const result = await callChatCompletion(localProvider, systemPrompt, userPrompt);
     result.metadata = {
       ...result.metadata,
@@ -307,69 +320,8 @@ function redactApiBase(apiUrl: string): string {
   }
 }
 
-export async function checkLocalLLMHealth(): Promise<LLMHealthResponse> {
-  /* Gateway is the configured primary whenever a token or a BYOK key is set
-     (see resolveGatewayProvider): ping its /health (served at the root, not
-     under /v1) to confirm reachability before real calls spend tokens. A
-     BYOK-only setup has no token to validate, so the request omits auth
-     entirely and this only proves the gateway itself is reachable. */
-  const gatewayUrl = process.env.LLM_GATEWAY_URL;
-  const gatewayToken = process.env.LLM_GATEWAY_TOKEN;
-  if (gatewayUrl && (gatewayToken || process.env.OPENROUTER_BYOK_KEY)) {
-    const base = gatewayUrl.replace(/\/+$/, '');
-    const healthUrl = `${base.replace(/\/v1$/, '')}/health`;
-    const start = Date.now();
-    try {
-      const response = await fetch(healthUrl, gatewayToken ? { headers: { Authorization: `Bearer ${gatewayToken}` } } : {});
-      if (!response.ok) {
-        throw new Error(`Gateway health ${response.status} ${response.statusText}`);
-      }
-      return {
-        llmAvailable: true,
-        llmProvider: GATEWAY_PROVIDER_NAME,
-        llmModel: 'gateway-managed',
-        llmLatencyMs: Date.now() - start,
-        llmTaskType: 'health',
-        apiBase: redactApiBase(base),
-        available: true
-      };
-    } catch (error: any) {
-      return {
-        llmAvailable: false,
-        llmProvider: GATEWAY_PROVIDER_NAME,
-        llmModel: 'gateway-managed',
-        llmLatencyMs: Date.now() - start,
-        llmTaskType: 'health',
-        apiBase: redactApiBase(base),
-        available: false,
-        error: error.message || String(error)
-      };
-    }
-  }
-
-  const provider = resolveLocalProvider('health');
-  const systemPrompt = 'Return JSON only.';
-  const userPrompt = 'Return {"ok":true}.';
-  const start = Date.now();
-
-  try {
-    const completion = await callChatCompletion(provider, systemPrompt, userPrompt);
-    JSON.parse(extractJSON(completion.content));
-    return {
-      ...completion.metadata,
-      apiBase: redactApiBase(provider.apiUrl),
-      available: true
-    };
-  } catch (error: any) {
-    const latencyMs = Date.now() - start;
-    const metadata = fallbackMetadata(provider, error, latencyMs);
-    return {
-      ...metadata,
-      apiBase: redactApiBase(provider.apiUrl),
-      available: false,
-      error: error.message || String(error)
-    };
-  }
+export async function checkLocalLLMHealth(workspacePath?: string): Promise<LLMHealthResponse> {
+  return providerHealth(resolveContextProvider('health', { workspacePath }));
 }
 
 export async function queryLocalLLM(
@@ -378,7 +330,8 @@ export async function queryLocalLLM(
   exitCodes: Record<string, number>,
   changedFiles: string[],
   trimmedLogs: string,
-  taskType: Extract<LLMTaskType, 'verdict' | 'triage'> = 'verdict'
+  taskType: Extract<LLMTaskType, 'verdict' | 'triage'> = 'verdict',
+  workspacePath?: string
 ): Promise<LLMVerdictResponse> {
   const systemPrompt = `You are a diagnostic and test-log triage assistant.
 You analyze build logs, linter outputs, typechecker warnings/errors, and test execution results.
@@ -414,26 +367,13 @@ Logs:
 ${trimmedLogs}`;
 
   const start = Date.now();
+  let completion: ChatCompletionResult | undefined;
   try {
-    const completion = await callWithFallback(taskType, systemPrompt, userPrompt);
+    completion = await callWithFallback(taskType, systemPrompt, userPrompt, { workspacePath });
     const jsonString = extractJSON(completion.content);
-    const parsed = JSON.parse(jsonString) as Partial<LLMVerdictResponse>;
-    const result: LLMVerdictResponse = {
-      verdict: parsed.verdict || 'uncertain',
-      confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0,
-      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
-      likelyRelevantToRecentChanges: typeof parsed.likelyRelevantToRecentChanges === 'boolean' ? parsed.likelyRelevantToRecentChanges : false,
-      failures: Array.isArray(parsed.failures) ? parsed.failures : [],
-      needsRawLogs: typeof parsed.needsRawLogs === 'boolean' ? parsed.needsRawLogs : false
-    };
-
-    // Validate verdict values
-    if (!['pass', 'fail', 'uncertain'].includes(result.verdict)) {
-      result.verdict = 'uncertain';
-    }
-    if (typeof result.confidence !== 'number' || !Number.isFinite(result.confidence)) {
-      result.confidence = 0;
-    }
+    const parsed = parseLLMResponse(taskType, jsonString);
+    if (!parsed.success) throw new LLMValidationFailure(parsed.validationErrors);
+    const result: LLMVerdictResponse = parsed.data as LLMVerdictResponse;
     if (result.confidence < VERDICT_CONFIDENCE_FLOOR) {
       result.verdict = 'uncertain';
       result.needsRawLogs = true;
@@ -450,7 +390,7 @@ ${trimmedLogs}`;
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
     // If the local model is offline, fails to respond, or output is unparseable
-    const provider = resolveProvider(taskType);
+    const provider = resolveContextProvider(taskType, { workspacePath });
     return attachLLMMetadata({
       verdict: 'uncertain',
       confidence: 0.0,
@@ -458,7 +398,7 @@ ${trimmedLogs}`;
       likelyRelevantToRecentChanges: false,
       failures: [],
       needsRawLogs: true,
-    }, fallbackMetadata(provider, error, Date.now() - start));
+    }, metadataForFailure(provider, error, Date.now() - start, completion));
   }
 }
 
@@ -480,7 +420,7 @@ export interface CodeReviewResponse extends LLMResponseMetadata {
 }
 
 export async function queryCodeReview(
-  files: { filename: string; content: string }[]
+  files: { filename: string; content: string }[], workspacePath?: string
 ): Promise<CodeReviewResponse> {
   const systemPrompt = `You are a code review assistant.
 Analyze the provided code changes in the files.
@@ -509,27 +449,24 @@ Schema:
   }
 
   const start = Date.now();
+  let completion: ChatCompletionResult | undefined;
   try {
-    const completion = await callWithFallback('review', systemPrompt, userPrompt);
+    completion = await callWithFallback('review', systemPrompt, userPrompt, { workspacePath });
     const jsonString = extractJSON(completion.content);
-    const parsed = JSON.parse(jsonString) as Partial<CodeReviewResponse>;
-    const result: CodeReviewResponse = {
-      hasIssues: typeof parsed.hasIssues === 'boolean' ? parsed.hasIssues : false,
-      issues: Array.isArray(parsed.issues) ? parsed.issues : [],
-      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
-      reviewAvailable: true
-    };
+    const parsed = parseLLMResponse('review', jsonString);
+    if (!parsed.success) throw new LLMValidationFailure(parsed.validationErrors);
+    const result: CodeReviewResponse = { ...(parsed.data as Omit<CodeReviewResponse, 'reviewAvailable'>), reviewAvailable: true };
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
     /* The local LLM is offline or returned unparseable output. Stay conservative: report no issues rather than a phantom warning, and flag that the review did not actually run. */
-    const provider = resolveProvider('review');
+    const provider = resolveContextProvider('review', { workspacePath });
     return attachLLMMetadata({
       hasIssues: false,
       issues: [],
       summary: 'Code review did not run.',
       reviewAvailable: false,
       note: `Failed to review code using local LLM: ${error.message || error}`
-    }, fallbackMetadata(provider, error, Date.now() - start));
+    }, metadataForFailure(provider, error, Date.now() - start, completion));
   }
 }
 
@@ -545,7 +482,7 @@ export async function queryCommandDigest(
   intent: string,
   commands: string[],
   exitCodes: Record<string, number>,
-  trimmedLogs: string
+  trimmedLogs: string, workspacePath?: string
 ): Promise<CommandDigestResponse> {
   const systemPrompt = `You are a command-output digest assistant.
 You are given the output of one or more shell commands and the caller's intent for running them.
@@ -570,31 +507,28 @@ Output:
 ${trimmedLogs}`;
 
   const start = Date.now();
+  let completion: ChatCompletionResult | undefined;
   try {
-    const completion = await callWithFallback('digest', systemPrompt, userPrompt);
-    const parsed = JSON.parse(extractJSON(completion.content)) as CommandDigestResponse;
-    const result: CommandDigestResponse = {
-      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
-      keyFindings: Array.isArray(parsed.keyFindings) ? parsed.keyFindings : [],
-      digest: typeof parsed.digest === 'string' ? parsed.digest : '',
-      needsRawLogs: typeof parsed.needsRawLogs === 'boolean' ? parsed.needsRawLogs : false
-    };
+    completion = await callWithFallback('digest', systemPrompt, userPrompt, { workspacePath });
+    const parsed = parseLLMResponse('digest', extractJSON(completion.content));
+    if (!parsed.success) throw new LLMValidationFailure(parsed.validationErrors);
+    const result: CommandDigestResponse = parsed.data as CommandDigestResponse;
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
     /* Local model offline or unparseable output: stay conservative and tell the caller to fall back to the raw log rather than inventing a digest. */
-    const provider = resolveProvider('digest');
+    const provider = resolveContextProvider('digest', { workspacePath });
     return attachLLMMetadata({
       summary: `Failed to digest command output using local LLM: ${error.message || error}`,
       keyFindings: [],
       digest: '',
       needsRawLogs: true,
-    }, fallbackMetadata(provider, error, Date.now() - start));
+    }, metadataForFailure(provider, error, Date.now() - start, completion));
   }
 }
 
 
 /* Rank server-gathered code candidates against a navigation goal so the main model reads only the few regions that matter. The candidates were found deterministically (grep); the model only orders/explains them and must not invent paths. This is a hint, not authority: the main model verifies every pointer. */
-export async function queryScout(goal: string, candidates: FileCandidate[]): Promise<ScoutResponse> {
+export async function queryScout(goal: string, candidates: FileCandidate[], workspacePath?: string): Promise<ScoutResponse> {
   const systemPrompt = `You are a codebase navigation assistant for a larger coding agent.
 You are given a GOAL and a set of CANDIDATE code regions that were already found by a grep over the workspace. Each region is shown with its file path and line-numbered source.
 
@@ -631,16 +565,12 @@ Schema:
   }
 
   const start = Date.now();
+  let completion: ChatCompletionResult | undefined;
   try {
-    const completion = await callWithFallback('scout', systemPrompt, userPrompt);
-    const parsed = JSON.parse(extractJSON(completion.content)) as ScoutResponse;
-    const result: ScoutResponse = {
-      pointers: Array.isArray(parsed.pointers) ? parsed.pointers.filter(isValidPointer) : [],
-      suggestedNextSearches: Array.isArray(parsed.suggestedNextSearches) ? parsed.suggestedNextSearches : [],
-      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
-      needsDeeperLook: typeof parsed.needsDeeperLook === 'boolean' ? parsed.needsDeeperLook : false,
-      scoutAvailable: true
-    };
+    completion = await callWithFallback('scout', systemPrompt, userPrompt, { workspacePath });
+    const parsed = parseLLMResponse('scout', extractJSON(completion.content));
+    if (!parsed.success) throw new LLMValidationFailure(parsed.validationErrors);
+    const result: ScoutResponse = { ...(parsed.data as Omit<ScoutResponse, 'scoutAvailable'>), scoutAvailable: true };
     if (result.pointers.length === 0 || result.pointers.every((p) => p.confidence < SCOUT_POINTER_CONFIDENCE_FLOOR)) {
       result.needsDeeperLook = true;
       completion.metadata = {
@@ -651,7 +581,7 @@ Schema:
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
     /* Model offline or unparseable: stay conservative. Return no ranked pointers and flag that ranking did not run, so the caller falls back to the deterministic candidate list the server already gathered. */
-    const provider = resolveProvider('scout');
+    const provider = resolveContextProvider('scout', { workspacePath });
     return attachLLMMetadata({
       pointers: [],
       suggestedNextSearches: [],
@@ -659,7 +589,7 @@ Schema:
       needsDeeperLook: true,
       scoutAvailable: false,
       note: `Failed to rank candidates using local LLM: ${error.message || error}`
-    }, fallbackMetadata(provider, error, Date.now() - start));
+    }, metadataForFailure(provider, error, Date.now() - start, completion));
   }
 }
 
@@ -668,7 +598,7 @@ function isValidPointer(p: any): p is ScoutPointer {
 }
 
 /* Answer a targeted question about a stored log so the caller never has to read the whole file. The log is supplied with 1-based line-number prefixes so the model can cite an exact lineRange. */
-export async function queryLogQuestion(question: string, numberedLog: string): Promise<LogQueryResponse> {
+export async function queryLogQuestion(question: string, numberedLog: string, workspacePath?: string): Promise<LogQueryResponse> {
   const systemPrompt = `You answer a specific question about a stored command/test log.
 The log is provided with each line prefixed by its line number ("123: ...").
 Answer ONLY from the log content. If the log does not contain the answer, say so plainly.
@@ -689,24 +619,21 @@ Log (line-numbered):
 ${numberedLog}`;
 
   const start = Date.now();
+  let completion: ChatCompletionResult | undefined;
   try {
-    const completion = await callWithFallback('query', systemPrompt, userPrompt);
-    const parsed = JSON.parse(extractJSON(completion.content)) as LogQueryResponse;
-    const result: LogQueryResponse = {
-      answer: typeof parsed.answer === 'string' ? parsed.answer : '',
-      relevantExcerpt: typeof parsed.relevantExcerpt === 'string' ? parsed.relevantExcerpt : '',
-      lineRange: typeof parsed.lineRange === 'string' ? parsed.lineRange : '',
-      available: true
-    };
+    completion = await callWithFallback('query', systemPrompt, userPrompt, { workspacePath });
+    const parsed = parseLLMResponse('query', extractJSON(completion.content));
+    if (!parsed.success) throw new LLMValidationFailure(parsed.validationErrors);
+    const result: LogQueryResponse = { ...(parsed.data as Omit<LogQueryResponse, 'available'>), available: true };
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
     /* Model offline or unparseable: signal unavailability so the caller can fall back to grep_log or a raw-log slice. */
-    const provider = resolveProvider('query');
+    const provider = resolveContextProvider('query', { workspacePath });
     return attachLLMMetadata({
       answer: `Failed to query log using local LLM: ${error.message || error}`,
       relevantExcerpt: '',
       lineRange: '',
       available: false,
-    }, fallbackMetadata(provider, error, Date.now() - start));
+    }, metadataForFailure(provider, error, Date.now() - start, completion));
   }
 }

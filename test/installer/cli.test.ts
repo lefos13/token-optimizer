@@ -3,6 +3,12 @@ import assert from 'node:assert/strict';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const cli = require('../../../packages/installer/bin/token-optimizer.js');
+const lifecycle = require('../../../packages/installer/lib/uninstall.js');
+const logs = require('../../../packages/installer/lib/logs.js');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 function readlineWith(...answers: string[]) {
   return {
@@ -27,7 +33,7 @@ test('--byok-key and --byok-model configure BYOK without prompting', async () =>
     '--byok-model', 'openai/gpt-4o-mini'
   ]);
   const options = await cli.resolveProviderOptions(args, readlineWith());
-  assert.equal(options.provider, 'byok');
+  assert.equal(options.provider, 'gateway-byok');
   assert.equal(options.byokModel, 'openai/gpt-4o-mini');
 });
 
@@ -37,4 +43,41 @@ test('a BYOK key flag without a model remains non-interactive and uses gateway d
     readlineWith('must-not-be-consumed')
   );
   assert.equal(options.byokModel, '');
+});
+
+test('uninstall preserves a user-modified managed file', () => {
+  const managed = path.join(os.tmpdir(), 'token-optimizer-user-modified');
+  const manifest = { schemaVersion: 2, roots: [path.dirname(managed)], files: [{ path: managed, sha256: 'expected', ownership: 'installer' }] };
+  const plan = lifecycle.planUninstall(manifest, { hash: () => 'changed' });
+  assert.equal(plan.operations.some((operation: any) => operation.path === managed), false);
+  assert.ok(plan.warnings.some((warning: any) => warning.code === 'USER_MODIFIED_FILE'));
+});
+
+test('repair derives only operations required by doctor findings', () => {
+  const source = path.join(os.tmpdir(), 'token-optimizer-source');
+  const target = path.join(os.tmpdir(), 'token-optimizer-target');
+  const manifest = { schemaVersion: 2, roots: [path.dirname(source)], files: [{ path: target, source, sha256: 'x', ownership: 'installer' }] };
+  const plan = lifecycle.planRepair({ findings: [{ code: 'MISSING_LAUNCHER', path: target }] }, manifest);
+  assert.deepEqual(plan.operations.map((operation: any) => operation.kind), ['copy-tree']);
+});
+
+test('logs require an absolute workspace and purge protects metadata by default', async () => {
+  await assert.rejects(() => logs.statusLogs('relative-workspace'), /absolute/);
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'to-logs-'));
+  const directory = path.join(workspace, '.codex-local-test-runs');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'run.log'), 'run');
+  fs.writeFileSync(path.join(directory, 'baseline.json'), '{}');
+  fs.writeFileSync(path.join(directory, 'analytics.json'), '{}');
+  await logs.purgeLogs(directory === workspace ? workspace : workspace);
+  assert.equal(fs.existsSync(path.join(directory, 'run.log')), false);
+  assert.equal(fs.existsSync(path.join(directory, 'baseline.json')), true);
+  assert.equal(fs.existsSync(path.join(directory, 'analytics.json')), true);
+});
+
+test('logs reject a symlinked managed directory', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'to-logs-link-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'to-logs-outside-'));
+  fs.symlinkSync(outside, path.join(workspace, '.codex-local-test-runs'), 'dir');
+  await assert.rejects(() => logs.statusLogs(workspace), /real directory|escapes workspace/);
 });

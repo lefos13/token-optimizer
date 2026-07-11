@@ -58,8 +58,17 @@ const distDir = path.join(rootDir, "dist");
 const SERVER_FILES = [
   "index.js",
   "analytics.js",
+  "command-policy.js",
+  "execution-metadata.js",
+  "log-excerpt.js",
+  "log-store.js",
+  "process-tree.js",
   "detector.js",
   "llm.js",
+  "providers.js",
+  "llm-schemas.js",
+  "redaction.js",
+  "config.js",
   "registry.js",
   "runner.js",
   "types.js",
@@ -80,7 +89,7 @@ try {
      install (Antigravity does not document version-gated update pulls the way
      Claude Code's marketplace install does, but keeping this accurate still
      matters for users diffing or re-staging the plugin folder). */
-  const VERSION = "1.12.1";
+  const VERSION = "2.0.0-beta.2";
 
   const sdkVersion = require(
     path.join(

@@ -79,6 +79,16 @@ test('installOpenCode copies server and skill, replaces legacy MCP config, and w
   assert.ok(agents.includes('TOKEN_OPTIMIZER_START'));
 });
 
+test('successful install persists source-backed ownership manifest for lifecycle repair', () => {
+  const home = tmpDir('to-installer-manifest-home-');
+  const assetsRoot = tmpDir('to-installer-manifest-assets-');
+  writeFixtureAssets(assetsRoot);
+  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'skip', skipLaunchctl: true, defaults: false, skipClientCommands: true });
+  const manifest = require('../../../packages/installer/lib/manifest.js').readManifest(home);
+  assert.ok(manifest.files.length > 0);
+  assert.ok(manifest.files.every((file: any) => file.source && file.source.startsWith(assetsRoot)));
+});
+
 test('installer launchctl state clears stale BYOK key and model when the provider changes', () => {
   const home = tmpDir('to-installer-home-');
   const launchctlStatePath = path.join(home, 'launchctl.json');
@@ -229,7 +239,7 @@ test('buildProviderValues: gateway needs a token, byok needs ONLY a key (no toke
 
   const local = installer.buildProviderValues({ provider: 'local' });
   assert.deepEqual(Object.keys(local).sort(), [...installer.MANAGED_ENV_KEYS].sort());
-  assert.ok(Object.values(local).every((v: unknown) => v === ''));
+  assert.equal(local.TOKEN_OPTIMIZER_PROVIDER_MODE, 'local');
 
   const localWithOverrides = installer.buildProviderValues({ provider: 'local', localApiUrl: 'http://x:1/v1', localModel: 'm' });
   assert.equal(localWithOverrides.LOCAL_LLM_API_URL, 'http://x:1/v1');
@@ -237,7 +247,7 @@ test('buildProviderValues: gateway needs a token, byok needs ONLY a key (no toke
   assert.equal(localWithOverrides.LLM_GATEWAY_TOKEN, '');
 
   const skip = installer.buildProviderValues({ provider: 'skip' });
-  assert.ok(Object.values(skip).every((v: unknown) => v === ''));
+  assert.equal(skip.TOKEN_OPTIMIZER_PROVIDER_MODE, '');
 
   /* No explicit provider: inferred from whichever fields were supplied. */
   assert.equal(installer.buildProviderValues({ gatewayToken: 'tok' }).LLM_GATEWAY_TOKEN, 'tok');
@@ -503,4 +513,83 @@ test('upsertCodexTomlServer replaces an existing section without touching other 
   assert.ok(next.includes("args = ['C:\\Users\\x\\start.js']"));
   assert.ok(next.includes("LLM_GATEWAY_TOKEN = 'tok'"));
   assert.equal((next.match(/\[mcp_servers\.token_optimizer\]/g) || []).length, 1);
+});
+
+test('plan preview is mutation-free and a later client failure restores prior writes', () => {
+  const home = tmpDir('to-installer-home-');
+  const assetsRoot = tmpDir('to-installer-assets-');
+  writeFixtureAssets(assetsRoot);
+  const before = fs.readdirSync(home);
+  const plan = installer.planInstallation({ home, assetsRoot, clients: ['opencode', 'unsupported'], provider: 'skip', skipLaunchctl: true });
+  assert.deepEqual(fs.readdirSync(home), before);
+  assert.ok(plan.operations.length >= 6);
+  const result = installer.applyChangePlan(plan);
+  assert.ok(result.error);
+  assert.ok(result.rolledBack.length > 0);
+  assert.deepEqual(fs.readdirSync(home), before);
+});
+
+test('install rollback snapshots never traverse unrelated protected home directories', () => {
+  const home = tmpDir('to-installer-protected-home-');
+  const assetsRoot = tmpDir('to-installer-protected-assets-');
+  const protectedMusic = path.join(home, 'Music', 'Music');
+  writeFixtureAssets(assetsRoot);
+  fs.mkdirSync(protectedMusic, { recursive: true });
+
+  /*
+   * macOS privacy controls reject recursive reads of protected home folders.
+   * Simulate that deterministic boundary while allowing installer-owned asset
+   * copies, so the test does not depend on the host's TCC permission state.
+   */
+  const mutableFs = require('node:fs');
+  const originalCopy = mutableFs.cpSync;
+  mutableFs.cpSync = (source: fs.PathLike, destination: fs.PathLike, options?: fs.CopySyncOptions) => {
+    if (path.resolve(String(source)) === path.resolve(home)) {
+      const error = new Error(`Operation not permitted: ${protectedMusic}`) as NodeJS.ErrnoException;
+      error.code = 'EPERM';
+      throw error;
+    }
+    return originalCopy(source, destination, options);
+  };
+
+  try {
+    const result = installer.applyChangePlan(installer.planInstallation({
+      home,
+      assetsRoot,
+      clients: ['opencode'],
+      provider: 'skip',
+      skipLaunchctl: true,
+      defaults: false,
+      skipClientCommands: true,
+    }));
+    assert.equal(result.error, undefined);
+    assert.ok(fs.existsSync(path.join(home, '.config', 'opencode', 'token-optimizer-server', 'start.js')));
+  } finally {
+    mutableFs.cpSync = originalCopy;
+  }
+});
+
+test('cursor rollback restores project-local targets without replacing the project', () => {
+  const home = tmpDir('to-installer-cursor-rollback-home-');
+  const assetsRoot = tmpDir('to-installer-cursor-rollback-assets-');
+  const project = tmpDir('to-installer-cursor-project-');
+  const userFile = path.join(project, 'user-work.txt');
+  writeFixtureAssets(assetsRoot);
+  fs.writeFileSync(userFile, 'keep me');
+
+  const result = installer.applyChangePlan(installer.planInstallation({
+    home,
+    assetsRoot,
+    clients: ['cursor', 'unsupported'],
+    cursorProjects: [project],
+    provider: 'skip',
+    skipLaunchctl: true,
+    defaults: false,
+    skipClientCommands: true,
+  }));
+
+  assert.ok(result.error);
+  assert.equal(fs.readFileSync(userFile, 'utf8'), 'keep me');
+  assert.ok(!fs.existsSync(path.join(project, '.cursor')));
+  assert.ok(!fs.existsSync(path.join(home, '.cursor')));
 });

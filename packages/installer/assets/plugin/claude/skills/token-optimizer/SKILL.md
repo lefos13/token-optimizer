@@ -1,9 +1,14 @@
 ---
+
 name: token-optimizer
 description: Use this MCP server to scout codebases, validate code changes, review changed files, triage failures, check regressions, classify command output, and keep raw logs out of context. Trigger when starting scouting a codebase, implementing code changes, fixing bugs, touching tests/build/lint behavior, preparing final verification, triaging failures, reviewing changed files, checking regressions, or when the user asks to use Token Optimizer or avoid reading raw logs.
 ---
 
+Execution profiles are `safe`, `standard`, and `unrestricted`; tool/project requests may only narrow the user ceiling. This is deny-first policy, not an OS sandbox. Responses expose execution statuses, policy/auto-detection metadata, truncation, provider status, warnings, and redaction summaries. Logs default to a 7-day retention and 500 MB workspace quota, with workspace-scoped pruning.
+
 # Token Optimizer
+
+Execution metadata uses `signal: null` when no OS signal was observed; a value appears only for signal-terminated processes.
 
 ## Overview
 
@@ -17,7 +22,7 @@ send the configured gateway operator (`GMAIL_USER`) a best-effort email alert.
 
 Currently implemented server tools:
 
-- `check_local_llm_health`: verifies the configured LLM provider. When `LLM_GATEWAY_URL` and `LLM_GATEWAY_TOKEN` are set, pings the gateway and returns availability metadata. Otherwise pings the local OpenAI-compatible endpoint.
+- `check_local_llm_health`: verifies the configured LLM provider (local, gateway, or direct OpenRouter) and returns availability metadata.
 - `run_test_verdict`: runs build/lint/test/smoke commands in a workspace and returns a compact local-LLM verdict.
 - `run_failure_triage`: analyzes an existing log file and returns compact root-cause/fix guidance.
 - `run_changed_files_review`: reads changed files under 500 KB and asks the local LLM for likely issues before expensive validation.
@@ -78,11 +83,12 @@ Call `run_failure_triage` only for an existing log path, usually after `run_test
 
 ```json
 {
+  "workspacePath": "/absolute/path/to/workspace",
   "logPath": "/absolute/path/to/workspace/.codex-local-test-runs/example.log"
 }
 ```
 
-If `rawLogPath` is relative, resolve it against `workspacePath` before calling `run_failure_triage`.
+`workspacePath` is required. The log must resolve beneath that workspace's `.codex-local-test-runs` directory; use a returned `runId` instead of arbitrary absolute paths when possible.
 
 Call `run_regression_check` only when the project has a meaningful auto-detected test/build command and baseline mutation is intended:
 
@@ -193,6 +199,16 @@ If a tool exists in the server but is not exposed in the current Codex session, 
 
 Generated launchers validate that both the MCP SDK server entry point and `zod/v3` resolve from their launcher-owned dependency cache. If the manifest matches but the cache is incomplete, the launcher removes only that cached `node_modules`, reinstalls dependencies, validates them again, and starts the server. A failed repair exits with a concise stderr diagnostic instead of starting a broken MCP process. Codex marketplace configuration forwards `OPENROUTER_BYOK_KEY` and `OPENROUTER_BYOK_MODEL` alongside the gateway variables, so BYOK-only sessions do not need `LLM_GATEWAY_TOKEN`.
 
+The installer lifecycle is reversible. Use `install --dry-run` (or `--json`)
+to inspect all writes, ownership, credential-store operations, and GUI-session
+environment changes. Its manifest stores hashes and references, never secrets;
+repair and uninstall preserve user-modified files. `status` is read-only,
+`doctor --strict` adds provider health checks, and `repair --dry-run` previews
+targeted fixes. Rollback snapshots cover only selected client roots and never
+scan unrelated protected home folders. `logs status|prune|purge --workspace <absolute-path>` manages
+raw logs while preserving baseline and analytics metadata unless explicitly
+requested for deletion.
+
 Re-running the npm installer refreshes all client assets: Antigravity, OpenCode,
 and Cursor replace their installer-managed local files; Claude uses its plugin
 update command when available; and Codex removes then re-adds the plugin to
@@ -202,7 +218,7 @@ with `start.js` rather than Bash. Restart the affected client after installing.
 
 ## Guardrails
 
-**LLM provider:** Prefer the repo-shipped config manager (`npm run gateway:config -- setup`) to configure a provider into stable client-owned config surfaces for Claude Code, Gemini/Antigravity, OpenCode, Cursor, and the macOS GUI-session environment used by Codex and other GUI-launched clients. No gateway token is required — the manager (and the npm installer) prompt for one of three providers: a gateway token (shared infrastructure, daily-limited), a bring-your-own OpenRouter key (`OPENROUTER_BYOK_KEY`, unlimited usage, **no proxy token is asked for or written** — a BYOK-only caller isn't using the operator's OpenRouter setup, so the gateway does not authenticate them at all), or a local LLM only (`LOCAL_LLM_API_URL`/`LOCAL_LLM_MODEL`, no token at all) — plus a skip option. `OPENROUTER_BYOK_MODEL` is optional and applies only with `OPENROUTER_BYOK_KEY`: it selects one OpenRouter model for verdict, triage, review, digest, scout, and query requests. When omitted or blank, the gateway keeps task-specific/default model selection; shared gateway-token callers cannot override it. The installer prompts for the optional model after the BYOK key and accepts `--byok-model <model-id>`. Generated plugins intentionally omit blank `LLM_GATEWAY_*` placeholders so inherited host values keep working after plugin reinstalls. The plugin talks to the gateway using `LLM_GATEWAY_URL` (preconfigured) plus either `LLM_GATEWAY_TOKEN` or `OPENROUTER_BYOK_KEY`; when the gateway is not configured, the server falls back to a local OpenAI-compatible endpoint (`LOCAL_LLM_API_URL`). If a gateway call fails, the server automatically retries with the local endpoint and surfaces `fallbackReason` in the response. `check_local_llm_health` verifies gateway reachability the same way it verifies a local-endpoint configuration.
+**LLM provider:** Configure one of four explicit modes: `local` keeps inference on your endpoint; `openrouter-direct` sends the redacted excerpt and credential directly to OpenRouter; `gateway-token` sends redacted excerpts through the Softaware gateway using its access token; and `gateway-byok` sends both the redacted excerpt and BYOK key through that gateway. The v1 `LLM_GATEWAY_URL` + `OPENROUTER_BYOK_KEY` environment pairing maps to `gateway-byok` with a compatibility warning, preserving its destination. Remote responses include `redactionSummary` (counts/categories only) and may include `providerWarnings`; neither field contains secret values. Raw-local logs may contain secrets printed by commands. If a provider is unavailable or structured output fails schema validation, command exit codes remain authoritative and the tool returns `uncertain` with conservative metadata. `OPENROUTER_BYOK_MODEL` is optional for BYOK routing. Generated plugins intentionally omit blank gateway placeholders so inherited host values keep working after reinstalls. `check_local_llm_health` verifies the selected provider.
 
 - Do not paste raw logs into the conversation when the verdict or triage is actionable.
 - Do not let the LLM override command truth: non-zero exits are failures unless the tool explicitly reports uncertainty.

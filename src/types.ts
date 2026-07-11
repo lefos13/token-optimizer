@@ -11,6 +11,9 @@ export interface LLMResponseMetadata {
   llmLatencyMs?: number;
   llmTaskType?: string;
   fallbackReason?: string;
+  redactionSummary?: { count: number; categories: string[] };
+  validationErrors?: LLMValidationError[];
+  providerWarnings?: string[];
 }
 
 export interface LogQueryResponse extends LLMResponseMetadata {
@@ -31,6 +34,12 @@ export interface VerdictResult extends LLMResponseMetadata {
   needsRawLogs?: boolean;
   likelyRelevantToRecentChanges?: boolean;
   triage?: LogQueryResponse;
+  executionStatus?: 'completed' | 'timed_out' | 'blocked' | 'spawn_failed';
+  signal?: string | null;
+  policyDecision?: string;
+  logTruncated?: boolean;
+  providerStatus?: 'available' | 'unavailable' | 'fallback' | 'unknown';
+  warnings?: string[];
 }
 
 export interface RunTestVerdictArgs {
@@ -42,6 +51,8 @@ export interface RunTestVerdictArgs {
   timeoutMs?: number;
   parallel?: boolean;
   autoTriage?: boolean;
+  executionProfile?: ExecutionProfile;
+  allowedCommandPrefixes?: string[];
 }
 
 export interface RunCommandDigestArgs {
@@ -50,6 +61,8 @@ export interface RunCommandDigestArgs {
   intent: string;
   timeoutMs?: number;
   maxOutputLines?: number;
+  executionProfile?: ExecutionProfile;
+  allowedCommandPrefixes?: string[];
 }
 
 export interface ScoutPointer {
@@ -70,6 +83,13 @@ export interface ScoutResponse extends LLMResponseMetadata {
   note?: string;
 }
 
+export type LLMResponseTask = 'verdict' | 'triage' | 'review' | 'digest' | 'scout' | 'query';
+
+export interface LLMValidationError {
+  path: (string | number)[];
+  message: string;
+}
+
 export interface RunScoutArgs {
   workspacePath: string;
   goal: string;
@@ -77,4 +97,40 @@ export interface RunScoutArgs {
   roots?: string[];
   maxCandidates?: number;
   contextLines?: number;
+}
+
+export type ProviderMode = 'local' | 'gateway-token' | 'gateway-byok' | 'openrouter-direct';
+export type ExecutionProfile = 'safe' | 'standard' | 'unrestricted';
+
+export interface TokenOptimizerConfig {
+  provider?: Partial<{
+    mode: ProviderMode;
+    apiUrl: string;
+    model: string;
+  }>;
+  execution?: Partial<{
+    profile: ExecutionProfile;
+    allowedCommandPrefixes: string[];
+    autoDetectedCommands: string[];
+  }>;
+  logs?: Partial<{
+    retentionDays: number;
+    maxDiskMb: number;
+    storageMode: 'raw-local' | 'redacted-local';
+  }>;
+}
+
+export interface ConfigLayers {
+  env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
+  user?: TokenOptimizerConfig;
+  project?: TokenOptimizerConfig;
+  tool?: TokenOptimizerConfig;
+  workspacePath?: string;
+}
+
+export interface EffectiveConfig {
+  provider: { mode: ProviderMode; apiUrl: string; model: string; credentialEnv?: string; credential?: string; byokCredential?: string; byokModel?: string };
+  execution: { profile: ExecutionProfile; allowedCommandPrefixes: string[]; autoDetectedCommands?: string[] };
+  logs: { retentionDays: number; maxDiskMb: number; storageMode: 'raw-local' | 'redacted-local' };
+  warnings: string[];
 }
