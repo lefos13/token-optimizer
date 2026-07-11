@@ -11,6 +11,7 @@ const os = require('node:os');
 const path = require('node:path');
 const installer = require('../../../packages/installer/lib/install-core.js');
 const { execFileSync } = require('node:child_process');
+const { spawnSync } = require('node:child_process');
 
 function readlineWith(...answers: string[]) {
   return {
@@ -112,4 +113,23 @@ test('logs reject a symlinked managed directory', async () => {
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'to-logs-outside-'));
   fs.symlinkSync(outside, path.join(workspace, '.codex-local-test-runs'), 'dir');
   await assert.rejects(() => logs.statusLogs(workspace), /real directory|escapes workspace/);
+});
+
+test('spawned CLI completes install, doctor, repair, uninstall, and repeated uninstall for all five clients', () => {
+  const repository = path.resolve(process.cwd(), '..'); const bin = path.join(repository, 'packages/installer/bin/token-optimizer.js');
+  for (const client of ['claude', 'codex', 'antigravity', 'opencode', 'cursor']) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), `to-cli-cycle-${client}-`));
+    const base = { cwd: repository, encoding: 'utf8', env: { ...process.env, HOME: home, TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK: '1' } };
+    const install = spawnSync(process.execPath, [bin, 'install', '--provider', 'local', '--clients', client, '--home', home, '--skip-client-commands', '--skip-launchctl'], base);
+    assert.equal(install.status, 0, `${client} install: ${install.stderr}`);
+    const doctor = spawnSync(process.execPath, [bin, 'doctor', '--home', home, '--json'], base);
+    assert.ok([0, 1].includes(doctor.status), `${client} doctor: ${doctor.stderr}`);
+    assert.doesNotThrow(() => JSON.parse(doctor.stdout));
+    const repair = spawnSync(process.execPath, [bin, 'repair', '--home', home, '--dry-run', '--json'], base);
+    assert.equal(repair.status, 0, `${client} repair: ${repair.stderr}`);
+    const uninstall = spawnSync(process.execPath, [bin, 'uninstall', '--home', home], base);
+    assert.equal(uninstall.status, 0, `${client} uninstall: ${uninstall.stderr}`);
+    const repeated = spawnSync(process.execPath, [bin, 'uninstall', '--home', home, '--json'], base);
+    assert.equal(JSON.parse(repeated.stdout).status, 'already-uninstalled');
+  }
 });
