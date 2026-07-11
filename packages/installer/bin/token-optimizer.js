@@ -17,11 +17,11 @@ const {
   applyGatewayConfig,
   prepareCredentialOptions,
   applyProviderConfiguration,
+  persistProviderCredentialOwnership,
   applyDefaultDirectives,
 } = require("../lib/install-core");
 const { inspectInstallation } = require("../lib/doctor");
-const { readManifest, writeManifest } = require("../lib/manifest");
-const path = require("path");
+const { readManifest } = require("../lib/manifest");
 const { planRepair, planUninstall, currentStateFromManifest, applyLifecyclePlan } = require("../lib/uninstall");
 const { statusLogs, pruneLogs, purgeLogs } = require("../lib/logs");
 
@@ -134,13 +134,7 @@ async function main() {
 
     if (command === "config") {
       const result = applyProviderConfiguration(options);
-      if (result.credentialRef && result.credentialOwned && result.credentialRef.store !== "env") {
-        const home = path.resolve(options.home || process.env.HOME || require("os").homedir());
-        const existing = readManifest(home);
-        writeManifest(home, existing
-          ? { ...existing, credentials: [{ reference: result.credentialRef, ownership: "installer" }] }
-          : { schemaVersion: 2, roots: [path.join(home, ".token-optimizer")], assetRoots: [], managedBlocks: [], credentials: [{ reference: result.credentialRef, ownership: "installer" }], files: [] });
-      }
+      persistProviderCredentialOwnership(options, result);
       console.log("Provider configuration written.");
       return;
     }

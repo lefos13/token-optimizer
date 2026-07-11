@@ -197,6 +197,7 @@ function createCredentialTransaction(options, paths) {
 function executeCredentialOperation(runtime, operation) {
   if (operation.phase === "cleanup") {
     runtime.supersededStore.delete(runtime.superseded);
+    runtime.credentialOwnershipCleared = !runtime.credentialRef;
     return;
   }
   if (runtime.options.credentialRef) return;
@@ -265,7 +266,7 @@ function planInstallation(options = {}) {
 function installSelectedClients(options) {
   const result = applyChangePlan(planInstallation(options), defaultAdapters());
   if (result.error) throw result.error;
-  persistInstallManifest({ ...options, credentialRef: result.credentialRef, credentialOwned: result.credentialOwned }, result.installedClients);
+  persistInstallManifest({ ...options, credentialRef: result.credentialRef, credentialOwned: result.credentialOwned, credentialOwnershipCleared: result.credentialOwnershipCleared }, result.installedClients);
   return result.installedClients;
 }
 
@@ -302,6 +303,19 @@ function applyProviderConfiguration(options = {}) {
   return result;
 }
 
+function persistProviderCredentialOwnership(options = {}, result = {}) {
+  const paths = installerPaths(options);
+  const existing = readManifest(paths.home);
+  if (result.credentialOwnershipCleared) {
+    if (existing) writeManifest(paths.home, { ...existing, credentials: [] });
+    return;
+  }
+  if (!result.credentialRef || !result.credentialOwned || result.credentialRef.store === "env") return;
+  writeManifest(paths.home, existing
+    ? { ...existing, credentials: [{ reference: result.credentialRef, ownership: "installer" }] }
+    : { schemaVersion: 2, roots: [paths.installRoot], assetRoots: [], managedBlocks: [], credentials: [{ reference: result.credentialRef, ownership: "installer" }], files: [] });
+}
+
 /* Capture only installer-owned plugin trees after a successful install. The
    manifest is the durable hand-off used by repair and uninstall; config files
    remain outside these trees so user-authored settings are never deleted. */
@@ -330,7 +344,7 @@ function persistInstallManifest(options = {}, clients = []) {
     path.join(paths.home, ".config", "opencode", "AGENTS.md"),
   ].filter((file) => fs.existsSync(file)).map((file) => ({ path: file, marker: "TOKEN_OPTIMIZER_START", sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") }));
   const existingManifest = readManifest(paths.home);
-  const credentials = options.credentialRef && options.credentialOwned !== false && options.credentialRef.store !== "env"
+  const credentials = options.credentialOwnershipCleared ? [] : options.credentialRef && options.credentialOwned !== false && options.credentialRef.store !== "env"
     ? [{ reference: options.credentialRef, ownership: "installer" }]
     : (existingManifest?.credentials || []);
   writeManifest(paths.home, { schemaVersion: 2, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [paths.assetsRoot], managedBlocks, credentials, files });
@@ -1053,6 +1067,7 @@ module.exports = {
   installSelectedClients,
   planProviderConfiguration,
   applyProviderConfiguration,
+  persistProviderCredentialOwnership,
   persistInstallManifest,
   installOpenCode,
   installCursor,

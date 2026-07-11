@@ -421,6 +421,35 @@ test('successive installs transfer credential ownership without orphaning and ro
   assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-byok' }).get(), null);
 });
 
+test('successive install to local clears owned credential and manifest, while failure preserves both', () => {
+  const home = tmpDir('to-reinstall-local-');
+  const assetsRoot = tmpDir('to-reinstall-local-assets-');
+  writeFixtureAssets(assetsRoot);
+  const common = { home, assetsRoot, clients: ['opencode'], credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false };
+  installer.installSelectedClients({ ...common, provider: 'gateway-token', gatewayToken: 'gateway-value' });
+  assert.throws(() => installer.installSelectedClients({ ...common, assetsRoot: tmpDir('to-local-missing-assets-'), provider: 'local' }));
+  const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
+  const manifestApi = require('../../../packages/installer/lib/manifest.js');
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' }).get(), 'gateway-value');
+  assert.equal(manifestApi.readManifest(home).credentials.length, 1);
+  installer.installSelectedClients({ ...common, provider: 'local' });
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' }).get(), null);
+  assert.deepEqual(manifestApi.readManifest(home).credentials, []);
+});
+
+test('provider config to skip clears owned credential and persists empty ownership', () => {
+  const home = tmpDir('to-config-skip-');
+  const assetsRoot = tmpDir('to-config-skip-assets-');
+  writeFixtureAssets(assetsRoot);
+  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'gateway-token', gatewayToken: 'gateway-value', credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false });
+  const result = installer.applyProviderConfiguration({ home, clients: ['opencode'], provider: 'skip', credentialStore: 'config', skipLaunchctl: true });
+  installer.persistProviderCredentialOwnership({ home }, result);
+  const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' }).get(), null);
+  assert.deepEqual(require('../../../packages/installer/lib/manifest.js').readManifest(home).credentials, []);
+  assert.equal(result.credentialOwnershipCleared, true);
+});
+
 test('installOpenCode with provider "local" registers the server with no token required', () => {
   const home = tmpDir('to-installer-home-');
   const assetsRoot = tmpDir('to-installer-assets-');

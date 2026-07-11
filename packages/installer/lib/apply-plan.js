@@ -33,7 +33,7 @@ function applyChangePlan(plan, adapters = {}) {
       try { entry.commit(); }
       catch { manualRemediation.push(entry.operation); }
     }
-    return { applied, rolledBack, manualRemediation, installedClients: plan.clients ? [...plan.clients] : [], credentialRef: executions.get(plan)?.state?.credentialRef, credentialOwned: executions.get(plan)?.state?.credentialOwned };
+    return { applied, rolledBack, manualRemediation, installedClients: plan.clients ? [...plan.clients] : [], credentialRef: executions.get(plan)?.state?.credentialRef, credentialOwned: executions.get(plan)?.state?.credentialOwned, credentialOwnershipCleared: executions.get(plan)?.state?.credentialOwnershipCleared === true };
   } catch (error) {
     for (let index = inverses.length - 1; index >= 0; index -= 1) {
       const entry = inverses[index];
