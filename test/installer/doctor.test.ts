@@ -120,6 +120,28 @@ test('manifest reports path escapes, symlinks, and non-files as stable findings'
   assert.ok(codes.includes('MANIFEST_PATH_ESCAPE')); assert.ok(codes.includes('MANIFEST_ENTRY_SYMLINK')); assert.ok(codes.includes('MANIFEST_ENTRY_NOT_FILE'));
 });
 
+test('manifest rejects declared filesystem roots and bounds entries before hashing', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); const root = path.join(home, '.token-optimizer');
+  write(path.join(root, 'manifest.json'), JSON.stringify({ schemaVersion: 2, roots: ['/'], files: [{ path: '/etc/hosts', sha256: 'x', ownership: 'installer' }] }));
+  const tampered = await inspectInstallation({ home, provider: 'local' });
+  assert.ok(tampered.findings.some((item: any) => item.code === 'MANIFEST_ROOT_UNTRUSTED'));
+  assert.ok(tampered.findings.some((item: any) => item.code === 'MANIFEST_PATH_ESCAPE'));
+
+  write(path.join(root, 'large'), '12345');
+  write(path.join(root, 'manifest.json'), JSON.stringify({ schemaVersion: 2, roots: [root], files: [{ path: path.join(root, 'large'), sha256: 'x', ownership: 'installer' }] }));
+  const oversized = await inspectInstallation({ home, provider: 'local', manifestMaxFileBytes: 4 });
+  assert.ok(oversized.findings.some((item: any) => item.code === 'MANIFEST_ENTRY_TOO_LARGE'));
+});
+
+test('explicit installed and detected versions take precedence without registrations', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-'));
+  const installed = await inspectInstallation({ home, provider: 'local', installedVersion: '1.9.0', expectedVersion: '2.0.0-beta.5' });
+  assert.equal(installed.installedVersion, '1.9.0'); assert.equal(installed.installedVersionSource, 'option-installed-version');
+  assert.ok(installed.findings.some((item: any) => item.code === 'VERSION_MISMATCH'));
+  const detected = await inspectInstallation({ home, provider: 'local', detectedVersion: '1.8.0', expectedVersion: '2.0.0-beta.5' });
+  assert.equal(detected.installedVersion, '1.8.0'); assert.equal(detected.installedVersionSource, 'option-detected-version');
+});
+
 test('launchctl read diagnostics compare loaded service and exact managed values', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); write(path.join(home, 'Library', 'LaunchAgents', 'com.softawarest.token-optimizer.env.plist'), '<plist/>'); const launcher = server(home, 'cursor'); const ref = JSON.stringify({ store: 'macos-keychain', account: 'x' }); write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', TOKEN_OPTIMIZER_CREDENTIAL_REF: ref } } } }));
   const calls: string[][] = []; const exec = (_command: string, args: string[]) => { calls.push(args); if (args[0] === 'print') return 'loaded'; if (args[1] === 'TOKEN_OPTIMIZER_PROVIDER_MODE') return 'gateway-token\n'; return 'wrong\n'; };

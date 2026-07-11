@@ -212,7 +212,11 @@ to include safe log-directory/quota diagnostics. Reports expose stable finding
 codes and repair hints but never secret values; errors exit `1` and warning-only
 strict reports exit `2`. `repair --dry-run` previews
 targeted fixes. Rollback snapshots cover only selected client roots and never
-scan unrelated protected home folders. `logs status|prune|purge --workspace <absolute-path>` manages
+scan unrelated protected home folders. Provider-health probes are bounded
+before upstream access. Doctor constrains untrusted manifest roots and hashing
+work to installer-known locations and fixed size/count budgets; an explicit
+`--installed-version` still drives mismatch reporting without a registration.
+`logs status|prune|purge --workspace <absolute-path>` manages
 raw logs while preserving baseline and analytics metadata unless explicitly
 requested for deletion.
 

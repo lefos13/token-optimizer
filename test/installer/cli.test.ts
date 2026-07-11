@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const installer = require('../../../packages/installer/lib/install-core.js');
+const { execFileSync } = require('node:child_process');
 
 function readlineWith(...answers: string[]) {
   return {
@@ -60,6 +61,19 @@ test('--credential-store env is an explicit working plaintext opt-in', async () 
 test('--credential-store env fails when the parent/client credential variable is absent', async () => {
   const options = await cli.resolveProviderOptions(cli.parseArgs(['--provider', 'gateway-token', '--token', 'fixture-value', '--credential-store', 'env']), readlineWith());
   assert.throws(() => installer.prepareCredentialOptions({ ...options, credentialStoreOptions: { env: {} } }), /requires LLM_GATEWAY_TOKEN.*parent\/client environment/i);
+});
+
+test('status --installed-version reports mismatch without a discovered registration', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-cli-version-'));
+  const repository = path.resolve(process.cwd(), '..');
+  const output = execFileSync(process.execPath, [
+    path.join(repository, 'packages/installer/bin/token-optimizer.js'), 'status', '--json',
+    '--home', home, '--provider', 'local', '--installed-version', '1.9.0',
+    '--expected-version', '2.0.0-beta.5'
+  ], { cwd: repository, encoding: 'utf8' });
+  const report = JSON.parse(output);
+  assert.equal(report.installedVersionSource, 'option-installed-version');
+  assert.ok(report.findings.some((item: any) => item.code === 'VERSION_MISMATCH'));
 });
 
 test('uninstall preserves a user-modified managed file', () => {

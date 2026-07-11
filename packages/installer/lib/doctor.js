@@ -20,6 +20,8 @@ async function inspectInstallation(options = {}) {
   const expectedVersion = options.expectedVersion || pkg.version;
   const registrations = inspectClients(home, options);
   const versions = inspectVersions(registrations.registrations, expectedVersion);
+  const explicitVersion = usable(options.installedVersion) ? { version: String(options.installedVersion), source: "option-installed-version", path: null }
+    : usable(options.detectedVersion) ? { version: String(options.detectedVersion), source: "option-detected-version", path: null } : null;
   const provider = inspectProviderReference(home, options, registrations.registrations);
   const manifest = inspectManifest(home, options);
   const logs = inspectLogState(home, options);
@@ -32,7 +34,8 @@ async function inspectInstallation(options = {}) {
   for (const registration of registrations.registrations.filter((item) => item.stale)) add(findings, "STALE_REGISTRATION", "warning", `${registration.client} registration points to a missing or obsolete launcher.`, "Repair the managed client registration.", { client: registration.client, path: registration.configPath, operation: "rewrite-registration" });
   for (const client of CLIENTS) if (registrations.registrations.filter((item) => item.client === client).length > 1) add(findings, "DUPLICATE_REGISTRATION", "warning", `${client} has multiple Token Optimizer MCP registrations.`, "Keep one managed registration and remove stale duplicates.", { client, operation: "deduplicate-registration" });
   if (!registrations.configured.length) add(findings, "CLIENT_NOT_CONFIGURED", "warning", "No Token Optimizer MCP registration was detected.", "Install for a client with `--clients <name>`.", { operation: "install-client" });
-  for (const item of versions.detected.filter((entry) => entry.version !== expectedVersion)) add(findings, "VERSION_MISMATCH", "warning", `Installed server ${item.version} differs from expected ${expectedVersion}.`, `Repair or reinstall Token Optimizer ${expectedVersion}.`, { client: item.client, path: item.path, operation: "refresh-assets" });
+  const versionCandidates = explicitVersion ? [explicitVersion, ...versions.detected] : versions.detected;
+  for (const item of versionCandidates.filter((entry) => entry.version !== expectedVersion)) add(findings, "VERSION_MISMATCH", "warning", `Installed server ${item.version} differs from expected ${expectedVersion}.`, `Repair or reinstall Token Optimizer ${expectedVersion}.`, { client: item.client, path: item.path, operation: "refresh-assets" });
   for (const issue of runtime) add(findings, issue.code, "error", issue.message, "Repair the installed server runtime.", { client: issue.client, path: issue.path, operation: "refresh-runtime" });
   for (const issue of manifest.findings) findings.push(issue);
   for (const issue of platformService) findings.push(issue);
@@ -50,7 +53,7 @@ async function inspectInstallation(options = {}) {
     }
   }
   delete provider.credentialValue;
-  const detected = versions.detected[0] || null;
+  const detected = explicitVersion || versions.detected[0] || null;
   const publicClients = { ...registrations, registrations: registrations.registrations.map((item) => ({ ...item, env: Object.fromEntries(Object.keys(item.env || {}).map((key) => [key, "<configured>"])) })) };
   return { schemaVersion: 3, installedVersion: detected ? detected.version : null, installedVersionSource: detected ? detected.source : "not-detected", installedVersionPath: detected ? detected.path : null, detectedVersions: versions.detected, expectedVersion, healthy: findings.every((item) => item.severity !== "error"), effectiveProfile: options.effectiveProfile || options.profile || "standard", provider, clients: publicClients, runtime, manifest: manifest.summary, platformService: platformService.length ? "inconsistent" : "ok", logs, findings };
 }
@@ -163,25 +166,36 @@ function inspectRuntime(registrations, options = {}) { const issues = []; const 
    lexical prefix: canonical paths must remain under canonical declared roots. */
 function inspectManifest(home, options = {}) {
   const file = path.join(home, ".token-optimizer", "manifest.json"); let data;
-  try { data = JSON.parse(fs.readFileSync(file, "utf8")); } catch (error) { return { summary: { path: file, exists: error.code !== "ENOENT", valid: false, repairable: false }, findings: error.code === "ENOENT" ? [] : [manifestFinding("MANIFEST_INVALID", "The ownership manifest is unreadable.", file)] }; }
+  const manifestMaxBytes = positiveLimit(options.manifestMaxBytes, 1024 * 1024);
+  try { const stat = fs.lstatSync(file); if (!stat.isFile() || stat.isSymbolicLink() || stat.size > manifestMaxBytes) throw Object.assign(new Error("unsafe manifest"), { code: stat.size > manifestMaxBytes ? "MANIFEST_TOO_LARGE" : "MANIFEST_INVALID" }); data = JSON.parse(fs.readFileSync(file, "utf8")); } catch (error) { const code = error.code === "MANIFEST_TOO_LARGE" ? "MANIFEST_TOO_LARGE" : "MANIFEST_INVALID"; return { summary: { path: file, exists: error.code !== "ENOENT", valid: false, repairable: false }, findings: error.code === "ENOENT" ? [] : [manifestFinding(code, code === "MANIFEST_TOO_LARGE" ? "The ownership manifest exceeds the inspection limit." : "The ownership manifest is unreadable.", file)] }; }
   const findings = []; const schemaValid = data && data.schemaVersion === 2 && Array.isArray(data.files) && Array.isArray(data.roots) && data.roots.length > 0;
   if (!schemaValid) findings.push(manifestFinding("MANIFEST_INVALID", "The ownership manifest schema is invalid.", file));
-  const roots = [];
-  if (schemaValid) for (const root of data.roots) { if (typeof root !== "string" || !path.isAbsolute(root)) { findings.push(manifestFinding("MANIFEST_ROOT_INVALID", "A manifest root is not a valid absolute path.", file)); continue; } try { roots.push(canonicalPath(root)); } catch (_) { findings.push(manifestFinding("MANIFEST_ROOT_INACCESSIBLE", "A manifest root cannot be resolved safely.", root)); } }
-  for (const entry of schemaValid ? data.files : []) {
+  const allowedRoots = knownManifestRoots(home, options).map(canonicalPath); const roots = [];
+  if (schemaValid) for (const root of data.roots) { if (typeof root !== "string" || !path.isAbsolute(root)) { findings.push(manifestFinding("MANIFEST_ROOT_INVALID", "A manifest root is not a valid absolute path.", file)); continue; } try { const canonical = canonicalPath(root); if (!withinRoots(canonical, allowedRoots)) findings.push(manifestFinding("MANIFEST_ROOT_UNTRUSTED", "A manifest root is outside installer-managed locations.", root)); else roots.push(canonical); } catch (_) { findings.push(manifestFinding("MANIFEST_ROOT_INACCESSIBLE", "A manifest root cannot be resolved safely.", root)); } }
+  const maxEntries = positiveLimit(options.manifestMaxEntries, 10000); const maxFileBytes = positiveLimit(options.manifestMaxFileBytes, 10 * 1024 * 1024); const maxTotalBytes = positiveLimit(options.manifestMaxTotalBytes, 100 * 1024 * 1024); let totalBytes = 0;
+  const entries = schemaValid ? data.files.slice(0, maxEntries) : [];
+  if (schemaValid && data.files.length > maxEntries) findings.push(manifestFinding("MANIFEST_ENTRY_LIMIT_EXCEEDED", "The ownership manifest has too many file entries.", file));
+  for (const entry of entries) {
     const entryPath = entry && entry.path;
     if (!entry || typeof entryPath !== "string" || !path.isAbsolute(entryPath) || typeof entry.sha256 !== "string" || typeof entry.ownership !== "string") { findings.push(manifestFinding("MANIFEST_ENTRY_INVALID", "A manifest file entry is malformed.", entryPath || file)); continue; }
     let stat; try { stat = fs.lstatSync(entryPath); } catch (error) { if (error.code !== "ENOENT") findings.push(manifestFinding("MANIFEST_ENTRY_INACCESSIBLE", "A managed file cannot be inspected.", entryPath)); continue; }
     if (stat.isSymbolicLink()) { findings.push(manifestFinding("MANIFEST_ENTRY_SYMLINK", "A managed file is a symbolic link.", entryPath)); continue; }
     let canonical; try { canonical = canonicalPath(entryPath); } catch (_) { findings.push(manifestFinding("MANIFEST_ENTRY_INACCESSIBLE", "A managed path cannot be resolved safely.", entryPath)); continue; }
-    if (!roots.some((root) => canonical === root || canonical.startsWith(`${root}${path.sep}`))) { findings.push(manifestFinding("MANIFEST_PATH_ESCAPE", "A managed path escapes the declared roots.", entryPath)); continue; }
+    if (!withinRoots(canonical, roots) || !withinRoots(canonical, allowedRoots)) { findings.push(manifestFinding("MANIFEST_PATH_ESCAPE", "A managed path escapes installer-managed roots.", entryPath)); continue; }
     if (!stat.isFile()) { findings.push(manifestFinding("MANIFEST_ENTRY_NOT_FILE", "A managed path is not a regular file.", entryPath)); continue; }
+    if (stat.size > maxFileBytes) { findings.push(manifestFinding("MANIFEST_ENTRY_TOO_LARGE", "A managed file exceeds the per-file inspection limit.", entryPath)); continue; }
+    if (totalBytes + stat.size > maxTotalBytes) { findings.push(manifestFinding("MANIFEST_TOTAL_BYTES_EXCEEDED", "Managed files exceed the total inspection limit.", entryPath)); continue; }
+    totalBytes += stat.size;
     try { const hash = crypto.createHash("sha256").update(fs.readFileSync(entryPath)).digest("hex"); if (hash !== entry.sha256) add(findings, "MANIFEST_HASH_MISMATCH", "warning", "A managed file differs from its manifest hash.", "Repair from a trusted installer asset source.", { path: entryPath, operation: "restore-managed-file" }); } catch (_) { findings.push(manifestFinding("MANIFEST_ENTRY_INACCESSIBLE", "A managed file cannot be read.", entryPath)); }
   }
-  const sources = (Array.isArray(data.assetRoots) ? data.assetRoots : []).filter((root) => typeof root === "string" && fs.existsSync(root)); const repairable = sources.length > 0 || Boolean(options.assetsRoot && fs.existsSync(options.assetsRoot));
+  const trustedAssetRoot = canonicalPath(path.resolve(options.assetsRoot || path.join(__dirname, "..", "assets")));
+  const sources = (Array.isArray(data.assetRoots) ? data.assetRoots : []).filter((root) => { try { return typeof root === "string" && withinRoots(canonicalPath(root), [trustedAssetRoot]) && fs.existsSync(root); } catch (_) { return false; } }); const repairable = sources.length > 0 || Boolean(options.assetsRoot && fs.existsSync(options.assetsRoot));
   if (findings.length && !repairable) add(findings, "MANIFEST_SOURCE_UNAVAILABLE", "error", "No trusted runtime-cache or installer asset source is available for repair.", "Reinstall from the package before running repair.", { path: file, operation: "reinstall" });
   return { summary: { path: file, exists: true, valid: schemaValid && findings.every((item) => !item.code.startsWith("MANIFEST_") || item.code === "MANIFEST_HASH_MISMATCH"), repairable }, findings };
 }
+function positiveLimit(value, fallback) { const number = Number(value); return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback; }
+function withinRoots(target, roots) { return roots.some((root) => target === root || target.startsWith(`${root}${path.sep}`)); }
+function knownManifestRoots(home, options = {}) { const installRoot = path.resolve(options.installRoot || path.join(home, ".token-optimizer")); const assetsRoot = path.resolve(options.assetsRoot || path.join(__dirname, "..", "assets")); return [installRoot, assetsRoot, path.join(home, ".config", "opencode", "token-optimizer-server"), path.join(home, ".config", "opencode", "skills", "token-optimizer"), path.join(home, ".cursor", "token-optimizer-server"), path.join(home, ".cursor", "rules"), path.join(home, ".gemini", "config", "plugins", "token-optimizer"), path.join(home, ".claude", "skills", "token-optimizer"), path.join(home, ".codex", "skills", "token-optimizer"), ...(options.cursorProjects || []).map((root) => path.join(path.resolve(root), ".cursor", "rules"))]; }
 function manifestFinding(code, message, entryPath) { return { code, severity: "error", message, remediation: "Reinstall or repair from a trusted installer source.", path: entryPath, operation: "recreate-manifest" }; }
 function canonicalPath(target) { let current = path.resolve(target); const tail = []; while (!fs.existsSync(current)) { const parent = path.dirname(current); if (parent === current) break; tail.unshift(path.basename(current)); current = parent; } let resolved = fs.realpathSync.native(current); for (const part of tail) resolved = path.join(resolved, part); return resolved; }
 

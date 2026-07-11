@@ -13,9 +13,10 @@ const config = loadConfig({
    we assert on what the gateway would send to OpenRouter and return to callers. */
 async function withServer(
   fetchImpl: typeof fetch,
-  run: (base: string) => Promise<void>
+  run: (base: string) => Promise<void>,
+  options: { rateLimiter?: { allow(key: string): boolean }; providerHealthMaxConcurrency?: number; config?: typeof config } = {}
 ): Promise<void> {
-  const server = createGatewayServer(config, { fetchImpl });
+  const server = createGatewayServer(options.config || config, { fetchImpl, rateLimiter: options.rateLimiter, providerHealthMaxConcurrency: options.providerHealthMaxConcurrency });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
   try {
@@ -71,6 +72,39 @@ test('GET /v1/provider-health rejects invalid BYOK metadata auth', async () => {
     const invalid = await fetch(`${base}/v1/provider-health`, { headers: { 'X-OpenRouter-Key': 'sk-or-invalidfixture' } });
     assert.equal(invalid.status, 401);
   });
+});
+
+test('GET /v1/provider-health rate limits before contacting upstream without retaining the raw key', async () => {
+  let upstreamCalls = 0; let limiterKey = '';
+  await withServer(async () => { upstreamCalls++; return new Response('{}', { status: 200 }); }, async (base) => {
+    const response = await fetch(`${base}/v1/provider-health`, { headers: { 'X-OpenRouter-Key': 'sk-or-validfixturekey' } });
+    assert.equal(response.status, 429);
+    assert.equal(upstreamCalls, 0);
+    assert.doesNotMatch(limiterKey, /validfixturekey/);
+  }, { rateLimiter: { allow: (key) => { limiterKey = key; return false; } } });
+});
+
+test('GET /v1/provider-health bounds concurrent upstream probes', async () => {
+  let release!: () => void; let upstreamCalls = 0;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  await withServer(async () => { upstreamCalls++; await pending; return new Response('{}', { status: 200 }); }, async (base) => {
+    const headers = { 'X-OpenRouter-Key': 'sk-or-validfixturekey' };
+    const first = fetch(`${base}/v1/provider-health`, { headers });
+    while (upstreamCalls === 0) await new Promise((resolve) => setImmediate(resolve));
+    const second = await fetch(`${base}/v1/provider-health`, { headers });
+    assert.equal(second.status, 429); assert.equal(upstreamCalls, 1);
+    release(); assert.equal((await first).status, 200);
+  }, { providerHealthMaxConcurrency: 1 });
+});
+
+test('GET /v1/provider-health aborts a timed-out upstream probe and releases concurrency', async () => {
+  const shortTimeout = { ...config, upstreamTimeoutMs: 10 };
+  await withServer(async (_url, init) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+  }), async (base) => {
+    const response = await fetch(`${base}/v1/provider-health`, { headers: { 'X-OpenRouter-Key': 'sk-or-validfixturekey' } });
+    assert.equal(response.status, 502);
+  }, { providerHealthMaxConcurrency: 1, config: shortTimeout });
 });
 
 test('POST /v1/chat/completions rejects a missing/invalid token with 401', async () => {
