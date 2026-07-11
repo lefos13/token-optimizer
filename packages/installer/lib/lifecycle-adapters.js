@@ -4,11 +4,12 @@ const { execFileSync } = require('child_process');
 /* Lifecycle adapters capture exact external state before removing installer
    registrations or services. Restores write the captured bytes and reload the
    prior LaunchAgent, making later-operation failure reversible. */
-function createRegistrationAdapter() {
+function createRegistrationAdapter(options = {}) {
+  const exec = options.execFileSync || execFileSync;
   return {
-    capture(operation) { return (operation.paths || []).map((file) => ({ file, exists: fs.existsSync(file), content: fs.existsSync(file) ? fs.readFileSync(file) : null })); },
-    apply(operation) { for (const file of operation.paths || []) removeRegistration(file, operation.client); },
-    restore(_operation, state) { for (const item of state) { if (!item.exists) fs.rmSync(item.file, { force: true }); else { fs.mkdirSync(require('path').dirname(item.file), { recursive: true }); fs.writeFileSync(item.file, item.content); } } },
+    capture(operation) { return { files: (operation.paths || []).map((file) => ({ file, exists: fs.existsSync(file), content: fs.existsSync(file) ? fs.readFileSync(file) : null })), marketplace: Boolean(operation.recipe) }; },
+    apply(operation) { for (const file of operation.paths || []) removeRegistration(file, operation.client); if (operation.recipe) exec(operation.client, operation.recipe.remove, { stdio: 'ignore' }); },
+    restore(operation, state) { for (const item of state.files) { if (!item.exists) fs.rmSync(item.file, { force: true }); else { fs.mkdirSync(require('path').dirname(item.file), { recursive: true }); fs.writeFileSync(item.file, item.content); } } if (state.marketplace) exec(operation.client, operation.recipe.restore, { stdio: 'ignore' }); },
   };
 }
 

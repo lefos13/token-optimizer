@@ -226,6 +226,7 @@ function prepareCredentialOperation(runtime, operation) {
 }
 
 function planInstallation(options = {}) {
+  options.lifecycleRegistrations ||= [];
   const paths = installerPaths(options);
   const clients = normalizeClients(options.clients, paths.home);
   const runtime = createCredentialTransaction(options, paths);
@@ -360,7 +361,8 @@ function persistInstallManifest(options = {}, clients = []) {
     antigravity: [path.join(paths.home, ".gemini", "config", "mcp_config.json")], opencode: [path.join(paths.home, ".config", "opencode", "opencode.jsonc")],
     cursor: [path.join(paths.home, ".cursor", "mcp.json")],
   };
-  const registrations = clients.map((client) => ({ client, paths: (registrationPaths[client] || []).filter((file) => fs.existsSync(file)), ownership: "installer" }));
+  const registrations = clients.map((client) => ({ client, paths: (registrationPaths[client] || []).filter((file) => fs.existsSync(file)), ownership: "installer" }))
+    .concat((options.lifecycleRegistrations || []).map((registration) => ({ ...registration, ownership: "installer" })));
   const launchAgent = path.join(paths.home, "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`);
   const platformServices = process.platform === "darwin" && fs.existsSync(launchAgent)
     ? [{ platform: "darwin", service: LAUNCH_AGENT_LABEL, path: launchAgent, ownership: "installer" }]
@@ -512,6 +514,7 @@ function installClaude(options) {
     tryClientCommand("claude", ["plugin", "update", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`], options)
     || tryClientCommand("claude", ["plugin", "install", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`], options)
   );
+  if (pluginInstalled) (options.lifecycleRegistrations ||= []).push({ client: "claude", kind: "marketplace", remove: ["plugin", "uninstall", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`], restore: ["plugin", "install", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`] });
   if (!pluginInstalled) {
     copyDirectory(path.join(options.assetsRoot, "plugin", "claude"), path.join(options.home, ".claude", "skills", "token-optimizer"));
   }
@@ -538,6 +541,7 @@ function installCodex(options) {
        harmless on first install and forces a fresh cache before adding. */
     tryClientCommand("codex", ["plugin", "remove", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options);
     tryClientCommand("codex", ["plugin", "add", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options);
+    (options.lifecycleRegistrations ||= []).push({ client: "codex", kind: "marketplace", remove: ["plugin", "remove", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], restore: ["plugin", "add", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME] });
   }
   const startJs = path.join(pluginDest, "server", "start.js");
   const configPath = path.join(options.home, ".codex", "config.toml");

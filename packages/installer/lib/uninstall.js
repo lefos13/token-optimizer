@@ -34,7 +34,7 @@ function planUninstall(manifest, currentState = {}, options = {}) {
     if (credential.ownership === 'installer' && credential.reference) operations.push(credentialOperation('remove', { reference: credential.reference }));
   }
   for (const registration of manifest.registrations || []) {
-    if (registration.ownership === 'installer' && registration.client) operations.push(clientCommandOperation(registration.client, 'remove-registration', { paths: registration.paths || [] }));
+    if (registration.ownership === 'installer' && registration.client) operations.push(clientCommandOperation(registration.client, 'remove-registration', { paths: registration.paths || [], recipe: registration.kind === 'marketplace' ? { remove: registration.remove, restore: registration.restore } : undefined }));
   }
   for (const service of manifest.platformServices || []) {
     if (service.ownership === 'installer') operations.push(platformServiceOperation(service.platform, service.service, { path: service.path }));
@@ -56,6 +56,7 @@ function planRepair(report = {}, manifest, options = {}) {
     else if (file.kind === 'copy-tree' && file.sourcePath) operations.push(copyTreeOperation(trustedRepairSource({ ...file, source: file.sourcePath }, manifest, options), file.path));
   }
   for (const finding of actionable) {
+    if (finding.operation === 'refresh-runtime' && finding.code === 'DEPENDENCY_CACHE_INCOMPLETE' && finding.path) operations.push(removeFileOperation(finding.path));
     if (['rewrite-registration', 'deduplicate-registration', 'install-client'].includes(finding.operation) && finding.client) operations.push(clientCommandOperation(finding.client, finding.operation));
     if (['rewrite-launch-agent', 'reload-launch-agent'].includes(finding.operation)) operations.push(platformServiceOperation('darwin', finding.operation));
   }
@@ -63,7 +64,7 @@ function planRepair(report = {}, manifest, options = {}) {
 }
 
 function isRepairFinding(item) {
-  return ['MISSING_LAUNCHER', 'MISSING_FILE', 'CORRUPT_FILE', 'VERSION_MISMATCH', 'CLIENT_NOT_CONFIGURED', 'STALE_REGISTRATION', 'DUPLICATE_REGISTRATION', 'LAUNCH_AGENT_MISSING', 'LAUNCH_AGENT_INVALID', 'LAUNCHCTL_MISMATCH', 'DEPENDENCY_CACHE_INCOMPLETE', 'MANIFEST_HASH_MISMATCH'].includes(item.code);
+  return ['MISSING_LAUNCHER', 'LAUNCHER_NOT_EXECUTABLE', 'MISSING_FILE', 'CORRUPT_FILE', 'VERSION_MISMATCH', 'CLIENT_NOT_CONFIGURED', 'STALE_REGISTRATION', 'DUPLICATE_REGISTRATION', 'LAUNCH_AGENT_MISSING', 'LAUNCH_AGENT_INVALID', 'LAUNCHCTL_MISMATCH', 'DEPENDENCY_CACHE_INCOMPLETE', 'MANIFEST_HASH_MISMATCH'].includes(item.code);
 }
 
 function deduplicateOperations(operations) { const seen = new Set(); return operations.filter((operation) => { const key = JSON.stringify(operation); if (seen.has(key)) return false; seen.add(key); return true; }); }

@@ -21,3 +21,9 @@ test('repair consumes stable operation hints and deduplicates exact external wor
   ] }, manifest);
   assert.deepEqual(plan.operations, [{ kind: 'client-command', client: 'codex', command: 'rewrite-registration' }]);
 });
+
+test('repair removes an incomplete dependency cache so launcher bootstrap can rebuild it', () => {
+  const manifest = { schemaVersion: 2, roots: ['/managed'], files: [] };
+  const plan = planRepair({ findings: [{ code: 'DEPENDENCY_CACHE_INCOMPLETE', path: '/managed/.data/node_modules', operation: 'refresh-runtime' }] }, manifest);
+  assert.deepEqual(plan.operations, [{ kind: 'remove-file', path: '/managed/.data/node_modules' }]);
+});

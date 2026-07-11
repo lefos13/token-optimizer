@@ -5,6 +5,7 @@ const { applyLifecyclePlan } = require('../../../packages/installer/lib/uninstal
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { createRegistrationAdapter } = require('../../../packages/installer/lib/lifecycle-adapters.js');
 
 test('uninstall emits a warning and preserves user-modified files', () => {
   const file = '/managed/user-edited';
@@ -46,4 +47,14 @@ test('uninstall rolls back files when a later reversible registration fails', ()
 test('uninstall fails closed before external state without a reversible adapter', () => {
   const manifest = { schemaVersion: 2, roots: ['/managed'], files: [], registrations: [{ client: 'claude', ownership: 'installer' }] };
   assert.throws(() => applyLifecyclePlan(planUninstall(manifest), { requireExternalAdapters: true }), /rolled back/);
+});
+
+test('marketplace registration adapter removes and re-adds Claude and Codex on rollback', () => {
+  for (const client of ['claude', 'codex']) {
+    const calls: any[] = []; const adapter = createRegistrationAdapter({ execFileSync: (...args: any[]) => calls.push(args) });
+    const recipe = client === 'claude' ? { remove: ['plugin', 'uninstall', 'token'], restore: ['plugin', 'install', 'token'] } : { remove: ['plugin', 'remove', 'token'], restore: ['plugin', 'add', 'token'] };
+    const operation = { kind: 'client-command', client, paths: [], recipe };
+    const state = adapter.capture(operation); adapter.apply(operation); adapter.restore(operation, state);
+    assert.deepEqual(calls.map((call) => call.slice(0, 2)), [[client, recipe.remove], [client, recipe.restore]]);
+  }
 });
