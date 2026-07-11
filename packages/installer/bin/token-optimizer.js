@@ -16,6 +16,7 @@ const {
   applyGatewayConfig,
   applyDefaultDirectives,
 } = require("../lib/install-core");
+const { inspectInstallation } = require("../lib/doctor");
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -23,6 +24,26 @@ async function main() {
 
   if (args.help || command === "help") {
     printHelp();
+    return;
+  }
+
+  if (command === "status" || command === "doctor") {
+    const report = await inspectInstallation({
+      home: args.home,
+      installedVersion: args["installed-version"],
+      expectedVersion: args["expected-version"] || pkg.version,
+      provider: args.provider,
+      profile: args.profile,
+      logDirectory: args["log-directory"],
+      performHealthProbe: command === "doctor",
+    });
+    if (args.json === true) console.log(JSON.stringify(report, null, 2));
+    else printInspection(report, command);
+    if (command === "doctor") {
+      const errors = report.findings.some((item) => item.severity === "error");
+      const warnings = report.findings.some((item) => item.severity === "warning");
+      process.exitCode = errors ? 1 : warnings && args.strict === true ? 2 : 0;
+    }
     return;
   }
 
@@ -316,6 +337,8 @@ function printHelp() {
   token-optimizer install --local
   token-optimizer config --token <token>
   token-optimizer defaults --clients claude,codex,opencode
+  token-optimizer status [--json]
+  token-optimizer doctor [--json] [--strict]
 
 No token is required to use this tool. With no provider flags, the installer
 prompts for one of three providers, plus a skip option:
@@ -350,6 +373,15 @@ Options:
 `);
 }
 
+function printInspection(report, command) {
+  console.log(`${command === "doctor" ? "Doctor" : "Status"}: ${report.healthy ? "healthy" : "unhealthy"}`);
+  console.log(`Provider: ${report.provider.mode || "none"} (${report.provider.credentialStore})`);
+  console.log(`Clients: ${report.clients.configured.join(", ") || "none"}`);
+  console.log(`Profile: ${report.effectiveProfile}`);
+  console.log(`Logs: ${report.logs.files} file(s), ${report.logs.bytes} bytes (${report.logs.usagePercent}% of quota)`);
+  for (const item of report.findings) console.log(`[${item.severity}] ${item.code}: ${item.message}`);
+}
+
 if (require.main === module) {
   main().catch((error) => {
     console.error(`Token Optimizer installer failed: ${error.message}`);
@@ -364,4 +396,5 @@ module.exports = {
   checkForUpdate,
   fetchLatestVersion,
   compareVersions,
+  printInspection,
 };
