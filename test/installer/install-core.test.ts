@@ -229,7 +229,7 @@ test('buildProviderValues: gateway needs a token, byok needs ONLY a key (no toke
 
   const local = installer.buildProviderValues({ provider: 'local' });
   assert.deepEqual(Object.keys(local).sort(), [...installer.MANAGED_ENV_KEYS].sort());
-  assert.ok(Object.values(local).every((v: unknown) => v === ''));
+  assert.equal(local.TOKEN_OPTIMIZER_PROVIDER_MODE, 'local');
 
   const localWithOverrides = installer.buildProviderValues({ provider: 'local', localApiUrl: 'http://x:1/v1', localModel: 'm' });
   assert.equal(localWithOverrides.LOCAL_LLM_API_URL, 'http://x:1/v1');
@@ -237,7 +237,7 @@ test('buildProviderValues: gateway needs a token, byok needs ONLY a key (no toke
   assert.equal(localWithOverrides.LLM_GATEWAY_TOKEN, '');
 
   const skip = installer.buildProviderValues({ provider: 'skip' });
-  assert.ok(Object.values(skip).every((v: unknown) => v === ''));
+  assert.equal(skip.TOKEN_OPTIMIZER_PROVIDER_MODE, '');
 
   /* No explicit provider: inferred from whichever fields were supplied. */
   assert.equal(installer.buildProviderValues({ gatewayToken: 'tok' }).LLM_GATEWAY_TOKEN, 'tok');

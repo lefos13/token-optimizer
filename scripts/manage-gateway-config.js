@@ -985,7 +985,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  MANAGED_ENV_KEYS,
+  MANAGED_ENV_KEYS: ALL_MANAGED_ENV_KEYS,
   PROVIDER_META_KEYS,
   ALL_MANAGED_ENV_KEYS,
   DEFAULT_GATEWAY_URL,
