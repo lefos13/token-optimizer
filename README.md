@@ -54,6 +54,13 @@ BYOK mode does not require a gateway access token.
 Run `npx @softawarest/token-optimizer-installer --help` to see non-interactive
 options such as `--token`, `--byok-key`, `--byok-model`, and `--local`.
 
+The installer is lifecycle-safe: preview writes with `install --dry-run`, then
+use `status`, `doctor`, `repair --dry-run`, or `uninstall --dry-run` before any
+mutation. A manifest under `~/.token-optimizer/manifest.json` records owned
+paths and hashes without storing credentials; edited user files are preserved.
+Credential stores and any fallback are shown in the plan. Use
+`logs status|prune|purge --workspace <absolute-path>` for raw-log lifecycle.
+
 ## Use it
 
 Ask your coding agent to use Token Optimizer when it needs to understand a

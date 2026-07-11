@@ -50,7 +50,7 @@ const execution_metadata_1 = require("./execution-metadata");
 const log_store_1 = require("./log-store");
 const server = new index_js_1.Server({
     name: 'token-optimizer-mcp',
-    version: '2.0.0-alpha.7',
+    version: '2.0.0-beta.1',
 }, {
     capabilities: {
         tools: {},

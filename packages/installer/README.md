@@ -64,6 +64,10 @@ still contain secrets printed by commands. If inference is unavailable or model
 output fails schema validation, command exit codes remain authoritative and the
 installer-connected tools report a conservative `uncertain` result.
 
+In `gateway-byok` mode the OpenRouter key crosses the Softaware gateway before
+reaching OpenRouter; choose `openrouter-direct` when
+the key must go directly to OpenRouter.
+
 1. **Gateway access token** — shared infrastructure, requires an approved token.
    Request one at [https://llm-proxy.lnf.gr/](https://llm-proxy.lnf.gr/).
 2. **Your own OpenRouter key (`byok`)** — get a key from
@@ -128,6 +132,30 @@ npx @softawarest/token-optimizer-installer config --token <token>
 npx @softawarest/token-optimizer-installer config --byok-key sk-or-...
 npx @softawarest/token-optimizer-installer defaults --clients claude,codex,opencode
 ```
+
+## Inspect, repair, and remove safely
+
+Preview every mutation with `--dry-run` (or `--json` for automation), including
+managed paths, client commands, credential-store operations, and GUI-session
+environment changes. The ownership manifest at `~/.token-optimizer/manifest.json`
+stores paths, hashes, and references only—never raw API keys. Repair and
+uninstall operate only on matching managed hashes, preserving user edits.
+
+```bash
+npx @softawarest/token-optimizer-installer install --local --dry-run
+npx @softawarest/token-optimizer-installer status
+npx @softawarest/token-optimizer-installer doctor --strict
+npx @softawarest/token-optimizer-installer repair --dry-run
+npx @softawarest/token-optimizer-installer uninstall --dry-run
+```
+
+`status` is read-only; `doctor` performs a provider health check and exits `1`
+for errors, `2` for warnings with `--strict`, and `0` when healthy. Credential
+stores prefer macOS Keychain, Windows DPAPI/Credential Manager, and Linux
+Secret Service/libsecret; any fallback is visible in the dry-run plan. Legacy
+provider migration removes only superseded managed keys. Raw logs are scoped to
+an absolute workspace and managed with `logs status|prune|purge`; purge keeps
+baseline and analytics metadata unless explicit include flags are supplied.
 
 Flow-specific commands:
 

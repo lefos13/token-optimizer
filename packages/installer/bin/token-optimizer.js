@@ -365,6 +365,7 @@ function printHelp() {
   console.log(`Usage:
   npx @softawarest/token-optimizer-installer [install] [options]
   token-optimizer install --clients opencode,cursor
+  token-optimizer install --dry-run [--json]
   token-optimizer install --local
   token-optimizer config --token <token>
   token-optimizer defaults --clients claude,codex,opencode
@@ -372,6 +373,7 @@ function printHelp() {
   token-optimizer doctor [--json] [--strict]
   token-optimizer repair [--home <path>] [--dry-run]
   token-optimizer uninstall [--home <path>] [--dry-run]
+  token-optimizer uninstall --dry-run
   token-optimizer logs status|prune|purge --workspace <absolute-path>
 
 No token is required to use this tool. With no provider flags, the installer

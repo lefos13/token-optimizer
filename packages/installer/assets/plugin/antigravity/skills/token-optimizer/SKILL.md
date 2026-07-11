@@ -199,6 +199,15 @@ If a tool exists in the server but is not exposed in the current Codex session, 
 
 Generated launchers validate that both the MCP SDK server entry point and `zod/v3` resolve from their launcher-owned dependency cache. If the manifest matches but the cache is incomplete, the launcher removes only that cached `node_modules`, reinstalls dependencies, validates them again, and starts the server. A failed repair exits with a concise stderr diagnostic instead of starting a broken MCP process. Codex marketplace configuration forwards `OPENROUTER_BYOK_KEY` and `OPENROUTER_BYOK_MODEL` alongside the gateway variables, so BYOK-only sessions do not need `LLM_GATEWAY_TOKEN`.
 
+The installer lifecycle is reversible. Use `install --dry-run` (or `--json`)
+to inspect all writes, ownership, credential-store operations, and GUI-session
+environment changes. Its manifest stores hashes and references, never secrets;
+repair and uninstall preserve user-modified files. `status` is read-only,
+`doctor --strict` adds provider health checks, and `repair --dry-run` previews
+targeted fixes. `logs status|prune|purge --workspace <absolute-path>` manages
+raw logs while preserving baseline and analytics metadata unless explicitly
+requested for deletion.
+
 Re-running the npm installer refreshes all client assets: Antigravity, OpenCode,
 and Cursor replace their installer-managed local files; Claude uses its plugin
 update command when available; and Codex removes then re-adds the plugin to
