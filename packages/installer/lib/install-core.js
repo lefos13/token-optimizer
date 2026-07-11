@@ -178,32 +178,70 @@ function installerPaths(options = {}) {
   };
 }
 
+/* Installation and provider-only configuration share one credential state
+   machine so replacement, superseded cleanup, and rollback cannot diverge. */
+function createCredentialTransaction(options, paths) {
+  const provider = normalizeProviderChoice(options.provider) || inferProvider(options);
+  const runtime = { options: prepareCredentialOptions(options), credentialRef: options.credentialRef, credentialOwned: false };
+  const priorOwned = (readManifest(paths.home)?.credentials || []).find((item) => item.ownership === "installer")?.reference;
+  const priorStoreKind = priorOwned && (priorOwned.store === "config" || priorOwned.store === "protected-config" ? "config" : "native");
+  const requestedStoreKind = options.credentialStore || "native";
+  runtime.superseded = priorOwned && (priorOwned.account !== provider || priorStoreKind !== requestedStoreKind) ? priorOwned : null;
+  runtime.provider = provider;
+  runtime.needsCredential = ["gateway-token", "gateway-byok", "openrouter-direct"].includes(provider) && !options.credentialRef;
+  runtime.optionsSource = options;
+  runtime.paths = paths;
+  return runtime;
+}
+
+function executeCredentialOperation(runtime, operation) {
+  if (operation.phase === "cleanup") {
+    runtime.supersededStore.delete(runtime.superseded);
+    return;
+  }
+  if (runtime.options.credentialRef) return;
+  const source = runtime.optionsSource;
+  const secret = runtime.provider === "gateway-token" ? source.gatewayToken : (source.openrouterKey || source.byokKey);
+  runtime.credentialRef = runtime.store.set(secret);
+  runtime.credentialOwned = !runtime.priorCredential;
+  runtime.options = { ...runtime.options, credentialRef: runtime.credentialRef };
+  delete runtime.options.gatewayToken; delete runtime.options.byokKey; delete runtime.options.openrouterKey;
+}
+
+function prepareCredentialOperation(runtime, operation) {
+  const options = runtime.optionsSource;
+  if (operation.phase === "cleanup") {
+    const ref = runtime.superseded;
+    const kind = ref.store === "config" || ref.store === "protected-config" ? "config" : "native";
+    runtime.supersededStore = createCredentialStore(kind, { home: runtime.paths.home, service: ref.service, account: ref.account, path: ref.path, ...(options.credentialStoreOptions || {}) });
+    runtime.supersededSecret = runtime.supersededStore.get(ref);
+    return { inverse: () => { if (runtime.supersededSecret) runtime.supersededStore.set(runtime.supersededSecret); } };
+  }
+  const kind = options.credentialStore || "native";
+  const variable = runtime.provider === "gateway-token" ? "LLM_GATEWAY_TOKEN" : runtime.provider === "openrouter-direct" ? "OPENROUTER_API_KEY" : "OPENROUTER_BYOK_KEY";
+  runtime.store = createCredentialStore(kind, { home: runtime.paths.home, service: "token-optimizer", account: runtime.provider, envVar: variable, ...(options.credentialStoreOptions || {}) });
+  runtime.priorCredential = runtime.store.get({ service: "token-optimizer", account: runtime.provider });
+  return { inverse: () => runtime.priorCredential ? runtime.store.set(runtime.priorCredential) : runtime.store.delete({ service: "token-optimizer", account: runtime.provider }) };
+}
+
 function planInstallation(options = {}) {
   const paths = installerPaths(options);
   const clients = normalizeClients(options.clients, paths.home);
-  const runtime = { options: prepareCredentialOptions(options), credentialRef: options.credentialRef, credentialOwned: false };
-  const provider = normalizeProviderChoice(options.provider) || inferProvider(options);
-  const needsCredential = ["gateway-token", "gateway-byok", "openrouter-direct"].includes(provider) && !options.credentialRef;
+  const runtime = createCredentialTransaction(options, paths);
   const operations = [
-    ...(needsCredential ? [{ id: "install:provider:credential", kind: "credential", phase: "credentials", provider, reference: `${options.credentialStore || "native"}:${provider}` }] : []),
+    ...(runtime.needsCredential ? [{ id: "install:provider:credential", kind: "credential", phase: "credentials", provider: runtime.provider, reference: `${options.credentialStore || "native"}:${runtime.provider}` }] : []),
     ...clients.flatMap((client) => [
     { id: `install:${client}:copy`, kind: "copy-tree", phase: "copy", client, path: paths.home, targets: clientTargets(client, paths, options) },
     { id: `install:${client}:config`, kind: "managed-block", phase: "config", client, path: paths.home },
     { id: `install:${client}:service`, kind: "platform-service", phase: "service", client, platform: process.platform },
     { id: `install:${client}:command`, kind: "client-command", phase: "command", client, command: "register" },
   ]),
+    ...(runtime.superseded ? [{ id: "install:provider:cleanup", kind: "credential", phase: "cleanup", provider: runtime.provider, reference: runtime.superseded }] : []),
   ];
   const plan = createChangePlan({ action: "install", version: options.version || require("../package.json").version, clients }, operations);
   registerPlan(plan, (operation) => {
     if (operation.kind === "credential") {
-      if (runtime.options.credentialRef) return;
-      const secret = provider === "gateway-token" ? options.gatewayToken : (options.openrouterKey || options.byokKey);
-      const store = runtime.store;
-      runtime.credentialRef = store.set(secret);
-      runtime.credentialOwned = !runtime.priorCredential;
-      runtime.options = { ...runtime.options, credentialRef: runtime.credentialRef };
-      delete runtime.options.gatewayToken; delete runtime.options.byokKey; delete runtime.options.openrouterKey;
-      return;
+      return executeCredentialOperation(runtime, operation);
     }
     if (operation.phase !== "copy") return;
     const installOptions = { ...runtime.options, ...paths };
@@ -215,11 +253,7 @@ function planInstallation(options = {}) {
     else throw new Error(`Unsupported client: ${operation.client}`);
   }, (operation) => {
     if (operation.kind === "credential") {
-      const kind = options.credentialStore || "native";
-      const variable = provider === "gateway-token" ? "LLM_GATEWAY_TOKEN" : provider === "openrouter-direct" ? "OPENROUTER_API_KEY" : "OPENROUTER_BYOK_KEY";
-      runtime.store = createCredentialStore(kind, { home: paths.home, service: "token-optimizer", account: provider, envVar: variable, ...(options.credentialStoreOptions || {}) });
-      runtime.priorCredential = runtime.store.get({ service: "token-optimizer", account: provider });
-      return { inverse: () => runtime.priorCredential ? runtime.store.set(runtime.priorCredential) : runtime.store.delete({ service: "token-optimizer", account: provider }) };
+      return prepareCredentialOperation(runtime, operation);
     }
     const boundaries = [paths.home, ...(options.cursorProjects || []).map((project) => path.resolve(project))];
     const before = snapshotTargets(operation.targets || [], boundaries);
@@ -240,45 +274,19 @@ function installSelectedClients(options) {
    if any client write fails after credential mutation. */
 function planProviderConfiguration(options = {}) {
   const paths = installerPaths(options);
-  const provider = normalizeProviderChoice(options.provider) || inferProvider(options);
-  const runtime = { options: prepareCredentialOptions(options), credentialRef: options.credentialRef, credentialOwned: false };
-  const existingManifest = readManifest(paths.home);
-  const priorOwned = (existingManifest?.credentials || []).find((item) => item.ownership === "installer")?.reference;
-  const priorStoreKind = priorOwned && (priorOwned.store === "config" || priorOwned.store === "protected-config" ? "config" : "native");
-  const requestedStoreKind = options.credentialStore || "native";
-  const superseded = priorOwned && (priorOwned.account !== provider || priorStoreKind !== requestedStoreKind) ? priorOwned : null;
-  const needsCredential = ["gateway-token", "gateway-byok", "openrouter-direct"].includes(provider) && !options.credentialRef;
+  const runtime = createCredentialTransaction(options, paths);
   const operations = createChangePlan({ action: "config" }, [
-    ...(needsCredential ? [{ id: "config:provider:credential", kind: "credential", phase: "credentials", provider, reference: `${options.credentialStore || "native"}:${provider}` }] : []),
+    ...(runtime.needsCredential ? [{ id: "config:provider:credential", kind: "credential", phase: "credentials", provider: runtime.provider, reference: `${options.credentialStore || "native"}:${runtime.provider}` }] : []),
     { id: "config:clients", kind: "managed-block", phase: "config", path: paths.home },
-    ...(superseded ? [{ id: "config:provider:cleanup", kind: "credential", phase: "cleanup", provider, reference: superseded }] : []),
+    ...(runtime.superseded ? [{ id: "config:provider:cleanup", kind: "credential", phase: "cleanup", provider: runtime.provider, reference: runtime.superseded }] : []),
   ]);
   registerPlan(operations, (operation) => {
-    if (operation.id === "config:provider:cleanup") {
-      runtime.supersededStore.delete(superseded);
-      return;
-    }
     if (operation.kind === "credential") {
-      if (runtime.options.credentialRef) return;
-      const secret = provider === "gateway-token" ? options.gatewayToken : (options.openrouterKey || options.byokKey);
-      runtime.credentialRef = runtime.store.set(secret);
-      runtime.credentialOwned = !runtime.priorCredential;
-      runtime.options = { ...runtime.options, credentialRef: runtime.credentialRef };
-      delete runtime.options.gatewayToken; delete runtime.options.byokKey; delete runtime.options.openrouterKey;
+      executeCredentialOperation(runtime, operation);
     } else applyGatewayConfig(runtime.options);
   }, (operation) => {
-    if (operation.id === "config:provider:cleanup") {
-      const kind = superseded.store === "config" || superseded.store === "protected-config" ? "config" : "native";
-      runtime.supersededStore = createCredentialStore(kind, { home: paths.home, service: superseded.service, account: superseded.account, path: superseded.path, ...(options.credentialStoreOptions || {}) });
-      runtime.supersededSecret = runtime.supersededStore.get(superseded);
-      return { inverse: () => { if (runtime.supersededSecret) runtime.supersededStore.set(runtime.supersededSecret); } };
-    }
     if (operation.kind === "credential") {
-      const kind = options.credentialStore || "native";
-      const variable = provider === "gateway-token" ? "LLM_GATEWAY_TOKEN" : provider === "openrouter-direct" ? "OPENROUTER_API_KEY" : "OPENROUTER_BYOK_KEY";
-      runtime.store = createCredentialStore(kind, { home: paths.home, service: "token-optimizer", account: provider, envVar: variable, ...(options.credentialStoreOptions || {}) });
-      runtime.priorCredential = runtime.store.get({ service: "token-optimizer", account: provider });
-      return { inverse: () => runtime.priorCredential ? runtime.store.set(runtime.priorCredential) : runtime.store.delete({ service: "token-optimizer", account: provider }) };
+      return prepareCredentialOperation(runtime, operation);
     }
     const targets = getGatewayTargets(paths.home).filter((target) => target.matches(options.clients)).map((target) => target.filePath);
     targets.push(path.join(paths.home, "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`));

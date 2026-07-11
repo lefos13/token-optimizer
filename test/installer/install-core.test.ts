@@ -399,6 +399,28 @@ test('failed provider switch restores the prior owned credential and removes the
   assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-byok' }).get(), null);
 });
 
+test('successive installs transfer credential ownership without orphaning and roll back a failed switch', () => {
+  const home = tmpDir('to-reinstall-provider-switch-');
+  const assetsRoot = tmpDir('to-reinstall-provider-assets-');
+  writeFixtureAssets(assetsRoot);
+  const common = { home, assetsRoot, clients: ['opencode'], credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false };
+  installer.installSelectedClients({ ...common, provider: 'gateway-token', gatewayToken: 'gateway-value' });
+  assert.throws(() => installer.installSelectedClients({ ...common, assetsRoot: tmpDir('to-reinstall-missing-assets-'), provider: 'gateway-byok', byokKey: 'failed-byok-value' }));
+  const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' }).get(), 'gateway-value');
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-byok' }).get(), null);
+
+  installer.installSelectedClients({ ...common, provider: 'gateway-byok', byokKey: 'byok-value' });
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' }).get(), null);
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-byok' }).get(), 'byok-value');
+  const manifestApi = require('../../../packages/installer/lib/manifest.js');
+  const lifecycle = require('../../../packages/installer/lib/uninstall.js');
+  const manifest = manifestApi.readManifest(home);
+  assert.deepEqual(manifest.credentials.map((item: any) => item.reference.account), ['gateway-byok']);
+  lifecycle.applyLifecyclePlan(lifecycle.planUninstall(manifest, lifecycle.currentStateFromManifest(manifest)));
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-byok' }).get(), null);
+});
+
 test('installOpenCode with provider "local" registers the server with no token required', () => {
   const home = tmpDir('to-installer-home-');
   const assetsRoot = tmpDir('to-installer-assets-');
