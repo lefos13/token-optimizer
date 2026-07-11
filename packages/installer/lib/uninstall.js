@@ -1,7 +1,8 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
-const { createChangePlan, copyTreeOperation, removeFileOperation, managedBlockOperation } = require('./change-plan');
+const { createChangePlan, copyTreeOperation, removeFileOperation, managedBlockOperation, credentialOperation } = require('./change-plan');
+const { createCredentialStore } = require('./credential-store');
 
 /* Lifecycle plans are deliberately side-effect free. They use the ownership
    hashes captured during installation, so uninstall never deletes a file that
@@ -26,6 +27,9 @@ function planUninstall(manifest, currentState = {}) {
       continue;
     }
     operations.push(managedBlockOperation(block.path, block.marker || block.id || 'TOKEN_OPTIMIZER_START'));
+  }
+  for (const credential of manifest.credentials || []) {
+    if (credential.ownership === 'installer' && credential.reference) operations.push(credentialOperation('remove', { reference: credential.reference }));
   }
   return createChangePlan({ action: 'uninstall', warnings }, operations);
 }
@@ -76,7 +80,7 @@ function currentStateFromManifest(manifest) {
   return { files, hash(filePath) { return files[filePath]; } };
 }
 
-function applyLifecyclePlan(plan) {
+function applyLifecyclePlan(plan, options = {}) {
   if (!plan || !Array.isArray(plan.operations)) throw new TypeError('invalid lifecycle plan');
   for (const operation of plan.operations) {
     if (operation.kind === 'remove-file') {
@@ -86,6 +90,11 @@ function applyLifecyclePlan(plan) {
       fs.cpSync(operation.source, operation.path, { recursive: true, force: true });
     } else if (operation.kind === 'managed-block') {
       removeManagedBlock(operation.path, operation.marker);
+    } else if (operation.kind === 'credential') {
+      const ref = operation.reference;
+      const kind = ref.store === 'config' || ref.store === 'protected-config' ? 'config' : 'native';
+      const store = options.credentialStoreFactory ? options.credentialStoreFactory(ref) : createCredentialStore(kind, { service: ref.service, account: ref.account, path: ref.path });
+      store.delete(ref);
     }
   }
   return plan.operations;

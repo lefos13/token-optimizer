@@ -4,7 +4,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const { createChangePlan, formatChangePlan } = require("./change-plan");
 const { registerPlan, applyChangePlan, defaultAdapters } = require("./apply-plan");
-const { writeManifest } = require("./manifest");
+const { writeManifest, readManifest } = require("./manifest");
 const crypto = require("crypto");
 const { createCredentialStore } = require("./credential-store");
 
@@ -107,10 +107,10 @@ function prepareCredentialOptions(options = {}) {
   if (!["gateway-token", "gateway-byok", "openrouter-direct"].includes(provider) || options.credentialRef) return { ...options };
   const kind = options.credentialStore || "native";
   if (!["native", "env", "config"].includes(kind)) throw new Error(`Unsupported credential store: ${kind}. Choose native, env, or config.`);
-  const secret = provider === "gateway-token" ? options.gatewayToken : (options.openrouterKey || options.byokKey);
-  if (!secret) return { ...options };
-  const store = createCredentialStore(kind, { home: options.home, service: "token-optimizer", account: provider, ...(options.credentialStoreOptions || {}) });
-  const credentialRef = store.set(secret);
+  if (kind !== "env") return { ...options, provider, credentialStore: kind };
+  const variable = provider === "gateway-token" ? "LLM_GATEWAY_TOKEN" : provider === "openrouter-direct" ? "OPENROUTER_API_KEY" : "OPENROUTER_BYOK_KEY";
+  const store = createCredentialStore(kind, { home: options.home, service: "token-optimizer", account: provider, envVar: variable, ...(options.credentialStoreOptions || {}) });
+  const credentialRef = store.set();
   const prepared = { ...options, provider, credentialStore: kind, credentialRef };
   delete prepared.gatewayToken;
   delete prepared.byokKey;
@@ -181,17 +181,32 @@ function installerPaths(options = {}) {
 function planInstallation(options = {}) {
   const paths = installerPaths(options);
   const clients = normalizeClients(options.clients, paths.home);
-  const operations = clients.flatMap((client) => [
+  const runtime = { options: prepareCredentialOptions(options), credentialRef: options.credentialRef, credentialOwned: false };
+  const provider = normalizeProviderChoice(options.provider) || inferProvider(options);
+  const needsCredential = ["gateway-token", "gateway-byok", "openrouter-direct"].includes(provider) && !options.credentialRef;
+  const operations = [
+    ...(needsCredential ? [{ id: "install:provider:credential", kind: "credential", phase: "credentials", provider, reference: `${options.credentialStore || "native"}:${provider}` }] : []),
+    ...clients.flatMap((client) => [
     { id: `install:${client}:copy`, kind: "copy-tree", phase: "copy", client, path: paths.home, targets: clientTargets(client, paths, options) },
     { id: `install:${client}:config`, kind: "managed-block", phase: "config", client, path: paths.home },
-    { id: `install:${client}:credentials`, kind: "credential", phase: "credentials", client, reference: `${client}/provider-env` },
     { id: `install:${client}:service`, kind: "platform-service", phase: "service", client, platform: process.platform },
     { id: `install:${client}:command`, kind: "client-command", phase: "command", client, command: "register" },
-  ]);
+  ]),
+  ];
   const plan = createChangePlan({ action: "install", version: options.version || require("../package.json").version, clients }, operations);
   registerPlan(plan, (operation) => {
+    if (operation.kind === "credential") {
+      if (runtime.options.credentialRef) return;
+      const secret = provider === "gateway-token" ? options.gatewayToken : (options.openrouterKey || options.byokKey);
+      const store = runtime.store;
+      runtime.credentialRef = store.set(secret);
+      runtime.credentialOwned = !runtime.priorCredential;
+      runtime.options = { ...runtime.options, credentialRef: runtime.credentialRef };
+      delete runtime.options.gatewayToken; delete runtime.options.byokKey; delete runtime.options.openrouterKey;
+      return;
+    }
     if (operation.phase !== "copy") return;
-    const installOptions = { ...options, ...paths };
+    const installOptions = { ...runtime.options, ...paths };
     if (operation.client === "opencode") installOpenCode(installOptions);
     else if (operation.client === "cursor") installCursor(installOptions);
     else if (operation.client === "antigravity") installAntigravity(installOptions);
@@ -199,18 +214,68 @@ function planInstallation(options = {}) {
     else if (operation.client === "codex") installCodex(installOptions);
     else throw new Error(`Unsupported client: ${operation.client}`);
   }, (operation) => {
+    if (operation.kind === "credential") {
+      const kind = options.credentialStore || "native";
+      const variable = provider === "gateway-token" ? "LLM_GATEWAY_TOKEN" : provider === "openrouter-direct" ? "OPENROUTER_API_KEY" : "OPENROUTER_BYOK_KEY";
+      runtime.store = createCredentialStore(kind, { home: paths.home, service: "token-optimizer", account: provider, envVar: variable, ...(options.credentialStoreOptions || {}) });
+      runtime.priorCredential = runtime.store.get({ service: "token-optimizer", account: provider });
+      return { inverse: () => runtime.priorCredential ? runtime.store.set(runtime.priorCredential) : runtime.store.delete({ service: "token-optimizer", account: provider }) };
+    }
     const boundaries = [paths.home, ...(options.cursorProjects || []).map((project) => path.resolve(project))];
     const before = snapshotTargets(operation.targets || [], boundaries);
     return { inverse: () => restoreTargets(before), commit: () => discardSnapshot(before) };
-  });
+  }, runtime);
   return plan;
 }
 
 function installSelectedClients(options) {
   const result = applyChangePlan(planInstallation(options), defaultAdapters());
   if (result.error) throw result.error;
-  persistInstallManifest(options, result.installedClients);
+  persistInstallManifest({ ...options, credentialRef: result.credentialRef, credentialOwned: result.credentialOwned }, result.installedClients);
   return result.installedClients;
+}
+
+/* Provider-only reconfiguration uses the same credential-first transaction as
+   installation. Config snapshots and the prior credential are both restored
+   if any client write fails after credential mutation. */
+function planProviderConfiguration(options = {}) {
+  const paths = installerPaths(options);
+  const provider = normalizeProviderChoice(options.provider) || inferProvider(options);
+  const runtime = { options: prepareCredentialOptions(options), credentialRef: options.credentialRef, credentialOwned: false };
+  const needsCredential = ["gateway-token", "gateway-byok", "openrouter-direct"].includes(provider) && !options.credentialRef;
+  const operations = createChangePlan({ action: "config" }, [
+    ...(needsCredential ? [{ id: "config:provider:credential", kind: "credential", phase: "credentials", provider, reference: `${options.credentialStore || "native"}:${provider}` }] : []),
+    { id: "config:clients", kind: "managed-block", phase: "config", path: paths.home },
+  ]);
+  registerPlan(operations, (operation) => {
+    if (operation.kind === "credential") {
+      if (runtime.options.credentialRef) return;
+      const secret = provider === "gateway-token" ? options.gatewayToken : (options.openrouterKey || options.byokKey);
+      runtime.credentialRef = runtime.store.set(secret);
+      runtime.credentialOwned = !runtime.priorCredential;
+      runtime.options = { ...runtime.options, credentialRef: runtime.credentialRef };
+      delete runtime.options.gatewayToken; delete runtime.options.byokKey; delete runtime.options.openrouterKey;
+    } else applyGatewayConfig(runtime.options);
+  }, (operation) => {
+    if (operation.kind === "credential") {
+      const kind = options.credentialStore || "native";
+      const variable = provider === "gateway-token" ? "LLM_GATEWAY_TOKEN" : provider === "openrouter-direct" ? "OPENROUTER_API_KEY" : "OPENROUTER_BYOK_KEY";
+      runtime.store = createCredentialStore(kind, { home: paths.home, service: "token-optimizer", account: provider, envVar: variable, ...(options.credentialStoreOptions || {}) });
+      runtime.priorCredential = runtime.store.get({ service: "token-optimizer", account: provider });
+      return { inverse: () => runtime.priorCredential ? runtime.store.set(runtime.priorCredential) : runtime.store.delete({ service: "token-optimizer", account: provider }) };
+    }
+    const targets = getGatewayTargets(paths.home).filter((target) => target.matches(options.clients)).map((target) => target.filePath);
+    targets.push(path.join(paths.home, "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`));
+    const before = snapshotTargets(targets, [paths.home]);
+    return { inverse: () => restoreTargets(before), commit: () => discardSnapshot(before) };
+  }, runtime);
+  return operations;
+}
+
+function applyProviderConfiguration(options = {}) {
+  const result = applyChangePlan(planProviderConfiguration(options));
+  if (result.error) throw result.error;
+  return result;
 }
 
 /* Capture only installer-owned plugin trees after a successful install. The
@@ -240,7 +305,11 @@ function persistInstallManifest(options = {}, clients = []) {
     path.join(paths.home, ".claude", "CLAUDE.md"), path.join(paths.home, ".codex", "AGENTS.md"), path.join(paths.home, ".gemini", "GEMINI.md"),
     path.join(paths.home, ".config", "opencode", "AGENTS.md"),
   ].filter((file) => fs.existsSync(file)).map((file) => ({ path: file, marker: "TOKEN_OPTIMIZER_START", sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") }));
-  writeManifest(paths.home, { schemaVersion: 2, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [paths.assetsRoot], managedBlocks, files });
+  const existingManifest = readManifest(paths.home);
+  const credentials = options.credentialRef && options.credentialOwned !== false && options.credentialRef.store !== "env"
+    ? [{ reference: options.credentialRef, ownership: "installer" }]
+    : (existingManifest?.credentials || []);
+  writeManifest(paths.home, { schemaVersion: 2, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [paths.assetsRoot], managedBlocks, credentials, files });
 }
 
 function clientTargets(client, paths, options = {}) {
@@ -958,6 +1027,8 @@ module.exports = {
   formatChangePlan,
   detectClients,
   installSelectedClients,
+  planProviderConfiguration,
+  applyProviderConfiguration,
   persistInstallManifest,
   installOpenCode,
   installCursor,

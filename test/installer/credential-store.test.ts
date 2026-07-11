@@ -15,8 +15,8 @@ test('native-store failure does not write plaintext fallback', () => {
 });
 
 test('status exposes only a fingerprint', () => {
-  const store = createCredentialStore('env', { env: {}, account: 'test' });
-  const reference = store.set('sk-or-secret-value');
+  const store = createCredentialStore('env', { env: { TOKEN_OPTIMIZER_CREDENTIAL: 'fixture-value' }, account: 'test' });
+  const reference = store.set();
   assert.doesNotMatch(JSON.stringify(reference), /secret-value/);
   assert.match(reference.fingerprint, /^sha256:/);
 });
@@ -29,6 +29,8 @@ test('injected macOS adapter uses argv and supports lifecycle', () => {
   assert.equal(calls[0][0], '/usr/bin/swift');
   assert.equal((calls[0][1] as string[])[0], '-e');
   assert.match((calls[0][1] as string[])[1], /SecItemAdd/);
+  assert.match((calls[0][1] as string[])[1], /SecItemUpdate/);
+  assert.doesNotMatch((calls[0][1] as string[])[1], /SecItemDelete/);
   assert.doesNotMatch(JSON.stringify(calls[0][1]), /fixture-value/);
   assert.equal((calls[0][2] as { input: string }).input, 'fixture-value');
 });
@@ -37,6 +39,20 @@ test('linux native store fails closed when secret-tool is unavailable', () => {
   const store = createCredentialStore('native', { platform: 'linux', commandExists: () => false });
   assert.equal(store.isAvailable(), false);
   assert.throws(() => store.set('secret'), /choose env or config explicitly/i);
+});
+
+test('macOS native store fails availability before mutation when Swift Security helper is missing', () => {
+  let mutated = false;
+  const store = createCredentialStore('native', { platform: 'darwin', commandExists: () => false, execFileSync: () => { mutated = true; return ''; } });
+  assert.equal(store.isAvailable(), false);
+  assert.throws(() => store.set('fixture-value'), /choose env or config explicitly/i);
+  assert.equal(mutated, false);
+});
+
+test('macOS Security.framework helper type-checks on Darwin', { skip: process.platform !== 'darwin' }, () => {
+  const { execFileSync } = require('node:child_process');
+  const { MACOS_KEYCHAIN_SET_SCRIPT } = require('../../../packages/installer/lib/credential-store-macos.js');
+  execFileSync('/usr/bin/swiftc', ['-typecheck', '-'], { input: MACOS_KEYCHAIN_SET_SCRIPT, stdio: ['pipe', 'ignore', 'pipe'] });
 });
 
 test('injected Linux adapter keeps the secret on stdin and returns a resolvable reference', () => {
@@ -60,8 +76,8 @@ test('injected Windows adapter encrypts from stdin and includes its ciphertext p
 
 test('credential references survive change plans without secret values', () => {
   const { createChangePlan, credentialOperation } = require('../../../packages/installer/lib/change-plan.js');
-  const reference = createCredentialStore('env', { env: {} }).set('sk-or-secret-value');
+  const reference = createCredentialStore('env', { env: { TOKEN_OPTIMIZER_CREDENTIAL: 'fixture-value' } }).set();
   const plan = createChangePlan({}, [credentialOperation('openrouter', reference)]);
-  assert.doesNotMatch(JSON.stringify(plan), /secret-value/);
+  assert.doesNotMatch(JSON.stringify(plan), /fixture-value/);
   assert.match(plan.operations[0].fingerprint, /^sha256:/);
 });

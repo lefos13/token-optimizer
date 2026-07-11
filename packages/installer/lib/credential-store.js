@@ -31,10 +31,14 @@ function environmentReferenceStore(options = {}) {
   const env = options.env || process.env;
   const variable = options.envVar || "TOKEN_OPTIMIZER_CREDENTIAL";
   return {
-    isAvailable: () => true,
-    set(value) { env[variable] = secretOf(value); return { ...reference("env", value, options), variable }; },
+    isAvailable: () => Boolean(env[variable]),
+    set() {
+      const existing = env[variable];
+      if (!existing) throw new Error(`Credential store env requires ${variable} to already be present in the parent/client environment.`);
+      return { ...reference("env", existing, options), variable };
+    },
     get() { return env[variable] || null; },
-    delete() { delete env[variable]; return true; },
+    delete() { return false; },
   };
 }
 

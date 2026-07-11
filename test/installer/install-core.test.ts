@@ -23,6 +23,9 @@ function writeFixtureAssets(root: string): void {
     'plugin/cursor/server/index.js': 'console.log("server")\n',
     'plugin/cursor/server/package.json': '{"name":"token-optimizer-server"}\n',
     'plugin/cursor/rules/token-optimizer.mdc': '---\nalwaysApply: true\n---\n',
+    'plugin/antigravity/plugin.json': '{"name":"token-optimizer"}\n',
+    'plugin/antigravity/mcp_config.json': '{"mcpServers":{}}\n',
+    'plugin/antigravity/server/start.js': '#!/usr/bin/env node\n',
     'plugin/claude/.claude-plugin/plugin.json': '{"name":"token-optimizer"}\n',
     'plugin/claude/server/start.sh': '#!/usr/bin/env bash\n',
     'plugin/claude/server/start.js': '#!/usr/bin/env node\n',
@@ -61,6 +64,7 @@ test('installOpenCode copies server and skill, replaces legacy MCP config, and w
     home,
     assetsRoot,
     gatewayToken: 'person-token',
+    credentialStore: 'config',
     gatewayUrl: 'https://llm-proxy.lnf.gr/v1',
     launchctlStatePath,
   });
@@ -258,10 +262,12 @@ test('native credential preparation writes only a reference across all five clie
   const home = tmpDir('to-native-credential-home-');
   const secret = 'fixture-credential-value';
   const calls: any[] = [];
+  const assetsRoot = tmpDir('to-native-assets-');
+  writeFixtureAssets(assetsRoot);
   const codexConfig = path.join(home, '.codex', 'config.toml');
   fs.mkdirSync(path.dirname(codexConfig), { recursive: true });
   fs.writeFileSync(codexConfig, '[mcp_servers.token_optimizer]\ncommand = \'node\'\n');
-  const options = installer.prepareCredentialOptions({
+  const options = {
     home,
     clients: ['all'],
     provider: 'gateway-token',
@@ -269,8 +275,11 @@ test('native credential preparation writes only a reference across all five clie
     credentialStore: 'native',
     credentialStoreOptions: { platform: 'darwin', available: true, account: 'gateway-token', execFileSync: (_bin: string, args: string[], processOptions: any) => { calls.push({ args, processOptions }); return ''; } },
     skipLaunchctl: true,
-  });
-  installer.applyGatewayConfig(options);
+    skipClientCommands: true,
+    assetsRoot,
+  };
+  const result = installer.applyChangePlan(installer.planInstallation(options));
+  assert.equal(result.error, undefined);
   const paths = [
     path.join(home, '.config', 'opencode', 'opencode.jsonc'),
     path.join(home, '.cursor', 'mcp.json'),
@@ -280,14 +289,73 @@ test('native credential preparation writes only a reference across all five clie
   ];
   assert.ok(paths.every(fs.existsSync), 'all five supported client config shapes should be written');
   const serialized = paths.map((file) => fs.readFileSync(file, 'utf8')).join('\n');
-  assert.equal(calls[0].processOptions.input, secret);
+  assert.ok(calls.some((call) => call.processOptions.input === secret));
+  assert.doesNotMatch(JSON.stringify(calls.map((call) => call.args)), new RegExp(secret));
   assert.match(serialized, /TOKEN_OPTIMIZER_CREDENTIAL_REF/);
   assert.doesNotMatch(serialized, new RegExp(secret));
 });
 
-test('native credential preparation fails closed and plaintext requires an explicit store', () => {
-  assert.throws(() => installer.prepareCredentialOptions({ provider: 'gateway-token', gatewayToken: 'fixture-credential-value', credentialStore: 'native', credentialStoreOptions: { platform: 'unknown' } }), /choose env or config explicitly/i);
+test('native credential execution fails closed and plaintext requires an explicit store', () => {
+  const result = installer.applyChangePlan(installer.planInstallation({ provider: 'gateway-token', gatewayToken: 'fixture-credential-value', credentialStore: 'native', credentialStoreOptions: { platform: 'unknown' }, clients: ['opencode'] }));
+  assert.match(result.error.message, /choose env or config explicitly/i);
   assert.equal(installer.prepareCredentialOptions({ provider: 'local' }).credentialRef, undefined);
+});
+
+test('a later install failure restores the credential that existed before the transaction', () => {
+  const home = tmpDir('to-credential-rollback-');
+  const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
+  const store = createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' });
+  store.set('prior-value');
+  const result = installer.applyChangePlan(installer.planInstallation({ home, clients: ['opencode'], assetsRoot: tmpDir('to-empty-assets-'), provider: 'gateway-token', gatewayToken: 'replacement-value', credentialStore: 'config', skipLaunchctl: true }));
+  assert.ok(result.error);
+  assert.equal(store.get(), 'prior-value');
+});
+
+test('provider-only config restores the prior credential when a client write fails', () => {
+  const home = tmpDir('to-config-credential-rollback-');
+  const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
+  const store = createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' });
+  store.set('prior-value');
+  const target = path.join(home, '.config', 'opencode', 'opencode.jsonc');
+  const mutableFs = require('node:fs');
+  const originalWrite = mutableFs.writeFileSync;
+  mutableFs.writeFileSync = (file: string, ...args: any[]) => {
+    if (path.resolve(String(file)) === path.resolve(target)) throw new Error('simulated client config failure');
+    return originalWrite(file, ...args);
+  };
+  try {
+    assert.throws(() => installer.applyProviderConfiguration({ home, clients: ['opencode'], provider: 'gateway-token', gatewayToken: 'replacement-value', credentialStore: 'config', skipLaunchctl: true }), /simulated client config failure/);
+  } finally {
+    mutableFs.writeFileSync = originalWrite;
+  }
+  assert.equal(store.get(), 'prior-value');
+});
+
+test('install manifest owns a newly created credential and uninstall removes it', () => {
+  const home = tmpDir('to-credential-uninstall-');
+  const assetsRoot = tmpDir('to-credential-assets-');
+  writeFixtureAssets(assetsRoot);
+  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'gateway-token', gatewayToken: 'installed-value', credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false });
+  const { readManifest } = require('../../../packages/installer/lib/manifest.js');
+  const lifecycle = require('../../../packages/installer/lib/uninstall.js');
+  const manifest = readManifest(home);
+  assert.equal(manifest.credentials.length, 1);
+  const plan = lifecycle.planUninstall(manifest, lifecycle.currentStateFromManifest(manifest));
+  lifecycle.applyLifecyclePlan(plan);
+  const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' }).get(), null);
+});
+
+test('pre-existing credentials are restored and never claimed by the manifest', () => {
+  const home = tmpDir('to-existing-credential-');
+  const assetsRoot = tmpDir('to-existing-assets-');
+  writeFixtureAssets(assetsRoot);
+  const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
+  const store = createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' });
+  store.set('user-owned-value');
+  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'gateway-token', gatewayToken: 'temporary-value', credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false });
+  const manifest = require('../../../packages/installer/lib/manifest.js').readManifest(home);
+  assert.deepEqual(manifest.credentials, []);
 });
 
 test('installOpenCode with provider "local" registers the server with no token required', () => {

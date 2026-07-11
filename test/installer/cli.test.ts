@@ -48,13 +48,18 @@ test('a BYOK key flag without a model remains non-interactive and uses gateway d
 
 test('--credential-store env is an explicit working plaintext opt-in', async () => {
   const options = await cli.resolveProviderOptions(cli.parseArgs(['--provider', 'gateway-token', '--token', 'fixture-value', '--credential-store', 'env']), readlineWith());
-  const credentialEnv: Record<string, string> = {};
+  const credentialEnv: Record<string, string> = { LLM_GATEWAY_TOKEN: 'parent-value' };
   const prepared = installer.prepareCredentialOptions({ ...options, credentialStoreOptions: { env: credentialEnv } });
   const values = installer.buildProviderValues(prepared);
   assert.equal(prepared.credentialRef.store, 'env');
-  assert.equal(prepared.credentialRef.variable, 'TOKEN_OPTIMIZER_CREDENTIAL');
-  assert.equal(credentialEnv.TOKEN_OPTIMIZER_CREDENTIAL, 'fixture-value');
+  assert.equal(prepared.credentialRef.variable, 'LLM_GATEWAY_TOKEN');
+  assert.equal(credentialEnv.LLM_GATEWAY_TOKEN, 'parent-value');
   assert.equal(values.LLM_GATEWAY_TOKEN, '');
+});
+
+test('--credential-store env fails when the parent/client credential variable is absent', async () => {
+  const options = await cli.resolveProviderOptions(cli.parseArgs(['--provider', 'gateway-token', '--token', 'fixture-value', '--credential-store', 'env']), readlineWith());
+  assert.throws(() => installer.prepareCredentialOptions({ ...options, credentialStoreOptions: { env: {} } }), /requires LLM_GATEWAY_TOKEN.*parent\/client environment/i);
 });
 
 test('uninstall preserves a user-modified managed file', () => {

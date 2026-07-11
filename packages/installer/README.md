@@ -106,8 +106,12 @@ Credential-bearing modes use `--credential-store native` by default. The
 installer writes only `TOKEN_OPTIMIZER_CREDENTIAL_REF` to all client config
 shapes and the LaunchAgent; the launcher resolves the native secret and exposes
 it only to the MCP child. Native-store failure aborts without fallback.
-`--credential-store env` and `--credential-store config` explicitly opt into
-plaintext environment or protected-file storage. Local and skip need no store.
+`--credential-store env` references an existing `LLM_GATEWAY_TOKEN`,
+`OPENROUTER_BYOK_KEY`, or `OPENROUTER_API_KEY` in the parent/client environment;
+it never stores a supplied secret and fails when the variable is absent.
+`--credential-store config` explicitly opts into protected-file plaintext.
+Local and skip need no store. Credential writes participate in install/config
+rollback, and uninstall removes only credentials recorded as installer-owned.
   Pass `--skip-launchctl` to skip all GUI-session env writes.
 
 Client-specific behavior:

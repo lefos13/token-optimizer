@@ -223,8 +223,10 @@ with `start.js` rather than Bash. Restart the affected client after installing.
 Installer credentials default to the native OS credential store for
 `gateway-token`, `gateway-byok`, and `openrouter-direct`. Client configs retain
 only `TOKEN_OPTIMIZER_CREDENTIAL_REF`; the launcher resolves it for the MCP
-child. Native-store errors fail closed. `--credential-store env` and
-`--credential-store config` are explicit plaintext opt-ins.
+child. Native-store errors fail closed. `--credential-store env` only references
+an already-exported provider credential variable and fails when it is absent;
+the installer never persists a supplied secret into its own environment.
+`--credential-store config` explicitly opts into protected-file plaintext.
 
 - Do not paste raw logs into the conversation when the verdict or triage is actionable.
 - Do not let the LLM override command truth: non-zero exits are failures unless the tool explicitly reports uncertainty.

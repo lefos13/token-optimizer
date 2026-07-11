@@ -16,10 +16,12 @@ const {
   persistInstallManifest,
   applyGatewayConfig,
   prepareCredentialOptions,
+  applyProviderConfiguration,
   applyDefaultDirectives,
 } = require("../lib/install-core");
 const { inspectInstallation } = require("../lib/doctor");
-const { readManifest } = require("../lib/manifest");
+const { readManifest, writeManifest } = require("../lib/manifest");
+const path = require("path");
 const { planRepair, planUninstall, currentStateFromManifest, applyLifecyclePlan } = require("../lib/uninstall");
 const { statusLogs, pruneLogs, purgeLogs } = require("../lib/logs");
 
@@ -103,8 +105,7 @@ async function main() {
         console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
         return;
       }
-      const securedOptions = prepareCredentialOptions(options);
-      const plan = planInstallation(securedOptions);
+      const plan = planInstallation(options);
       const applyResult = applyChangePlan(plan);
       if (applyResult.error) {
         const rolled = applyResult.rolledBack.length;
@@ -114,7 +115,7 @@ async function main() {
         process.exitCode = 1;
         return;
       }
-      persistInstallManifest(securedOptions, applyResult.installedClients);
+      persistInstallManifest({ ...options, credentialRef: applyResult.credentialRef, credentialOwned: applyResult.credentialOwned }, applyResult.installedClients);
       const installed = applyResult.installedClients;
       console.log(`Installed Token Optimizer for: ${installed.join(", ")}`);
       if (clients.includes("all") || clients.includes("cursor")) {
@@ -132,7 +133,14 @@ async function main() {
     }
 
     if (command === "config") {
-      applyGatewayConfig(prepareCredentialOptions(options));
+      const result = applyProviderConfiguration(options);
+      if (result.credentialRef && result.credentialOwned && result.credentialRef.store !== "env") {
+        const home = path.resolve(options.home || process.env.HOME || require("os").homedir());
+        const existing = readManifest(home);
+        writeManifest(home, existing
+          ? { ...existing, credentials: [{ reference: result.credentialRef, ownership: "installer" }] }
+          : { schemaVersion: 2, roots: [path.join(home, ".token-optimizer")], assetRoots: [], managedBlocks: [], credentials: [{ reference: result.credentialRef, ownership: "installer" }], files: [] });
+      }
       console.log("Provider configuration written.");
       return;
     }

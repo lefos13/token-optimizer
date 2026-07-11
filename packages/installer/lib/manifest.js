@@ -24,6 +24,9 @@ function validateManifest(manifest, home) {
     if (!rootRealpaths.some((root) => canonical === root || canonical.startsWith(`${root}${path.sep}`))) throw new Error(`manifest path outside known roots: ${file.path}`);
     if (typeof file.sha256 !== "string" || typeof file.ownership !== "string") throw new Error("manifest file entries require sha256 and ownership");
   }
+  if (manifest.credentials !== undefined && (!Array.isArray(manifest.credentials) || manifest.credentials.some((item) => !item || item.ownership !== "installer" || !item.reference || typeof item.reference.store !== "string"))) {
+    throw new Error("manifest credentials require installer ownership and a store reference");
+  }
   return manifest;
 }
 
