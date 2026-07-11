@@ -221,6 +221,8 @@ The public CLI omits Claude/Codex registration and real macOS launchctl
 mutation during migration and reports a normal-install follow-up. Library
 callers need reversible adapters for those operations. Detection is restricted
 to known client configuration paths and never scans conversation/history data.
+Cleanup is additionally scoped to Token Optimizer’s managed server/env object
+or TOML section, preserving credentials for every unrelated MCP server.
 Migration failures are sanitized before CLI and JSON output; do not bypass the
 structured result by printing adapter or provider exception objects directly.
 

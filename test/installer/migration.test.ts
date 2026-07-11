@@ -90,7 +90,7 @@ test('JSONC and quoted TOML cleanup preserve comments, formatting, unrelated tex
   fs.mkdirSync(path.dirname(jsonc), { recursive: true });
   fs.mkdirSync(path.dirname(toml), { recursive: true });
   fs.writeFileSync(jsonc, '{\n  // keep this comment\n  "note": "fixture-secret stays",\n  "mcp": { "token_optimizer": { "environment": { "OPENROUTER_BYOK_KEY": "fixture-secret", "LLM_GATEWAY_URL": "https://legacy.example/v1" } } },\n}\n', { mode: 0o640 });
-  fs.writeFileSync(toml, '# keep toml comment\n"LLM_GATEWAY_TOKEN" = "fixture-secret"\nLOCAL_LLM_MODEL = "custom"\n', { mode: 0o640 });
+  fs.writeFileSync(toml, '# keep toml comment\nLOCAL_LLM_MODEL = "custom"\n[mcp_servers.token_optimizer.env]\n"LLM_GATEWAY_TOKEN" = "fixture-secret"\n', { mode: 0o640 });
   await migration.migrateInstallation({ home, clients: ['opencode', 'codex'], provider: 'gateway-byok', credentialStore: 'config', skipClientCommands: true, skipLaunchctl: true, healthProbe: async () => ({ ok: true }) });
   const jsoncAfter = fs.readFileSync(jsonc, 'utf8');
   const tomlAfter = fs.readFileSync(toml, 'utf8');
@@ -317,4 +317,34 @@ test('public CLI migration works without external command or launchctl adapters 
   assert.match(result.stdout, /Migrated Token Optimizer/);
   assert.match(result.stdout, /Follow-up:/);
   assert.equal(fs.existsSync(path.join(home, '.token-optimizer', 'migration-v2.json')), true);
+});
+
+for (const fixture of [
+  { client: 'opencode', relative: '.config/opencode/opencode.jsonc', config: { mcp: { token_optimizer: { environment: { LLM_GATEWAY_TOKEN: 'managed-secret' } }, other_server: { environment: { LLM_GATEWAY_TOKEN: 'other-secret' } } } } },
+  { client: 'cursor', relative: '.cursor/mcp.json', config: { mcpServers: { token_optimizer: { env: { LLM_GATEWAY_TOKEN: 'managed-secret' } }, other_server: { env: { LLM_GATEWAY_TOKEN: 'other-secret' } } } } },
+  { client: 'antigravity', relative: '.gemini/config/mcp_config.json', config: { mcpServers: { token_optimizer: { env: { LLM_GATEWAY_TOKEN: 'managed-secret' } }, other_server: { env: { LLM_GATEWAY_TOKEN: 'other-secret' } } } } },
+]) {
+  test(`${fixture.client} cleanup preserves unrelated MCP server credentials`, async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), `migration-scope-${fixture.client}-`));
+    const file = path.join(home, fixture.relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(fixture.config, null, 2));
+    await migration.migrateInstallation({ home, clients: [fixture.client], credentialStore: 'config', skipClientCommands: true, skipLaunchctl: true, healthProbe: async () => ({ ok: true }) });
+    const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const servers = after.mcp || after.mcpServers;
+    assert.equal((servers.other_server.environment || servers.other_server.env).LLM_GATEWAY_TOKEN, 'other-secret');
+    assert.equal((servers.token_optimizer.environment || servers.token_optimizer.env).LLM_GATEWAY_TOKEN, undefined);
+  });
+}
+
+test('Codex cleanup removes credentials only from token_optimizer TOML sections', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-scope-codex-'));
+  const file = path.join(home, '.codex', 'config.toml');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '[mcp_servers.other_server.env]\nLLM_GATEWAY_TOKEN = "other-secret"\n\n[mcp_servers.token_optimizer.env]\nLLM_GATEWAY_TOKEN = "managed-secret"\n');
+  await migration.migrateInstallation({ home, clients: ['codex'], credentialStore: 'config', skipClientCommands: true, skipLaunchctl: true, healthProbe: async () => ({ ok: true }) });
+  const after = fs.readFileSync(file, 'utf8');
+  assert.match(after, /\[mcp_servers\.other_server\.env]\nLLM_GATEWAY_TOKEN = "other-secret"/);
+  const managed = after.slice(after.indexOf('[mcp_servers.token_optimizer]'));
+  assert.doesNotMatch(managed, /LLM_GATEWAY_TOKEN\s*=/);
 });

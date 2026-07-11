@@ -183,6 +183,8 @@ mutation, then prints a normal-install follow-up for those external steps.
 Library callers can opt in only with adapters that capture exact pre-state and
 provide apply/rollback functions. Detection is allowlisted to known client
 configuration files; it never scans conversations or arbitrary client data.
+Within shared config files, cleanup edits only Token Optimizer’s managed server
+environment/TOML sections and never another MCP server’s credentials.
 All migration failures are credential-redacted before CLI or JSON reporting.
 
 Flow-specific commands:

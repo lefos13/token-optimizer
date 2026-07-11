@@ -87,6 +87,8 @@ real macOS launchctl changes, then reports a normal-install follow-up. Library
 callers may supply reversible state-capturing adapters; otherwise those
 external mutations fail preflight. Detection reads only known client config
 files and never recursively scans histories, conversations, or project data.
+Cleanup is scoped inside those files to Token Optimizer’s own MCP server/env
+object or TOML section; credentials belonging to other servers are preserved.
 Migration errors are sanitized against detected and selected credentials plus
 authorization-header patterns before they reach human or JSON CLI output.
 

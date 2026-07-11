@@ -294,12 +294,47 @@ function cleanupLegacy(state) {
     if (/\.toml$/i.test(file)) {
       const newline = text.includes("\r\n") ? "\r\n" : "\n";
       const trailing = text.endsWith("\n");
-      const lines = text.split(/\r?\n/).filter((line) => !LEGACY_SECRET_KEYS.some((key) => new RegExp(`^\\s*(?:["']${key}["']|${key})\\s*=`).test(line)));
+      let managed = false;
+      const lines = text.split(/\r?\n/).filter((line) => {
+        const section = line.match(/^\s*\[([^\]]+)]/);
+        if (section) managed = section[1].replace(/["']/g, "") === "mcp_servers.token_optimizer" || section[1].replace(/["']/g, "") === "mcp_servers.token_optimizer.env";
+        return !(managed && LEGACY_SECRET_KEYS.some((key) => new RegExp(`^\\s*(?:["']${key}["']|${key})\\s*=`).test(line)));
+      });
       fs.writeFileSync(file, lines.join(newline) + (trailing && lines.at(-1) !== "" ? newline : ""));
       continue;
     }
-    fs.writeFileSync(file, removeJsonProperties(text, LEGACY_SECRET_KEYS));
+    const scoped = patchNamedObject(text, ["token_optimizer", "token-optimizer"], (object) => removeJsonProperties(object, LEGACY_SECRET_KEYS));
+    const isClaudeSettings = file === path.join(state.home, ".claude", "settings.json");
+    fs.writeFileSync(file, scoped.changed || !isClaudeSettings ? scoped.content : patchNamedObject(text, ["env"], (object) => removeJsonProperties(object, LEGACY_SECRET_KEYS)).content);
   }
+}
+
+function patchNamedObject(content, keys, transform) {
+  for (const key of keys) {
+    const expression = new RegExp(`(?:"${key}"|'${key}'|${key})\\s*:\\s*{`, "g");
+    const match = expression.exec(content);
+    if (!match) continue;
+    const start = content.indexOf("{", match.index);
+    const end = findObjectEnd(content, start);
+    if (end !== -1) return { changed: true, content: `${content.slice(0, start)}${transform(content.slice(start, end + 1))}${content.slice(end + 1)}` };
+  }
+  return { changed: false, content };
+}
+
+function findObjectEnd(content, start) {
+  let depth = 0; let quote = null; let escaped = false; let lineComment = false; let blockComment = false;
+  for (let index = start; index < content.length; index += 1) {
+    const char = content[index]; const next = content[index + 1];
+    if (lineComment) { if (char === "\n") lineComment = false; continue; }
+    if (blockComment) { if (char === "*" && next === "/") { blockComment = false; index += 1; } continue; }
+    if (quote) { if (escaped) escaped = false; else if (char === "\\") escaped = true; else if (char === quote) quote = null; continue; }
+    if (char === "/" && next === "/") { lineComment = true; index += 1; continue; }
+    if (char === "/" && next === "*") { blockComment = true; index += 1; continue; }
+    if (char === "\"" || char === "'") { quote = char; continue; }
+    if (char === "{") depth += 1;
+    else if (char === "}" && --depth === 0) return index;
+  }
+  return -1;
 }
 
 /* JSON and JSONC cleanup removes only complete target properties. It leaves
