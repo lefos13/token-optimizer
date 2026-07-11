@@ -38,6 +38,25 @@ test('linux native store fails closed when secret-tool is unavailable', () => {
   assert.throws(() => store.set('secret'), /choose env or config explicitly/i);
 });
 
+test('injected Linux adapter keeps the secret on stdin and returns a resolvable reference', () => {
+  const calls: any[] = [];
+  const store = createCredentialStore('native', { platform: 'linux', available: true, account: 'gateway-token', execFileSync: (bin: string, args: string[], options: any) => { calls.push({ bin, args, options }); return ''; } });
+  const reference = store.set('fixture-credential-value');
+  assert.equal(reference.store, 'linux-secret-service');
+  assert.equal(calls[0].options.input, 'fixture-credential-value');
+  assert.doesNotMatch(JSON.stringify(calls[0].args), /fixture-credential-value/);
+});
+
+test('injected Windows adapter encrypts from stdin and includes its ciphertext path in the reference', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'credential-store-win-'));
+  const credentialPath = path.join(home, 'credential.dpapi');
+  const store = createCredentialStore('native', { platform: 'win32', available: true, home, path: credentialPath, execFileSync: (_bin: string, _args: string[], options: any) => Buffer.from(options.input === 'fixture-credential-value' ? 'ciphertext' : 'fixture-credential-value') });
+  const reference = store.set('fixture-credential-value');
+  assert.equal(reference.store, 'windows-dpapi');
+  assert.equal(reference.path, credentialPath);
+  assert.equal(fs.readFileSync(credentialPath, 'utf8'), 'ciphertext');
+});
+
 test('credential references survive change plans without secret values', () => {
   const { createChangePlan, credentialOperation } = require('../../../packages/installer/lib/change-plan.js');
   const reference = createCredentialStore('env', { env: {} }).set('sk-or-secret-value');

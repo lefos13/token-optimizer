@@ -54,6 +54,13 @@ BYOK mode does not require a gateway access token.
 Run `npx @softawarest/token-optimizer-installer --help` to see non-interactive
 options such as `--token`, `--byok-key`, `--byok-model`, and `--local`.
 
+Credential-bearing provider installs default to `--credential-store native`.
+Only a `TOKEN_OPTIMIZER_CREDENTIAL_REF` is written to client configuration;
+the bundled launcher resolves the OS credential store and injects the secret
+only into the MCP child process. Native-store failures stop installation.
+`--credential-store env` and `--credential-store config` are explicit
+plaintext opt-ins; local and skipped providers do not use a credential store.
+
 The installer is lifecycle-safe: preview writes with `install --dry-run`, then
 use `status`, `doctor`, `repair --dry-run`, or `uninstall --dry-run` before any
 mutation. A manifest under `~/.token-optimizer/manifest.json` records owned

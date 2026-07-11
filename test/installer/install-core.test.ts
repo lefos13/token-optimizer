@@ -254,6 +254,42 @@ test('buildProviderValues: gateway needs a token, byok needs ONLY a key (no toke
   assert.ok(Object.values(installer.buildProviderValues({})).every((v: unknown) => v === ''));
 });
 
+test('native credential preparation writes only a reference across all five client config shapes', () => {
+  const home = tmpDir('to-native-credential-home-');
+  const secret = 'fixture-credential-value';
+  const calls: any[] = [];
+  const codexConfig = path.join(home, '.codex', 'config.toml');
+  fs.mkdirSync(path.dirname(codexConfig), { recursive: true });
+  fs.writeFileSync(codexConfig, '[mcp_servers.token_optimizer]\ncommand = \'node\'\n');
+  const options = installer.prepareCredentialOptions({
+    home,
+    clients: ['all'],
+    provider: 'gateway-token',
+    gatewayToken: secret,
+    credentialStore: 'native',
+    credentialStoreOptions: { platform: 'darwin', available: true, account: 'gateway-token', execFileSync: (_bin: string, args: string[], processOptions: any) => { calls.push({ args, processOptions }); return ''; } },
+    skipLaunchctl: true,
+  });
+  installer.applyGatewayConfig(options);
+  const paths = [
+    path.join(home, '.config', 'opencode', 'opencode.jsonc'),
+    path.join(home, '.cursor', 'mcp.json'),
+    path.join(home, '.gemini', 'config', 'mcp_config.json'),
+    path.join(home, '.claude', 'settings.json'),
+    path.join(home, '.codex', 'config.toml'),
+  ];
+  assert.ok(paths.every(fs.existsSync), 'all five supported client config shapes should be written');
+  const serialized = paths.map((file) => fs.readFileSync(file, 'utf8')).join('\n');
+  assert.equal(calls[0].processOptions.input, secret);
+  assert.match(serialized, /TOKEN_OPTIMIZER_CREDENTIAL_REF/);
+  assert.doesNotMatch(serialized, new RegExp(secret));
+});
+
+test('native credential preparation fails closed and plaintext requires an explicit store', () => {
+  assert.throws(() => installer.prepareCredentialOptions({ provider: 'gateway-token', gatewayToken: 'fixture-credential-value', credentialStore: 'native', credentialStoreOptions: { platform: 'unknown' } }), /choose env or config explicitly/i);
+  assert.equal(installer.prepareCredentialOptions({ provider: 'local' }).credentialRef, undefined);
+});
+
 test('installOpenCode with provider "local" registers the server with no token required', () => {
   const home = tmpDir('to-installer-home-');
   const assetsRoot = tmpDir('to-installer-assets-');

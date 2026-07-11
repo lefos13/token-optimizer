@@ -15,6 +15,7 @@ const {
   installSelectedClients,
   persistInstallManifest,
   applyGatewayConfig,
+  prepareCredentialOptions,
   applyDefaultDirectives,
 } = require("../lib/install-core");
 const { inspectInstallation } = require("../lib/doctor");
@@ -97,11 +98,13 @@ async function main() {
     };
 
     if (command === "install") {
-      const plan = planInstallation(options);
       if (args["dry-run"] === true) {
+        const plan = planInstallation(options);
         console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
         return;
       }
+      const securedOptions = prepareCredentialOptions(options);
+      const plan = planInstallation(securedOptions);
       const applyResult = applyChangePlan(plan);
       if (applyResult.error) {
         const rolled = applyResult.rolledBack.length;
@@ -111,7 +114,7 @@ async function main() {
         process.exitCode = 1;
         return;
       }
-      persistInstallManifest(options, applyResult.installedClients);
+      persistInstallManifest(securedOptions, applyResult.installedClients);
       const installed = applyResult.installedClients;
       console.log(`Installed Token Optimizer for: ${installed.join(", ")}`);
       if (clients.includes("all") || clients.includes("cursor")) {
@@ -129,7 +132,7 @@ async function main() {
     }
 
     if (command === "config") {
-      applyGatewayConfig(options);
+      applyGatewayConfig(prepareCredentialOptions(options));
       console.log("Provider configuration written.");
       return;
     }
@@ -154,6 +157,7 @@ async function main() {
    - "skip" installs the MCP server with no provider configured at all, to be
      finished later with `token-optimizer config`. */
 async function resolveProviderOptions(args, rl) {
+  const credentialStore = normalizeCredentialStore(args["credential-store"]);
   const explicit = normalizeProviderChoice(args.provider);
   if (args.provider !== undefined && !explicit) {
     throw new Error(`Unsupported provider mode: ${args.provider}. Choose local, gateway-token, gateway-byok, openrouter-direct, or skip.`);
@@ -179,6 +183,7 @@ async function resolveProviderOptions(args, rl) {
         : await askOptional(rl, "OpenRouter model ID (optional; Enter for gateway default): ");
     return {
       provider: explicit === "openrouter-direct" ? "openrouter-direct" : "gateway-byok",
+      credentialStore,
       gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL,
       openrouterUrl: args["openrouter-url"] || args.openrouterUrl,
       byokKey,
@@ -189,11 +194,18 @@ async function resolveProviderOptions(args, rl) {
     const gatewayToken = args.token || process.env.LLM_GATEWAY_TOKEN || await askRequired(rl, "Gateway access token: ");
     return {
       provider: args.provider === "gateway" ? "gateway" : "gateway-token",
+      credentialStore,
       gatewayToken,
       gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL,
     };
   }
-  return promptForProviderInteractive(args, rl);
+  return promptForProviderInteractive({ ...args, credentialStore }, rl);
+}
+
+function normalizeCredentialStore(value) {
+  const kind = value === undefined ? "native" : String(value).trim().toLowerCase();
+  if (!["native", "env", "config"].includes(kind)) throw new Error(`Unsupported credential store: ${value}. Choose native, env, or config.`);
+  return kind;
 }
 
 async function promptForProviderInteractive(args, rl) {
@@ -213,6 +225,7 @@ async function promptForProviderInteractive(args, rl) {
       openrouterUrl: args["openrouter-url"] || args.openrouterUrl || "https://openrouter.ai/api/v1",
       gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL,
       byokKey,
+      credentialStore: args.credentialStore || "native",
       byokModel,
     };
   }
@@ -226,7 +239,7 @@ async function promptForProviderInteractive(args, rl) {
     return { provider: "skip" };
   }
   const gatewayToken = await askRequired(rl, "Gateway access token: ");
-  return { provider: "gateway", gatewayToken, gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL };
+  return { provider: "gateway", gatewayToken, credentialStore: args.credentialStore || "native", gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL };
 }
 
 /* Checks npm for a newer installer version and, when the session is
@@ -393,6 +406,7 @@ prompts for one of three providers, plus a skip option:
 
 Options:
   --provider <mode>            gateway, byok, local, or skip. Overrides interactive prompting.
+  --credential-store <kind>    native (default), env, or config. env/config are explicit plaintext opt-ins.
   --token <token>               Gateway access token. Defaults to LLM_GATEWAY_TOKEN. Implies --provider gateway.
   --url <url>                  Gateway URL. Defaults to ${DEFAULT_GATEWAY_URL}. Used by both gateway and byok modes.
   --byok-key <key>              Your own OpenRouter API key (sk-or-...). Implies --provider byok. No --token needed.

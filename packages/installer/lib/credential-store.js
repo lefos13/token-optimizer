@@ -32,7 +32,7 @@ function environmentReferenceStore(options = {}) {
   const variable = options.envVar || "TOKEN_OPTIMIZER_CREDENTIAL";
   return {
     isAvailable: () => true,
-    set(value) { env[variable] = secretOf(value); return reference("env", value, options); },
+    set(value) { env[variable] = secretOf(value); return { ...reference("env", value, options), variable }; },
     get() { return env[variable] || null; },
     delete() { delete env[variable]; return true; },
   };
@@ -47,7 +47,7 @@ function protectedConfigStore(options = {}) {
       const data = read(); const id = identity(value, options); data[`${id.service}:${id.account}`] = secretOf(value);
       fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
       fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
-      fs.chmodSync(filePath, 0o600); return reference("config", value, options);
+      fs.chmodSync(filePath, 0o600); return { ...reference("config", value, options), path: filePath };
     },
     get(value = {}) { const id = identity(value, options); return read()[`${id.service}:${id.account}`] || null; },
     delete(value = {}) { const data = read(); const id = identity(value, options); delete data[`${id.service}:${id.account}`]; if (fs.existsSync(filePath)) fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 }); return true; },

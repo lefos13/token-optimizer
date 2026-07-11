@@ -147,3 +147,12 @@ test('launcher exits clearly when npm leaves dependencies unresolved', () => {
   assert.match(result.stderr, /runtime dependencies remain invalid after npm install/);
   assert.ok(!fs.existsSync(fixture.serverMarker), 'server must not start with invalid dependencies');
 });
+
+test('launcher supports every credential reference adapter and fails closed when resolution fails', () => {
+  const source = buildStartJs();
+  assert.match(source, /macos-keychain/);
+  assert.match(source, /linux-secret-service/);
+  assert.match(source, /windows-dpapi/);
+  assert.match(source, /credential reference could not be resolved/);
+  assert.doesNotMatch(source, /console\.log\([^)]*secret/);
+});

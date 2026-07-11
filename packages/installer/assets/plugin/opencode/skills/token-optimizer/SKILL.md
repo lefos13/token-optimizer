@@ -220,6 +220,12 @@ with `start.js` rather than Bash. Restart the affected client after installing.
 
 **LLM provider:** Configure one of four explicit modes: `local` keeps inference on your endpoint; `openrouter-direct` sends the redacted excerpt and credential directly to OpenRouter; `gateway-token` sends redacted excerpts through the Softaware gateway using its access token; and `gateway-byok` sends both the redacted excerpt and BYOK key through that gateway. The v1 `LLM_GATEWAY_URL` + `OPENROUTER_BYOK_KEY` environment pairing maps to `gateway-byok` with a compatibility warning, preserving its destination. Remote responses include `redactionSummary` (counts/categories only) and may include `providerWarnings`; neither field contains secret values. Raw-local logs may contain secrets printed by commands. If a provider is unavailable or structured output fails schema validation, command exit codes remain authoritative and the tool returns `uncertain` with conservative metadata. `OPENROUTER_BYOK_MODEL` is optional for BYOK routing. Generated plugins intentionally omit blank gateway placeholders so inherited host values keep working after reinstalls. `check_local_llm_health` verifies the selected provider.
 
+Installer credentials default to the native OS credential store for
+`gateway-token`, `gateway-byok`, and `openrouter-direct`. Client configs retain
+only `TOKEN_OPTIMIZER_CREDENTIAL_REF`; the launcher resolves it for the MCP
+child. Native-store errors fail closed. `--credential-store env` and
+`--credential-store config` are explicit plaintext opt-ins.
+
 - Do not paste raw logs into the conversation when the verdict or triage is actionable.
 - Do not let the LLM override command truth: non-zero exits are failures unless the tool explicitly reports uncertainty.
 - Treat changed-file review findings as advisory because the local LLM sees file contents, not full project semantics.

@@ -101,6 +101,13 @@ Default `install` behavior:
   (chmod 600) that re-applies the values at every future login — a bare
   `launchctl setenv` does not survive a reboot or logout. Switching to a
   provider with no managed values (or an uninstall) removes the LaunchAgent.
+
+Credential-bearing modes use `--credential-store native` by default. The
+installer writes only `TOKEN_OPTIMIZER_CREDENTIAL_REF` to all client config
+shapes and the LaunchAgent; the launcher resolves the native secret and exposes
+it only to the MCP child. Native-store failure aborts without fallback.
+`--credential-store env` and `--credential-store config` explicitly opt into
+plaintext environment or protected-file storage. Local and skip need no store.
   Pass `--skip-launchctl` to skip all GUI-session env writes.
 
 Client-specific behavior:

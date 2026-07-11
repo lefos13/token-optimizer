@@ -6,6 +6,7 @@ const { createChangePlan, formatChangePlan } = require("./change-plan");
 const { registerPlan, applyChangePlan, defaultAdapters } = require("./apply-plan");
 const { writeManifest } = require("./manifest");
 const crypto = require("crypto");
+const { createCredentialStore } = require("./credential-store");
 
 const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
 const DEFAULT_LOCAL_LLM_URL = "http://localhost:8080/v1";
@@ -96,6 +97,26 @@ function inferProvider(options) {
   if (options.gatewayToken) return "gateway-token";
   if (options.localApiUrl || options.localModel) return "local";
   return "skip";
+}
+
+/* Converts provider plaintext into a durable credential reference before any
+   client config is written. Native storage is fail-closed; env and config are
+   available only when the caller explicitly selects those plaintext stores. */
+function prepareCredentialOptions(options = {}) {
+  const provider = normalizeProviderChoice(options.provider) || inferProvider(options);
+  if (!["gateway-token", "gateway-byok", "openrouter-direct"].includes(provider) || options.credentialRef) return { ...options };
+  const kind = options.credentialStore || "native";
+  if (!["native", "env", "config"].includes(kind)) throw new Error(`Unsupported credential store: ${kind}. Choose native, env, or config.`);
+  const secret = provider === "gateway-token" ? options.gatewayToken : (options.openrouterKey || options.byokKey);
+  if (!secret) return { ...options };
+  const store = createCredentialStore(kind, { home: options.home, service: "token-optimizer", account: provider, ...(options.credentialStoreOptions || {}) });
+  const credentialRef = store.set(secret);
+  const prepared = { ...options, provider, credentialStore: kind, credentialRef };
+  delete prepared.gatewayToken;
+  delete prepared.byokKey;
+  delete prepared.openrouterKey;
+  delete prepared.credentialStoreOptions;
+  return prepared;
 }
 
 /* Translate legacy v1 environment state into an explicit provider without
@@ -927,6 +948,7 @@ module.exports = {
   LAUNCH_AGENT_LABEL,
   emptyManagedValues,
   buildProviderValues,
+  prepareCredentialOptions,
   normalizeProviderChoice,
   planMigration,
   DIRECTIVE_MARKER_START,

@@ -89,17 +89,20 @@ const child = spawn(process.execPath, [path.join(__dirname, "index.js")], {
           } catch {}
         }
       }
-      if (!secret && parsed.store === "native") {
+      if (!secret && parsed && typeof parsed === "object" && ["macos-keychain", "linux-secret-service", "windows-dpapi"].includes(parsed.store)) {
         try {
-          if (process.platform === "darwin") secret = execFileSync("security", ["find-generic-password", "-s", parsed.service || "token-optimizer", "-a", parsed.account || "", "-w"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-          else if (process.platform === "linux") secret = execFileSync("secret-tool", ["lookup", "service", parsed.service || "token-optimizer", "account", parsed.account || ""], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-          else if (process.platform === "win32" && parsed.store === "windows-dpapi") secret = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String((Get-Content -Raw -LiteralPath $args[0])), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))", parsed.path || parsed.filePath || path.join(require("os").homedir(), ".token-optimizer", "credential.dpapi")], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+          if (parsed.store === "macos-keychain" && process.platform === "darwin") secret = execFileSync("security", ["find-generic-password", "-s", parsed.service || "token-optimizer", "-a", parsed.account || "", "-w"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+          else if (parsed.store === "linux-secret-service" && process.platform === "linux") secret = execFileSync("secret-tool", ["lookup", "service", parsed.service || "token-optimizer", "account", parsed.account || ""], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+          else if (parsed.store === "windows-dpapi" && process.platform === "win32") secret = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String((Get-Content -Raw -LiteralPath $args[0])), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))", parsed.path || parsed.filePath || path.join(require("os").homedir(), ".token-optimizer", "credential.dpapi")], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
         } catch {}
       }
       if (secret) {
         const mode = env.TOKEN_OPTIMIZER_PROVIDER_MODE;
         const key = mode === "gateway-token" ? "LLM_GATEWAY_TOKEN" : mode === "openrouter-direct" ? "OPENROUTER_API_KEY" : "OPENROUTER_BYOK_KEY";
         env[key] = secret;
+      } else {
+        console.error("token-optimizer launcher: credential reference could not be resolved");
+        process.exit(1);
       }
     }
     return env;
