@@ -74,3 +74,10 @@ test('logs require an absolute workspace and purge protects metadata by default'
   assert.equal(fs.existsSync(path.join(directory, 'baseline.json')), true);
   assert.equal(fs.existsSync(path.join(directory, 'analytics.json')), true);
 });
+
+test('logs reject a symlinked managed directory', async () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'to-logs-link-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'to-logs-outside-'));
+  fs.symlinkSync(outside, path.join(workspace, '.codex-local-test-runs'), 'dir');
+  await assert.rejects(() => logs.statusLogs(workspace), /real directory|escapes workspace/);
+});

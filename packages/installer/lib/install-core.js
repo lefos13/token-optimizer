@@ -4,6 +4,8 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const { createChangePlan, formatChangePlan } = require("./change-plan");
 const { registerPlan, applyChangePlan, defaultAdapters } = require("./apply-plan");
+const { writeManifest } = require("./manifest");
+const crypto = require("crypto");
 
 const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
 const DEFAULT_LOCAL_LLM_URL = "http://localhost:8080/v1";
@@ -185,7 +187,33 @@ function planInstallation(options = {}) {
 function installSelectedClients(options) {
   const result = applyChangePlan(planInstallation(options), defaultAdapters());
   if (result.error) throw result.error;
+  persistInstallManifest(options, result.installedClients);
   return result.installedClients;
+}
+
+/* Capture only installer-owned plugin trees after a successful install. The
+   manifest is the durable hand-off used by repair and uninstall; config files
+   remain outside these trees so user-authored settings are never deleted. */
+function persistInstallManifest(options = {}, clients = []) {
+  const paths = installerPaths(options);
+  const roots = clients.flatMap((client) => ({
+    opencode: [path.join(paths.home, ".config", "opencode", "token-optimizer-server"), path.join(paths.home, ".config", "opencode", "skills", "token-optimizer")],
+    cursor: [path.join(paths.home, ".cursor", "token-optimizer-server")],
+    antigravity: [path.join(paths.home, ".gemini", "config", "plugins", "token-optimizer")],
+    claude: [path.join(paths.home, ".claude", "skills", "token-optimizer"), path.join(paths.installRoot, "plugin", "claude")],
+    codex: [path.join(paths.home, ".codex", "skills", "token-optimizer"), path.join(paths.installRoot, "plugin", "codex")],
+  }[client] || [])).filter((root) => fs.existsSync(root));
+  const files = [];
+  const walk = (directory) => {
+    let entries; try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch (_) { return; }
+    for (const entry of entries) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory() && !entry.isSymbolicLink()) walk(file);
+      else if (entry.isFile()) files.push({ path: file, sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"), ownership: "installer" });
+    }
+  };
+  roots.forEach(walk);
+  writeManifest(paths.home, { schemaVersion: 2, roots: [...new Set(roots.map((root) => path.resolve(root)))], files });
 }
 
 function clientTargets(client, paths) {
@@ -864,6 +892,7 @@ module.exports = {
   formatChangePlan,
   detectClients,
   installSelectedClients,
+  persistInstallManifest,
   installOpenCode,
   installCursor,
   installAntigravity,

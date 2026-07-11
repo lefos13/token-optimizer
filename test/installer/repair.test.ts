@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 const { planRepair } = require('../../../packages/installer/lib/uninstall.js');
 
 test('repair is scoped to actionable doctor findings', () => {
-  const manifest = { schemaVersion: 2, roots: ['/managed'], files: [
+  const manifest = { schemaVersion: 2, roots: ['/managed', '/assets'], files: [
     { path: '/managed/server', source: '/assets/server', sha256: 'x', ownership: 'installer' },
     { path: '/managed/skill', source: '/assets/skill', sha256: 'y', ownership: 'installer' },
   ] };

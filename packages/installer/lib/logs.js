@@ -14,8 +14,25 @@ function requireWorkspace(workspace) {
   return path.resolve(workspace);
 }
 
+async function ensureManagedRoot(workspace) {
+  const resolvedWorkspace = requireWorkspace(workspace);
+  const root = path.join(resolvedWorkspace, LOG_DIR);
+  let workspaceReal;
+  try { workspaceReal = await fs.realpath(resolvedWorkspace); } catch (error) { throw new Error(`workspace is not accessible: ${error.message}`); }
+  try {
+    const stat = await fs.lstat(root);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('managed log directory must be a real directory');
+  } catch (error) {
+    if (error.code === 'ENOENT') return { workspace: workspaceReal, root };
+    throw error;
+  }
+  const rootReal = await fs.realpath(root);
+  if (!(rootReal === workspaceReal || rootReal.startsWith(`${workspaceReal}${path.sep}`))) throw new Error('managed log directory escapes workspace');
+  return { workspace: workspaceReal, root: rootReal };
+}
+
 async function logEntries(workspace) {
-  const root = path.join(requireWorkspace(workspace), LOG_DIR);
+  const { root } = await ensureManagedRoot(workspace);
   let names;
   try { names = await fs.readdir(root); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   const result = [];
@@ -37,14 +54,14 @@ function result(removed, bytes, policy, remainingBytes) {
 }
 
 async function statusLogs(workspace, policy = DEFAULT_LOG_POLICY) {
-  requireWorkspace(workspace);
+  await ensureManagedRoot(workspace);
   const entries = await logEntries(workspace);
   const bytes = entries.reduce((sum, entry) => sum + entry.bytes, 0);
   return result([], 0, policy, bytes);
 }
 
 async function pruneLogs(workspace, policy = DEFAULT_LOG_POLICY) {
-  requireWorkspace(workspace);
+  await ensureManagedRoot(workspace);
   const retentionDays = policy.retentionDays ?? DEFAULT_LOG_POLICY.retentionDays;
   const now = Date.now();
   const entries = await logEntries(workspace);
@@ -66,8 +83,7 @@ async function pruneLogs(workspace, policy = DEFAULT_LOG_POLICY) {
 }
 
 async function purgeLogs(workspace, options = {}) {
-  requireWorkspace(workspace);
-  const root = path.join(workspace, LOG_DIR);
+  const { root } = await ensureManagedRoot(workspace);
   const removed = [];
   for (const entry of await logEntries(workspace)) {
     await fs.unlink(entry.path); removed.push({ path: path.relative(workspace, entry.path), bytes: entry.bytes, reason: 'purged' });

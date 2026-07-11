@@ -50,6 +50,10 @@ function isRepairFinding(item) {
 
 function assertManifest(manifest) {
   if (!manifest || !Array.isArray(manifest.files)) throw new TypeError('manifest with files is required');
+  const roots = [...(manifest.roots || []), ...(manifest.assetRoots || [])].filter((root) => typeof root === 'string' && path.isAbsolute(root)).map((root) => path.resolve(root));
+  for (const file of manifest.files) {
+    if (file.source && (!path.isAbsolute(file.source) || !roots.some((root) => file.source === root || file.source.startsWith(`${root}${path.sep}`)))) throw new Error(`manifest source outside trusted roots: ${file.source}`);
+  }
 }
 
 function stateHash(state, filePath) {

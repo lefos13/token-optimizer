@@ -13,6 +13,7 @@ const {
   applyChangePlan,
   formatChangePlan,
   installSelectedClients,
+  persistInstallManifest,
   applyGatewayConfig,
   applyDefaultDirectives,
 } = require("../lib/install-core");
@@ -110,6 +111,7 @@ async function main() {
         process.exitCode = 1;
         return;
       }
+      persistInstallManifest(options, applyResult.installedClients);
       const installed = applyResult.installedClients;
       console.log(`Installed Token Optimizer for: ${installed.join(", ")}`);
       if (clients.includes("all") || clients.includes("cursor")) {
