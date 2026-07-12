@@ -40,8 +40,12 @@ test('scanner follows POSIX quote and escape rules and fails closed on unmatched
   const execution = { profile: 'unrestricted' as const, allowedCommandPrefixes: [] };
   const singleQuoteAttack = await runCommand(`printf 'x\\'; touch marker`, root, 1000, execution);
   assert.equal(singleQuoteAttack.executionStatus, 'blocked'); assert.equal(fs.existsSync(path.join(root, 'marker')), false);
+  /* Backslash-escaping a shell metacharacter is a POSIX-only allowance (see the win32 test
+   * below) -- cmd.exe has no backslash escape, so the same command is correctly denied there. */
   const escapedPipe = await runCommand(`printf x \\| tee marker`, root, 1000, execution);
-  assert.equal(escapedPipe.exitCode, 0); assert.equal(fs.existsSync(path.join(root, 'marker')), false);
+  if (process.platform === 'win32') assert.equal(escapedPipe.executionStatus, 'blocked');
+  else assert.equal(escapedPipe.exitCode, 0);
+  assert.equal(fs.existsSync(path.join(root, 'marker')), false);
   for (const command of [`printf 'unterminated`, `printf "unterminated`]) {
     assert.equal((await runCommand(command, root, 1000, execution)).executionStatus, 'blocked');
   }
@@ -58,7 +62,10 @@ test('scanner follows POSIX quote and escape rules and fails closed on unmatched
 test('win32 scanning denies POSIX-only escapes and single-quote grouping that cmd.exe would not honor', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'to-security-win32-quotes-'));
   for (const command of [`printf x \\| tee marker`, `printf 'x & del marker'`, `printf 'x; del marker'`]) {
-    const posix = await evaluateCommand({ command, workspacePath: root, profile: 'unrestricted' });
+    /* Force a concrete POSIX platform rather than relying on the ambient process.platform --
+     * this test itself may be running on a real win32 host, which would otherwise make the
+     * "POSIX allows this" half of the comparison contradict itself. */
+    const posix = await evaluateCommand({ command, workspacePath: root, profile: 'unrestricted', platform: 'linux' });
     assert.equal(posix.allowed, true, `expected POSIX to allow: ${command}`);
     const win32 = await evaluateCommand({ command, workspacePath: root, profile: 'unrestricted', platform: 'win32' });
     assert.equal(win32.allowed, false, `expected win32 to deny: ${command}`);
@@ -75,9 +82,12 @@ test('double quotes block active command substitution but allow escaped literals
     assert.equal(result.executionStatus, 'blocked', command);
     assert.equal(fs.existsSync(path.join(root, 'marker')), false, command);
   }
+  /* Backslash-escaping `$(` / backtick inside double quotes is a POSIX-only allowance --
+   * cmd.exe has no backslash escape, so the same commands are correctly denied there. */
   for (const command of [`printf "\\$(touch marker)"`, 'printf "\\`touch marker\\`"']) {
     const result = await runCommand(command, root, 1000, execution);
-    assert.equal(result.exitCode, 0, command);
+    if (process.platform === 'win32') assert.equal(result.executionStatus, 'blocked', command);
+    else assert.equal(result.exitCode, 0, command);
     assert.equal(fs.existsSync(path.join(root, 'marker')), false, command);
   }
   fs.rmSync(root, { recursive: true, force: true });
