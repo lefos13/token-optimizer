@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
@@ -36,7 +37,7 @@ function treeRssKb(rootPid) {
 
 function sampleTree(pid, state) {
   const rss = treeRssKb(pid);
-  if (rss !== null) state.peakKb = Math.max(state.peakKb, rss);
+  if (rss !== null) { state.available = true; state.peakKb = Math.max(state.peakKb, rss); }
 }
 
 function directMeasure(spec) {
@@ -44,14 +45,14 @@ function directMeasure(spec) {
     const started = process.hrtime.bigint();
     const encoded = Buffer.from(JSON.stringify({ command: spec.command, args: spec.args })).toString('base64url');
     const child = spawn(process.execPath, [__filename, '--baseline-worker', encoded], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
-    const state = { peakKb: 0, bytes: 0 };
+    const state = { peakKb: 0, bytes: 0, available: false };
     const collect = chunk => { state.bytes += chunk.length; };
     child.stdout.on('data', collect); child.stderr.on('data', collect); child.on('error', reject);
     sampleTree(child.pid, state);
     const timer = setInterval(() => sampleTree(child.pid, state), 2);
     child.on('close', code => {
       sampleTree(child.pid, state); clearInterval(timer);
-      setImmediate(() => resolve({ exitCode: code ?? -1, rawBytes: state.bytes, peakRssMb: state.peakKb / 1024, durationMs: Number(process.hrtime.bigint() - started) / 1e6 }));
+      setImmediate(() => resolve({ exitCode: code ?? -1, rawBytes: state.bytes, peakRssMb: state.available ? state.peakKb / 1024 : null, durationMs: Number(process.hrtime.bigint() - started) / 1e6 }));
     });
   });
 }
@@ -86,7 +87,7 @@ async function productMeasure(spec) {
     PATH: process.env.PATH || '', HOME: process.env.HOME || '', TOKEN_OPTIMIZER_CONFIG_HOME: configHome, LLM_GATEWAY_URL: mock.url, LLM_GATEWAY_TOKEN: 'benchmark-token', LOCAL_LLM_MODEL: 'unused-local'
   }});
   const client = new Client({ name: 'release-benchmark', version: '1.0.0' });
-  const state = { peakKb: 0 }; const started = process.hrtime.bigint(); let timer;
+  const state = { peakKb: 0, available: false }; const started = process.hrtime.bigint(); let timer;
   try {
     await client.connect(transport); sampleTree(transport.pid, state); timer = setInterval(() => sampleTree(transport.pid, state), 2);
     const command = [spec.command, ...spec.args].map(part => JSON.stringify(part)).join(' ');
@@ -95,7 +96,7 @@ async function productMeasure(spec) {
     const output = JSON.parse(result.content[0].text);
     if (mock.observed.calls !== 1) throw new Error(`mock received ${mock.observed.calls} calls`);
     const serializedBytes = Buffer.byteLength(result.content[0].text);
-    return { exitCode: output.exitCode, rawBytes: output.rawSourceBytes, returnedBytes: serializedBytes, peakRssMb: state.peakKb / 1024,
+    return { exitCode: output.exitCode, rawBytes: output.rawSourceBytes, returnedBytes: serializedBytes, peakRssMb: state.available ? state.peakKb / 1024 : null,
       durationMs: Number(process.hrtime.bigint() - started) / 1e6, provider: { model: output.llmModel, latencyMs: output.llmLatencyMs }, redaction: output.redactionSummary };
   } finally {
     if (timer) clearInterval(timer); await client.close().catch(() => {}); await new Promise(resolve => mock.server.close(resolve)); fs.rmSync(configHome, { recursive: true, force: true });
@@ -106,10 +107,11 @@ function workloadRecord(spec, baseline, product) {
   if (baseline.exitCode !== product.exitCode) throw new Error(`exit truth mismatch for ${spec.name}: baseline=${baseline.exitCode} product=${JSON.stringify(product)}`);
   if (baseline.rawBytes !== product.rawBytes) throw new Error(`byte count mismatch for ${spec.name}: ${baseline.rawBytes} != ${product.rawBytes}`);
   const savings = product.rawBytes ? (1 - product.returnedBytes / product.rawBytes) * 100 : 0;
+  const overhead = baseline.peakRssMb === null || product.peakRssMb === null ? null : product.peakRssMb - baseline.peakRssMb;
   return { workload: spec.name, ecosystem: spec.ecosystem, command: safe([spec.command, ...spec.args].join(' ')), outcome: product.exitCode === 0 ? 'success' : 'failure', exitCode: product.exitCode,
     rawBytes: product.rawBytes, rawTokens: Math.ceil(product.rawBytes / 4), returnedBytes: product.returnedBytes, returnedTokens: Math.ceil(product.returnedBytes / 4),
-    savingsPercent: Number(savings.toFixed(2)), baselinePeakRssMb: Number(baseline.peakRssMb.toFixed(2)), productPeakRssMb: Number(product.peakRssMb.toFixed(2)),
-    productOverheadRssMb: Number((product.peakRssMb - baseline.peakRssMb).toFixed(2)), baselineDurationMs: Number(baseline.durationMs.toFixed(2)), durationMs: Number(product.durationMs.toFixed(2)), provider: product.provider, redaction: product.redaction };
+    savingsPercent: Number(savings.toFixed(2)), rssStatus: overhead === null ? 'unavailable' : 'measured', baselinePeakRssMb: baseline.peakRssMb === null ? null : Number(baseline.peakRssMb.toFixed(2)), productPeakRssMb: product.peakRssMb === null ? null : Number(product.peakRssMb.toFixed(2)),
+    productOverheadRssMb: overhead === null ? null : Number(overhead.toFixed(2)), baselineDurationMs: Number(baseline.durationMs.toFixed(2)), durationMs: Number(product.durationMs.toFixed(2)), provider: product.provider, redaction: product.redaction };
 }
 
 async function runSpec(spec) {
@@ -117,16 +119,38 @@ async function runSpec(spec) {
   return workloadRecord(spec, await directMeasure(spec), await productMeasure(spec));
 }
 
+function median(values) { const sorted = [...values].sort((a, b) => a - b); return sorted[Math.floor(sorted.length / 2)]; }
+async function runRepeated(spec, repetitions) {
+  const samples = [];
+  for (let i = 0; i < repetitions; i += 1) samples.push(await runSpec(spec));
+  const first = samples[0];
+  if (samples.some(sample => sample.exitCode !== first.exitCode || sample.rawBytes !== first.rawBytes)) throw new Error(`BENCHMARK_SAMPLE_INCONSISTENT:${spec.name}`);
+  if (samples.some(sample => sample.rssStatus !== 'measured')) return { ...first, repetitions, samples, rssStatus: 'unavailable', productOverheadRssMb: null, rss: { medianMb: null, minMb: null, maxMb: null, uncertaintyMb: null } };
+  const values = samples.map(sample => sample.productOverheadRssMb);
+  const med = median(values); return { ...first, repetitions, samples, productOverheadRssMb: med, rss: { medianMb: med, minMb: Math.min(...values), maxMb: Math.max(...values), uncertaintyMb: Math.max(...values) - Math.min(...values) } };
+}
+
+const inputFiles = ['dist/index.js', 'dist/runner.js', 'dist/log-excerpt.js', 'dist/redaction.js', 'dist/config.js', 'scripts/run-benchmarks.js', 'package.json', 'package-lock.json'];
+function benchmarkInputHash() {
+  const files = [...inputFiles, ...fs.readdirSync(path.join(root, 'benchmarks/fixtures')).flatMap(dir => fs.readdirSync(path.join(root, 'benchmarks/fixtures', dir)).map(file => `benchmarks/fixtures/${dir}/${file}`))].sort();
+  const hash = crypto.createHash('sha256'); for (const file of files) hash.update(`${file}\0`).update(fs.readFileSync(path.join(root, file))).update('\0'); return hash.digest('hex');
+}
+function assertCleanSource() {
+  const status = git(['status', '--porcelain', '--untracked-files=all']).split(/\r?\n/).filter(Boolean).filter(line => !line.slice(3).startsWith('benchmarks/results/'));
+  if (status.length) { const error = new Error('benchmark source tree is dirty'); error.code = 'BENCHMARK_SOURCE_DIRTY'; throw error; }
+}
+
 async function selfTest() {
   const failureSpec = { name: 'failure', ecosystem: 'npm', check: 'node', command: 'node', args: ['benchmarks/fixtures/npm/noisy.js', '--fail'] };
   const largeSpec = { name: 'binary-long-line', ecosystem: 'npm', check: 'node', command: 'node', args: ['benchmarks/fixtures/npm/large.js'] };
-  const failure = await runSpec(failureSpec); const large = await runSpec(largeSpec); large.expectedBytes = 56 * 1024 * 1024 + 3;
-  if (large.rawBytes !== large.expectedBytes || large.productOverheadRssMb >= 100) throw new Error(`large workload contract failed: ${JSON.stringify(large)}`);
-  return { schemaVersion: 2, selfTest: 'passed', failure, large, redaction: large.redaction, provider: large.provider };
+  const failure = await runSpec(failureSpec); const large = await runRepeated(largeSpec, 3); large.expectedBytes = 56 * 1024 * 1024 + 3;
+  if (large.rssStatus !== 'measured' || large.rawBytes !== large.expectedBytes || large.productOverheadRssMb >= 100) throw new Error(`large workload contract failed: ${JSON.stringify(large)}`);
+  return { schemaVersion: 2, selfTest: 'passed', benchmarkInputHash: benchmarkInputHash(), failure, large, redaction: large.redaction, provider: large.provider };
 }
 
 function git(args) { const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' }); if (result.status !== 0) throw new Error(result.stderr); return result.stdout.trim(); }
 async function main() {
+  if (process.argv.includes('--check-clean-fixture')) { const error = new Error('fixture'); error.code = 'BENCHMARK_SOURCE_DIRTY'; throw error; }
   if (process.argv[2] === '--baseline-worker') {
     const spec = JSON.parse(Buffer.from(process.argv[3], 'base64url').toString());
     const command = [spec.command, ...spec.args].map(part => JSON.stringify(part)).join(' ');
@@ -136,6 +160,7 @@ async function main() {
     return;
   }
   if (process.argv.includes('--self-test')) { process.stdout.write(`${JSON.stringify(await selfTest())}\n`); return; }
+  assertCleanSource();
   const specs = [];
   for (const fail of [false, true]) {
     specs.push({ name: `npm-${fail ? 'failure' : 'success'}`, ecosystem: 'npm', check: 'node', command: 'node', args: ['benchmarks/fixtures/npm/noisy.js', ...(fail ? ['--fail'] : [])] });
@@ -145,11 +170,11 @@ async function main() {
   const rustBin = path.join(os.tmpdir(), `token-optimizer-benchmark-rust-${process.pid}`); const rust = spawnSync('rustc', ['benchmarks/fixtures/rust/noisy.rs', '-o', rustBin], { cwd: root });
   for (const fail of [false, true]) specs.push({ name: `rust-${fail ? 'failure' : 'success'}`, ecosystem: 'rust', check: rust.status === 0 ? rustBin : 'rust-unavailable', command: rustBin, args: fail ? ['--fail'] : [] });
   const workloads = []; for (const spec of specs) workloads.push(await runSpec(spec));
-  const large = await runSpec({ name: 'binary-long-line-56mb', ecosystem: 'npm', check: 'node', command: 'node', args: ['benchmarks/fixtures/npm/large.js'] }); workloads.push(large);
-  if (large.rawBytes !== 56 * 1024 * 1024 + 3 || large.productOverheadRssMb >= 100) throw new Error('large workload release gate failed');
+  const large = await runRepeated({ name: 'binary-long-line-56mb', ecosystem: 'npm', check: 'node', command: 'node', args: ['benchmarks/fixtures/npm/large.js'] }, 3); workloads.push(large);
+  if (large.rssStatus !== 'measured' || large.rawBytes !== 56 * 1024 * 1024 + 3 || large.productOverheadRssMb >= 100) throw new Error('large workload release gate failed');
   fs.rmSync(rustBin, { force: true });
-  const report = { schemaVersion: 2, release: '2.0.0-rc.1', benchmarkSourceCommit: git(['rev-parse', 'HEAD']), benchmarkSourceTree: git(['rev-parse', 'HEAD^{tree}']), timestamp: new Date().toISOString(), platform: `${process.platform}-${process.arch}`,
+  const report = { schemaVersion: 2, release: '2.0.0-rc.1', benchmarkSourceCommit: git(['rev-parse', 'HEAD']), benchmarkSourceTree: git(['rev-parse', 'HEAD^{tree}']), benchmarkInputHash: benchmarkInputHash(), timestamp: new Date().toISOString(), platform: `${process.platform}-${process.arch}`,
     methodology: { executionsPerMeasurement: 1, baseline: 'dedicated Node measurement worker plus shell and workload descendants', product: 'compiled MCP server over SDK stdio plus deterministic local OpenAI-compatible HTTP mock', executionConfig: 'fresh temporary user config permits unrestricted execution only for controlled fixture commands and is deleted after each measurement', rss: 'peak aggregate RSS of root process and descendants sampled via ps every 2ms', limitations: process.platform === 'win32' ? ['RSS unavailable on Windows'] : ['Very short-lived processes between samples may be missed; RSS is platform-reported and not cross-platform comparable.'] }, workloads };
   const output = path.join(root, 'benchmarks/results/v2.0.0-rc.1.json'); fs.mkdirSync(path.dirname(output), { recursive: true }); fs.writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`); console.log(JSON.stringify({ output: safe(output), workloads: workloads.length }));
 }
-main().catch(error => { process.stderr.write(`${safe(error.stack || error)}\n`); process.exit(1); });
+main().catch(error => { process.stderr.write(`${JSON.stringify({ code: error.code || 'BENCHMARK_FAILED', message: safe(error.message) })}\n`); process.exit(error.code === 'BENCHMARK_SOURCE_DIRTY' ? 2 : 1); });

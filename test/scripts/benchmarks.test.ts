@@ -23,5 +23,17 @@ test('benchmark production-path contracts pass deterministically', () => {
   assert.equal(report.redaction.count, 1);
   assert.equal(report.provider.model, 'benchmark-digest-v1');
   assert.ok(report.provider.latencyMs >= 0);
+  assert.match(report.benchmarkInputHash, /^[a-f0-9]{64}$/);
+  assert.equal(report.large.repetitions, 3);
+  assert.equal(report.large.samples.length, 3);
+  assert.ok(report.large.productOverheadRssMb < 100);
+  assert.ok(report.large.rss.minMb <= report.large.rss.medianMb);
+  assert.ok(report.large.rss.medianMb <= report.large.rss.maxMb);
   assert.ok(!JSON.stringify(report).includes(root));
+});
+
+test('benchmark refuses a dirty source tree with a stable code', () => {
+  const result = spawnSync(process.execPath, ['scripts/run-benchmarks.js', '--check-clean-fixture'], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 2);
+  assert.equal(JSON.parse(result.stderr).code, 'BENCHMARK_SOURCE_DIRTY');
 });
