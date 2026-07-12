@@ -1,0 +1,179 @@
+{
+  "schemaVersion": 2,
+  "release": "2.0.0-rc.1",
+  "benchmarkSourceCommit": "f3fc779e82b95fa1b65fc64650ffa5355c3a1a2c",
+  "benchmarkSourceTree": "167bff6bfbc37d30c5656ccaa53e739561901e27",
+  "timestamp": "2026-07-12T20:34:52.121Z",
+  "platform": "darwin-arm64",
+  "methodology": {
+    "executionsPerMeasurement": 1,
+    "baseline": "dedicated Node measurement worker plus shell and workload descendants",
+    "product": "compiled MCP server over SDK stdio plus deterministic local OpenAI-compatible HTTP mock",
+    "executionConfig": "fresh temporary user config permits unrestricted execution only for controlled fixture commands and is deleted after each measurement",
+    "rss": "peak aggregate RSS of root process and descendants sampled via ps every 2ms",
+    "limitations": [
+      "Very short-lived processes between samples may be missed; RSS is platform-reported and not cross-platform comparable."
+    ]
+  },
+  "workloads": [
+    {
+      "workload": "npm-success",
+      "ecosystem": "npm",
+      "command": "node benchmarks/fixtures/npm/noisy.js",
+      "outcome": "success",
+      "exitCode": 0,
+      "rawBytes": 170910,
+      "rawTokens": 42728,
+      "returnedBytes": 40216,
+      "returnedTokens": 10054,
+      "savingsPercent": 76.47,
+      "baselinePeakRssMb": 115.58,
+      "productPeakRssMb": 110.2,
+      "productOverheadRssMb": -5.38,
+      "baselineDurationMs": 183.79,
+      "durationMs": 205.65,
+      "provider": {
+        "model": "benchmark-digest-v1",
+        "latencyMs": 35
+      },
+      "redaction": {
+        "count": 1,
+        "categories": [
+          "secret-assignment"
+        ]
+      }
+    },
+    {
+      "workload": "python-success",
+      "ecosystem": "python",
+      "command": "python3 benchmarks/fixtures/python/noisy.py",
+      "outcome": "success",
+      "exitCode": 0,
+      "rawBytes": 182913,
+      "rawTokens": 45729,
+      "returnedBytes": 42916,
+      "returnedTokens": 10729,
+      "savingsPercent": 76.54,
+      "baselinePeakRssMb": 84.61,
+      "productPeakRssMb": 82.97,
+      "productOverheadRssMb": -1.64,
+      "baselineDurationMs": 166.65,
+      "durationMs": 190.4,
+      "provider": {
+        "model": "benchmark-digest-v1",
+        "latencyMs": 29
+      },
+      "redaction": {
+        "count": 1,
+        "categories": [
+          "secret-assignment"
+        ]
+      }
+    },
+    {
+      "workload": "go-success",
+      "ecosystem": "go",
+      "status": "skipped",
+      "reason": "toolchain-unavailable"
+    },
+    {
+      "workload": "npm-failure",
+      "ecosystem": "npm",
+      "command": "node benchmarks/fixtures/npm/noisy.js --fail",
+      "outcome": "failure",
+      "exitCode": 7,
+      "rawBytes": 170922,
+      "rawTokens": 42731,
+      "returnedBytes": 40285,
+      "returnedTokens": 10072,
+      "savingsPercent": 76.43,
+      "baselinePeakRssMb": 114.95,
+      "productPeakRssMb": 110.2,
+      "productOverheadRssMb": -4.75,
+      "baselineDurationMs": 166.19,
+      "durationMs": 207.17,
+      "provider": {
+        "model": "benchmark-digest-v1",
+        "latencyMs": 36
+      },
+      "redaction": {
+        "count": 1,
+        "categories": [
+          "secret-assignment"
+        ]
+      }
+    },
+    {
+      "workload": "python-failure",
+      "ecosystem": "python",
+      "command": "python3 benchmarks/fixtures/python/noisy.py --fail",
+      "outcome": "failure",
+      "exitCode": 7,
+      "rawBytes": 182925,
+      "rawTokens": 45732,
+      "returnedBytes": 42985,
+      "returnedTokens": 10747,
+      "savingsPercent": 76.5,
+      "baselinePeakRssMb": 83.48,
+      "productPeakRssMb": 83.59,
+      "productOverheadRssMb": 0.11,
+      "baselineDurationMs": 158.58,
+      "durationMs": 212.74,
+      "provider": {
+        "model": "benchmark-digest-v1",
+        "latencyMs": 38
+      },
+      "redaction": {
+        "count": 1,
+        "categories": [
+          "secret-assignment"
+        ]
+      }
+    },
+    {
+      "workload": "go-failure",
+      "ecosystem": "go",
+      "status": "skipped",
+      "reason": "toolchain-unavailable"
+    },
+    {
+      "workload": "rust-success",
+      "ecosystem": "rust",
+      "status": "skipped",
+      "reason": "toolchain-unavailable"
+    },
+    {
+      "workload": "rust-failure",
+      "ecosystem": "rust",
+      "status": "skipped",
+      "reason": "toolchain-unavailable"
+    },
+    {
+      "workload": "binary-long-line-56mb",
+      "ecosystem": "npm",
+      "command": "node benchmarks/fixtures/npm/large.js",
+      "outcome": "success",
+      "exitCode": 0,
+      "rawBytes": 58720259,
+      "rawTokens": 14680065,
+      "returnedBytes": 26031,
+      "returnedTokens": 6508,
+      "savingsPercent": 99.96,
+      "baselinePeakRssMb": 167.61,
+      "productPeakRssMb": 249.5,
+      "productOverheadRssMb": 81.89,
+      "baselineDurationMs": 5193.43,
+      "durationMs": 475.53,
+      "provider": {
+        "model": "benchmark-digest-v1",
+        "latencyMs": 33
+      },
+      "redaction": {
+        "count": 1,
+        "categories": [
+          "secret-assignment"
+        ]
+      }
+    }
+  ]
+}
