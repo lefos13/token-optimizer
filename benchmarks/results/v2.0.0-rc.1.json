@@ -1,10 +1,16 @@
 {
   "schemaVersion": 2,
   "release": "2.0.0-rc.1",
-  "benchmarkSourceCommit": "747a8d159da7cfd7540212bf39dfb32831ce2e8b",
-  "benchmarkSourceTree": "855fe52dd19922062b3d2d06e44f0d3184281f71",
-  "benchmarkInputHash": "ba9ec82418022b640dd4d442a401951c16754b371e94fbc9d3f9a24f718567f0",
-  "timestamp": "2026-07-12T20:45:15.415Z",
+  "benchmarkSourceCommit": "0088414d736664e630a9a8e8c41a686756904b82",
+  "benchmarkSourceTree": "914fae63dace0dcee5feb0099adab2296ca93b90",
+  "benchmarkInputHash": "408b568747a5ec411b4add3f582fb1903277e643de7fdd15a27f1fe2fee19373",
+  "packageLockHash": "4c2bd4d4c768f48642584e2837e85af13db9527118d0483d2448e22f991469a0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.1",
+    "nodemailer": "^9.0.3",
+    "zod": "^4.4.3"
+  },
+  "timestamp": "2026-07-12T20:52:38.678Z",
   "platform": "darwin-arm64",
   "methodology": {
     "executionsPerMeasurement": 1,
@@ -29,14 +35,14 @@
       "returnedTokens": 10054,
       "savingsPercent": 76.47,
       "rssStatus": "measured",
-      "baselinePeakRssMb": 115.98,
-      "productPeakRssMb": 111.83,
-      "productOverheadRssMb": -4.16,
-      "baselineDurationMs": 179.23,
-      "durationMs": 220.24,
+      "baselinePeakRssMb": 116.55,
+      "productPeakRssMb": 113.41,
+      "productOverheadRssMb": -3.14,
+      "baselineDurationMs": 186.24,
+      "durationMs": 223.38,
       "provider": {
         "model": "benchmark-digest-v1",
-        "latencyMs": 31
+        "latencyMs": 37
       },
       "redaction": {
         "count": 1,
@@ -57,14 +63,14 @@
       "returnedTokens": 10729,
       "savingsPercent": 76.54,
       "rssStatus": "measured",
-      "baselinePeakRssMb": 84.23,
-      "productPeakRssMb": 88.2,
-      "productOverheadRssMb": 3.97,
-      "baselineDurationMs": 182.2,
-      "durationMs": 215.69,
+      "baselinePeakRssMb": 82.03,
+      "productPeakRssMb": 83.97,
+      "productOverheadRssMb": 1.94,
+      "baselineDurationMs": 164.67,
+      "durationMs": 217.84,
       "provider": {
         "model": "benchmark-digest-v1",
-        "latencyMs": 33
+        "latencyMs": 41
       },
       "redaction": {
         "count": 1,
@@ -91,14 +97,14 @@
       "returnedTokens": 10072,
       "savingsPercent": 76.43,
       "rssStatus": "measured",
-      "baselinePeakRssMb": 116.06,
-      "productPeakRssMb": 110.08,
-      "productOverheadRssMb": -5.98,
-      "baselineDurationMs": 174.81,
-      "durationMs": 209.88,
+      "baselinePeakRssMb": 116.19,
+      "productPeakRssMb": 104.17,
+      "productOverheadRssMb": -12.02,
+      "baselineDurationMs": 171.55,
+      "durationMs": 214.25,
       "provider": {
         "model": "benchmark-digest-v1",
-        "latencyMs": 32
+        "latencyMs": 31
       },
       "redaction": {
         "count": 1,
@@ -119,14 +125,14 @@
       "returnedTokens": 10747,
       "savingsPercent": 76.5,
       "rssStatus": "measured",
-      "baselinePeakRssMb": 85.31,
-      "productPeakRssMb": 88.13,
-      "productOverheadRssMb": 2.81,
-      "baselineDurationMs": 153.68,
-      "durationMs": 209.12,
+      "baselinePeakRssMb": 84,
+      "productPeakRssMb": 82.8,
+      "productOverheadRssMb": -1.2,
+      "baselineDurationMs": 159.41,
+      "durationMs": 201.73,
       "provider": {
         "model": "benchmark-digest-v1",
-        "latencyMs": 36
+        "latencyMs": 30
       },
       "redaction": {
         "count": 1,
@@ -161,25 +167,6 @@
       "exitCode": 0,
       "rawBytes": 58720259,
       "rawTokens": 14680065,
-      "returnedBytes": 26031,
-      "returnedTokens": 6508,
-      "savingsPercent": 99.96,
-      "rssStatus": "measured",
-      "baselinePeakRssMb": 168.64,
-      "productPeakRssMb": 252.59,
-      "productOverheadRssMb": 79.2,
-      "baselineDurationMs": 5245.42,
-      "durationMs": 488.48,
-      "provider": {
-        "model": "benchmark-digest-v1",
-        "latencyMs": 40
-      },
-      "redaction": {
-        "count": 1,
-        "categories": [
-          "secret-assignment"
-        ]
-      },
       "repetitions": 3,
       "samples": [
         {
@@ -194,11 +181,11 @@
           "returnedTokens": 6508,
           "savingsPercent": 99.96,
           "rssStatus": "measured",
-          "baselinePeakRssMb": 168.64,
-          "productPeakRssMb": 252.59,
-          "productOverheadRssMb": 83.95,
-          "baselineDurationMs": 5245.42,
-          "durationMs": 488.48,
+          "baselinePeakRssMb": 169.34,
+          "productPeakRssMb": 242.28,
+          "productOverheadRssMb": 72.94,
+          "baselineDurationMs": 4413.12,
+          "durationMs": 488.58,
           "provider": {
             "model": "benchmark-digest-v1",
             "latencyMs": 40
@@ -222,14 +209,14 @@
           "returnedTokens": 6508,
           "savingsPercent": 99.96,
           "rssStatus": "measured",
-          "baselinePeakRssMb": 168.67,
-          "productPeakRssMb": 246.03,
-          "productOverheadRssMb": 77.36,
-          "baselineDurationMs": 4108.56,
-          "durationMs": 474.99,
+          "baselinePeakRssMb": 168.69,
+          "productPeakRssMb": 243.06,
+          "productOverheadRssMb": 74.38,
+          "baselineDurationMs": 5491.5,
+          "durationMs": 474.86,
           "provider": {
             "model": "benchmark-digest-v1",
-            "latencyMs": 33
+            "latencyMs": 34
           },
           "redaction": {
             "count": 1,
@@ -250,14 +237,14 @@
           "returnedTokens": 6508,
           "savingsPercent": 99.96,
           "rssStatus": "measured",
-          "baselinePeakRssMb": 168.75,
-          "productPeakRssMb": 247.95,
-          "productOverheadRssMb": 79.2,
-          "baselineDurationMs": 5005.16,
-          "durationMs": 470.82,
+          "baselinePeakRssMb": 168.72,
+          "productPeakRssMb": 239.5,
+          "productOverheadRssMb": 70.78,
+          "baselineDurationMs": 5772.17,
+          "durationMs": 483.45,
           "provider": {
             "model": "benchmark-digest-v1",
-            "latencyMs": 30
+            "latencyMs": 38
           },
           "redaction": {
             "count": 1,
@@ -267,11 +254,44 @@
           }
         }
       ],
-      "rss": {
-        "medianMb": 79.2,
-        "minMb": 77.36,
-        "maxMb": 83.95,
-        "uncertaintyMb": 6.590000000000003
+      "rssStatus": "measured",
+      "aggregates": {
+        "durationMs": {
+          "median": 483.45,
+          "min": 474.86,
+          "max": 488.58,
+          "range": 13.71999999999997
+        },
+        "baselineDurationMs": {
+          "median": 5491.5,
+          "min": 4413.12,
+          "max": 5772.17,
+          "range": 1359.0500000000002
+        },
+        "providerLatencyMs": {
+          "median": 38,
+          "min": 34,
+          "max": 40,
+          "range": 6
+        },
+        "baselineRssMb": {
+          "median": 168.72,
+          "min": 168.69,
+          "max": 169.34,
+          "range": 0.6500000000000057
+        },
+        "productRssMb": {
+          "median": 242.28,
+          "min": 239.5,
+          "max": 243.06,
+          "range": 3.5600000000000023
+        },
+        "overheadRssMb": {
+          "median": 72.94,
+          "min": 70.78,
+          "max": 74.38,
+          "range": 3.5999999999999943
+        }
       }
     }
   ]
