@@ -1,6 +1,6 @@
 {
   "name": "token-optimizer-mcp",
-  "version": "2.0.0-rc.5",
+  "version": "2.0.0-rc.6",
   "description": "An MCP server for running workspace tests and triaging failures using Token Optimizer.",
   "main": "dist/index.js",
   "files": [

@@ -261,7 +261,9 @@ are open-once and byte-bounded; POSIX uses `O_NOFOLLOW`, while Windows relies on
 canonical containment plus post-open regular-file validation because Node exposes
 no equivalent flag there. Authoritative POSIX user config must be privately owned.
 Custom patterns allow only concatenated literals/classes/safe escapes, edge
-anchors, and exact repetitions whose aggregate expanded match width is at most 64.
+anchors, and exact repetitions whose aggregate expanded match width is at most 64
+across all custom rules. User rules consume the budget first; excess lower-trust
+rules fail configuration rather than replacing mandatory rules.
 
 **LLM provider:** Configure one of four explicit modes: `local` keeps inference on your endpoint; `openrouter-direct` sends the redacted excerpt and credential directly to OpenRouter; `gateway-token` sends redacted excerpts through the Softaware gateway using its access token; and `gateway-byok` sends both the redacted excerpt and BYOK key through that gateway. The v1 `LLM_GATEWAY_URL` + `OPENROUTER_BYOK_KEY` environment pairing maps to `gateway-byok` with a compatibility warning, preserving its destination. Remote responses include `redactionSummary` (counts/categories only) and may include `providerWarnings`; neither field contains secret values. Raw-local logs may contain secrets printed by commands. If a provider is unavailable or structured output fails schema validation, command exit codes remain authoritative and the tool returns `uncertain` with conservative metadata. `OPENROUTER_BYOK_MODEL` is optional for BYOK routing. Generated plugins intentionally omit blank gateway placeholders so inherited host values keep working after reinstalls. `check_local_llm_health` verifies the selected provider.
 

@@ -84,3 +84,17 @@ test('rejects aggregate expanded-width amplification within a subprocess budget'
   assert.equal(result.status, 0, result.stderr || `signal=${result.signal}`);
   assert.ok(Date.now() - started < 1000, 'adversarial validation exceeded subprocess budget');
 });
+
+test('enforces aggregate budget across rules and keeps a near-limit set responsive', () => {
+  const oversized = new Array(20).fill(null).map((_, index) => ({ pattern: `[${String.fromCharCode(65 + index)}]{64}`, category: `rule-${index}` }));
+  assert.throws(() => redactText('x', { customRules: oversized }), /aggregate expanded-width/i);
+
+  const modulePath = path.resolve(__dirname, '../../src/redaction.js');
+  const nearLimit = new Array(19).fill(null).map((_, index) => ({ pattern: `[${String.fromCharCode(65 + index)}]{3}`, category: `rule-${index}` }));
+  nearLimit.push({ pattern: '[Z]{7}', category: 'rule-19' });
+  const script = `const { redactText } = require(${JSON.stringify(modulePath)}); redactText('x'.repeat(1048000), { customRules: ${JSON.stringify(nearLimit)} });`;
+  const started = Date.now();
+  const result = spawnSync(process.execPath, ['-e', script], { timeout: 1000, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr || `signal=${result.signal}`);
+  assert.ok(Date.now() - started < 1000, 'near-limit rule set exceeded subprocess budget');
+});

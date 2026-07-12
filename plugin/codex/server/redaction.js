@@ -60,6 +60,7 @@ function assertLinearPattern(source) {
         if (expandedWidth > MAX_EXPANDED_PATTERN_WIDTH)
             throw new TypeError('unsafe redaction rule pattern exceeds expanded-width limit');
     }
+    return expandedWidth;
 }
 /* These rules target credential-shaped values while retaining labels, routes, and
  * surrounding diagnostics. They intentionally avoid matching prose placeholders. */
@@ -104,17 +105,18 @@ function normalizeRule(rule) {
     if (rule.replacement && rule.replacement.length > MAX_REPLACEMENT_LENGTH)
         throw new RangeError('redaction rule replacement is too long');
     let pattern;
+    let expandedWidth;
     if (rule.pattern instanceof RegExp) {
         if (rule.pattern.source.length > MAX_PATTERN_LENGTH)
             throw new RangeError('redaction rule pattern is too long');
-        assertLinearPattern(rule.pattern.source);
+        expandedWidth = assertLinearPattern(rule.pattern.source);
         pattern = new RegExp(rule.pattern.source, rule.pattern.flags.includes('g') ? rule.pattern.flags : `${rule.pattern.flags}g`);
     }
     else if (typeof rule.pattern === 'string') {
         if (rule.pattern.length > MAX_PATTERN_LENGTH)
             throw new RangeError('redaction rule pattern is too long');
         try {
-            assertLinearPattern(rule.pattern);
+            expandedWidth = assertLinearPattern(rule.pattern);
             const flags = rule.flags || '';
             pattern = new RegExp(rule.pattern, flags.includes('g') ? flags : `${flags}g`);
         }
@@ -125,7 +127,7 @@ function normalizeRule(rule) {
     else {
         throw new TypeError('redaction rule pattern must be a regular expression or string');
     }
-    return { ...rule, pattern };
+    return { ...rule, pattern, expandedWidth };
 }
 function redactText(text, options = {}) {
     if (text.length > MAX_REDACTION_INPUT_LENGTH)
@@ -133,10 +135,14 @@ function redactText(text, options = {}) {
     const customRules = options.customRules ?? [];
     if (customRules.length > MAX_CUSTOM_RULES)
         throw new RangeError(`too many custom redaction rules (maximum ${MAX_CUSTOM_RULES})`);
+    const normalizedCustomRules = customRules.map(normalizeRule);
+    const aggregateWidth = normalizedCustomRules.reduce((total, rule) => total + rule.expandedWidth, 0);
+    if (aggregateWidth > MAX_EXPANDED_PATTERN_WIDTH)
+        throw new TypeError('unsafe custom redaction rule set exceeds aggregate expanded-width limit');
     let output = text;
     let count = 0;
     const categories = new Set();
-    for (const rule of [...DEFAULT_REDACTION_RULES, ...customRules.map(normalizeRule)]) {
+    for (const rule of [...DEFAULT_REDACTION_RULES, ...normalizedCustomRules]) {
         const replacement = rule.replace ?? (rule.replacement !== undefined ? (() => rule.replacement) : (() => '***'));
         output = output.replace(rule.pattern, (...args) => {
             count += 1;

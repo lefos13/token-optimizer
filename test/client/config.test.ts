@@ -90,6 +90,13 @@ test('provider task routing remains user-authoritative and redaction rules accum
   assert.deepEqual(config.redaction.rules.map((rule) => rule.category), ['user', 'project', 'tool']);
 });
 
+test('mandatory user redaction budget rejects an excess lower-trust addition', () => {
+  assert.throws(() => resolveEffectiveConfig({
+    user: { redaction: { rules: [{ pattern: '[U]{60}', category: 'mandatory-user' }] } },
+    project: { redaction: { rules: [{ pattern: '[P]{5}', category: 'project-extra' }] } },
+  }), /aggregate expanded-width/i);
+});
+
 test('project config rejects symlink escape', () => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'token-optimizer-project-'));
   const outside = path.join(os.tmpdir(), `token-optimizer-outside-${process.pid}.json`);

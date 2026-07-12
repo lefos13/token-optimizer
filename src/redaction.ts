@@ -29,7 +29,7 @@ const SAFE_FLAGS = /^[dgimsuv]*$/;
  * safe character escapes, edge anchors, and small exact repetitions. This
  * grammar has no branching or variable repetition and therefore executes in
  * time linear in the bounded input size. */
-function assertLinearPattern(source: string): void {
+function assertLinearPattern(source: string): number {
   let index = 0;
   let expandedWidth = 0;
   while (index < source.length) {
@@ -64,6 +64,7 @@ function assertLinearPattern(source: string): void {
     expandedWidth += repetitions;
     if (expandedWidth > MAX_EXPANDED_PATTERN_WIDTH) throw new TypeError('unsafe redaction rule pattern exceeds expanded-width limit');
   }
+  return expandedWidth;
 }
 
 /* These rules target credential-shaped values while retaining labels, routes, and
@@ -101,21 +102,22 @@ const DEFAULT_REDACTION_RULES: readonly RedactionRule[] = [
   },
 ];
 
-function normalizeRule(rule: RedactionRule): RedactionRule & { pattern: RegExp } {
+function normalizeRule(rule: RedactionRule): RedactionRule & { pattern: RegExp; expandedWidth: number } {
   if (!rule || typeof rule.category !== 'string' || rule.category.trim().length === 0) {
     throw new TypeError('redaction rule category must be a non-empty string');
   }
   if (rule.flags && !SAFE_FLAGS.test(rule.flags)) throw new TypeError('redaction rule contains invalid or duplicate flags');
   if (rule.replacement && rule.replacement.length > MAX_REPLACEMENT_LENGTH) throw new RangeError('redaction rule replacement is too long');
   let pattern: RegExp;
+  let expandedWidth: number;
   if (rule.pattern instanceof RegExp) {
     if (rule.pattern.source.length > MAX_PATTERN_LENGTH) throw new RangeError('redaction rule pattern is too long');
-    assertLinearPattern(rule.pattern.source);
+    expandedWidth = assertLinearPattern(rule.pattern.source);
     pattern = new RegExp(rule.pattern.source, rule.pattern.flags.includes('g') ? rule.pattern.flags : `${rule.pattern.flags}g`);
   } else if (typeof rule.pattern === 'string') {
     if (rule.pattern.length > MAX_PATTERN_LENGTH) throw new RangeError('redaction rule pattern is too long');
     try {
-      assertLinearPattern(rule.pattern);
+      expandedWidth = assertLinearPattern(rule.pattern);
       const flags = rule.flags || '';
       pattern = new RegExp(rule.pattern, flags.includes('g') ? flags : `${flags}g`);
     } catch (error) {
@@ -124,17 +126,20 @@ function normalizeRule(rule: RedactionRule): RedactionRule & { pattern: RegExp }
   } else {
     throw new TypeError('redaction rule pattern must be a regular expression or string');
   }
-  return { ...rule, pattern };
+  return { ...rule, pattern, expandedWidth };
 }
 
 export function redactText(text: string, options: RedactionOptions = {}): RedactionResult {
   if (text.length > MAX_REDACTION_INPUT_LENGTH) throw new RangeError('redaction input is too large');
   const customRules = options.customRules ?? [];
   if (customRules.length > MAX_CUSTOM_RULES) throw new RangeError(`too many custom redaction rules (maximum ${MAX_CUSTOM_RULES})`);
+  const normalizedCustomRules = customRules.map(normalizeRule);
+  const aggregateWidth = normalizedCustomRules.reduce((total, rule) => total + rule.expandedWidth, 0);
+  if (aggregateWidth > MAX_EXPANDED_PATTERN_WIDTH) throw new TypeError('unsafe custom redaction rule set exceeds aggregate expanded-width limit');
   let output = text;
   let count = 0;
   const categories = new Set<string>();
-  for (const rule of [...DEFAULT_REDACTION_RULES, ...customRules.map(normalizeRule)]) {
+  for (const rule of [...DEFAULT_REDACTION_RULES, ...normalizedCustomRules]) {
     const replacement = rule.replace ?? (rule.replacement !== undefined ? (() => rule.replacement as string) : (() => '***'));
     output = output.replace(rule.pattern, (...args) => {
       count += 1;

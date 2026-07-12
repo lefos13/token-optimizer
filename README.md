@@ -212,8 +212,10 @@ equivalent Windows open flag, so Windows relies on canonical containment and
 post-open regular-file validation. Lower layers may only tighten command/log
 policy. Their redaction rules use a linear-safe grammar—concatenated literals,
 classes, safe escapes, edge anchors, and exact repetitions with a total expanded
-match width capped at 64—and are added
+match width capped at 64 across the complete custom rule set—and are added
 to mandatory user and built-in rules at every final remote inference hop.
+User rules consume this budget first; an excess project/tool addition fails
+configuration deterministically instead of weakening or replacing user rules.
 
 - Restart your client after installing or changing provider settings.
 - Run `check_local_llm_health` to verify the selected LLM provider (local, gateway, or direct OpenRouter).

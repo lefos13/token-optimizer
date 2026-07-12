@@ -174,7 +174,7 @@ export function resolveEffectiveConfig(input: ConfigLayers = {}): EffectiveConfi
       maxDiskMb: Math.min(500, ...candidates.map((value) => value?.maxDiskMb ?? Infinity)),
       storageMode: candidates.some((value) => value?.storageMode === 'redacted-local') ? 'redacted-local' as const : 'raw-local' as const,
     }; })(),
-    redaction: (() => { const rules = [...(layers.user?.redaction?.rules || []), ...(layers.project?.redaction?.rules || []), ...(layers.tool?.redaction?.rules || [])]; if (rules.length > 20) throw new Error('Effective redaction configuration has too many rules (maximum 20)'); return { rules }; })(),
+    redaction: (() => { const rules = [...(layers.user?.redaction?.rules || []), ...(layers.project?.redaction?.rules || []), ...(layers.tool?.redaction?.rules || [])]; if (rules.length > 20) throw new Error('Effective redaction configuration has too many rules (maximum 20)'); redactText('', { customRules: rules }); return { rules }; })(),
     warnings,
   };
 }
