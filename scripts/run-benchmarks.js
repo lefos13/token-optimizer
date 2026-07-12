@@ -44,14 +44,16 @@ function directMeasure(spec) {
   return new Promise((resolve, reject) => {
     const started = process.hrtime.bigint();
     const encoded = Buffer.from(JSON.stringify({ command: spec.command, args: spec.args })).toString('base64url');
-    const child = spawn(process.execPath, [__filename, '--baseline-worker', encoded], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [__filename, '--baseline-worker', encoded], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     const state = { peakKb: 0, bytes: 0, available: false };
     const collect = chunk => { state.bytes += chunk.length; };
-    child.stdout.on('data', collect); child.stderr.on('data', collect); child.on('error', reject);
+    const terminate = () => { try { process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGKILL'); } catch {} };
+    const deadline = setTimeout(terminate, spec.measurementTimeoutMs || 240000);
+    child.stdout.on('data', collect); child.stderr.on('data', collect); child.on('error', error => { clearTimeout(deadline); terminate(); reject(error); });
     sampleTree(child.pid, state);
     const timer = setInterval(() => sampleTree(child.pid, state), 2);
     child.on('close', code => {
-      sampleTree(child.pid, state); clearInterval(timer);
+      sampleTree(child.pid, state); clearInterval(timer); clearTimeout(deadline);
       setImmediate(() => resolve({ exitCode: code ?? -1, rawBytes: state.bytes, peakRssMb: state.available ? state.peakKb / 1024 : null, durationMs: Number(process.hrtime.bigint() - started) / 1e6 }));
     });
   });
@@ -151,6 +153,11 @@ async function selfTest() {
 function git(args) { const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' }); if (result.status !== 0) throw new Error(result.stderr); return result.stdout.trim(); }
 async function main() {
   if (process.argv.includes('--check-clean-fixture')) { const error = new Error('fixture'); error.code = 'BENCHMARK_SOURCE_DIRTY'; throw error; }
+  if (process.argv.includes('--cleanup-self-test')) {
+    const started = Date.now(); const result = await directMeasure({ command: 'node', args: ['-e', 'setInterval(()=>{},1000)'], measurementTimeoutMs: 50 });
+    if (result.exitCode !== -1 || Date.now() - started > 5000) throw new Error('BENCHMARK_CLEANUP_FAILED');
+    process.stdout.write('{"cleanup":"passed"}\n'); return;
+  }
   if (process.argv[2] === '--baseline-worker') {
     const spec = JSON.parse(Buffer.from(process.argv[3], 'base64url').toString());
     const command = [spec.command, ...spec.args].map(part => JSON.stringify(part)).join(' ');
@@ -169,10 +176,12 @@ async function main() {
   }
   const rustBin = path.join(os.tmpdir(), `token-optimizer-benchmark-rust-${process.pid}`); const rust = spawnSync('rustc', ['benchmarks/fixtures/rust/noisy.rs', '-o', rustBin], { cwd: root });
   for (const fail of [false, true]) specs.push({ name: `rust-${fail ? 'failure' : 'success'}`, ecosystem: 'rust', check: rust.status === 0 ? rustBin : 'rust-unavailable', command: rustBin, args: fail ? ['--fail'] : [] });
-  const workloads = []; for (const spec of specs) workloads.push(await runSpec(spec));
-  const large = await runRepeated({ name: 'binary-long-line-56mb', ecosystem: 'npm', check: 'node', command: 'node', args: ['benchmarks/fixtures/npm/large.js'] }, 3); workloads.push(large);
-  if (large.rssStatus !== 'measured' || large.rawBytes !== 56 * 1024 * 1024 + 3 || large.productOverheadRssMb >= 100) throw new Error('large workload release gate failed');
-  fs.rmSync(rustBin, { force: true });
+  let workloads; let large;
+  try {
+    workloads = []; for (const spec of specs) workloads.push(await runSpec(spec));
+    large = await runRepeated({ name: 'binary-long-line-56mb', ecosystem: 'npm', check: 'node', command: 'node', args: ['benchmarks/fixtures/npm/large.js'] }, 3); workloads.push(large);
+    if (large.rssStatus !== 'measured' || large.rawBytes !== 56 * 1024 * 1024 + 3 || large.productOverheadRssMb >= 100) throw new Error('large workload release gate failed');
+  } finally { fs.rmSync(rustBin, { force: true }); }
   const report = { schemaVersion: 2, release: '2.0.0-rc.1', benchmarkSourceCommit: git(['rev-parse', 'HEAD']), benchmarkSourceTree: git(['rev-parse', 'HEAD^{tree}']), benchmarkInputHash: benchmarkInputHash(), timestamp: new Date().toISOString(), platform: `${process.platform}-${process.arch}`,
     methodology: { executionsPerMeasurement: 1, baseline: 'dedicated Node measurement worker plus shell and workload descendants', product: 'compiled MCP server over SDK stdio plus deterministic local OpenAI-compatible HTTP mock', executionConfig: 'fresh temporary user config permits unrestricted execution only for controlled fixture commands and is deleted after each measurement', rss: 'peak aggregate RSS of root process and descendants sampled via ps every 2ms', limitations: process.platform === 'win32' ? ['RSS unavailable on Windows'] : ['Very short-lived processes between samples may be missed; RSS is platform-reported and not cross-platform comparable.'] }, workloads };
   const output = path.join(root, 'benchmarks/results/v2.0.0-rc.1.json'); fs.mkdirSync(path.dirname(output), { recursive: true }); fs.writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`); console.log(JSON.stringify({ output: safe(output), workloads: workloads.length }));

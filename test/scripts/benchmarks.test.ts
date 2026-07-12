@@ -37,3 +37,9 @@ test('benchmark refuses a dirty source tree with a stable code', () => {
   assert.equal(result.status, 2);
   assert.equal(JSON.parse(result.stderr).code, 'BENCHMARK_SOURCE_DIRTY');
 });
+
+test('benchmark timeout tears down its detached process group', () => {
+  const result = spawnSync(process.execPath, ['scripts/run-benchmarks.js', '--cleanup-self-test'], { cwd: root, encoding: 'utf8', timeout: 10_000 });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(JSON.parse(result.stdout).cleanup, 'passed');
+});
