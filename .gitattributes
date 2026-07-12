@@ -1,3 +1,9 @@
 # Linux deploy assets must use LF (CRLF breaks shebangs on droplets).
 *.sh text eol=lf
 *.service text eol=lf
+
+# Legal files are hashed and compared against a fixed SHA-256 in
+# test/scripts/package-hygiene.test.ts; a Windows checkout with
+# core.autocrlf=true would otherwise convert them to CRLF and change the hash.
+LICENSE text eol=lf
+NOTICE text eol=lf
