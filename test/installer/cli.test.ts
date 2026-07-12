@@ -137,3 +137,19 @@ test('spawned CLI completes install, doctor, repair, uninstall, and repeated uni
     assert.equal(JSON.parse(repeated.stdout).status, 'already-uninstalled', `${client}: ${repeated.stdout} ${repeated.stderr}`);
   }
 });
+
+test('uninstall --json without --dry-run actually applies, not just previews', () => {
+  const repository = path.resolve(process.cwd(), '..'); const bin = path.join(repository, 'packages/installer/bin/token-optimizer.js');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-cli-json-apply-'));
+  const base = { cwd: repository, encoding: 'utf8', env: { ...process.env, HOME: home, TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK: '1' } };
+  const install = spawnSync(process.execPath, [bin, 'install', '--provider', 'local', '--clients', 'claude', '--home', home, '--skip-client-commands', '--skip-launchctl'], base);
+  assert.equal(install.status, 0, `install: ${install.stderr}`);
+  const manifestPath = path.join(home, '.token-optimizer', 'manifest.json');
+  assert.ok(fs.existsSync(manifestPath), 'manifest should exist after install');
+  const uninstall = spawnSync(process.execPath, [bin, 'uninstall', '--home', home, '--skip-launchctl', '--json'], base);
+  assert.equal(uninstall.status, 0, `uninstall --json: ${uninstall.stderr}`);
+  const report = JSON.parse(uninstall.stdout);
+  assert.equal(report.action, 'uninstall');
+  assert.ok(report.operations.length > 0);
+  assert.equal(fs.existsSync(manifestPath), false, 'uninstall --json must actually remove the manifest, not just print a plan');
+});

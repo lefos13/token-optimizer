@@ -78,12 +78,12 @@ async function main() {
     const assetsRoot = require("path").resolve(__dirname, "..", "assets");
     const managedRoots = [require("path").join(home || process.env.HOME, ".token-optimizer"), require("path").join(home || process.env.HOME, ".config", "opencode"), require("path").join(home || process.env.HOME, ".cursor"), require("path").join(home || process.env.HOME, ".gemini"), require("path").join(home || process.env.HOME, ".claude"), require("path").join(home || process.env.HOME, ".codex")];
     const plan = command === "repair" ? planRepair(report, manifest, { assetsRoot, managedRoots, manifestPath: manifestPath(home) }) : planUninstall(manifest, currentStateFromManifest(manifest), { manifestPath: manifestPath(home) });
-    if (args["dry-run"] === true || args.json === true) {
+    if (args["dry-run"] === true) {
       console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
       return;
     }
     applyLifecyclePlan(plan, { requireExternalAdapters: true, registrationAdapter: createRegistrationAdapter({ marketplaceAdapter: createFilesystemMarketplaceAdapter(home || process.env.HOME) }), serviceAdapter: createServiceAdapter({ services: manifest.platformServices || [], skipLaunchctl: args["skip-launchctl"] === true }), manifest, home, planWarnings: plan.warnings || [] });
-    console.log(`${command}: applied ${plan.operations.length} operation(s).`);
+    console.log(args.json === true ? formatChangePlan(plan, "json") : `${command}: applied ${plan.operations.length} operation(s).`);
     return;
   }
 

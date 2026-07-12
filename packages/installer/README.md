@@ -146,9 +146,12 @@ npx @softawarest/token-optimizer-installer defaults --clients claude,codex,openc
 
 ## Inspect, repair, and remove safely
 
-Preview every mutation with `--dry-run` (or `--json` for automation), including
-managed paths, client commands, credential-store operations, and GUI-session
-environment changes. The ownership manifest at `~/.token-optimizer/manifest.json`
+Preview every mutation with `--dry-run`, including managed paths, client
+commands, credential-store operations, and GUI-session environment changes.
+Add `--json` for machine-readable output — it only changes the output format
+and never substitutes for `--dry-run`: `repair --json` and `uninstall --json`
+without `--dry-run` execute the real operation and print its JSON result. The
+ownership manifest at `~/.token-optimizer/manifest.json`
 stores paths, hashes, and references only—never raw API keys. It records only
 packaged, source-repairable files; dependency caches, `.data`, logs, analytics,
 and baselines are excluded. Repair consumes stable doctor paths and operation
