@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { appendRun } from './registry';
 import { evaluateCommand } from './command-policy';
@@ -40,6 +41,22 @@ export interface ExecutedSuiteResult {
   warnings: string[];
 }
 type AuditFailureStage = NonNullable<ExecutedSuiteResult['auditFailure']>['stage'];
+
+const SIGNAL_NAME_BY_NUMBER: Record<number, NodeJS.Signals> = Object.fromEntries(
+  Object.entries(os.constants.signals).map(([name, num]) => [num as number, name as NodeJS.Signals]),
+);
+
+/* We spawn with shell:true, so a self- or externally-signaled grandchild is only visible through
+ * the wrapping shell's own exit. On Linux (dash/POSIX sh) the shell reports that as its own normal
+ * exit with code 128+signum and signal:null, never surfacing the signal on the 'close' event
+ * (unlike macOS's default shell, which does propagate signal:null differently but still loses it
+ * without this fallback). Deriving the signal from the 128+n exit-code convention is the standard
+ * POSIX way shells report a child killed by a signal. */
+function deriveSignalFromExit(code: number | null, signal: NodeJS.Signals | null): NodeJS.Signals | null {
+  if (signal) return signal;
+  if (code !== null && code > 128) return SIGNAL_NAME_BY_NUMBER[code - 128] ?? null;
+  return null;
+}
 
 /**
  * Runs a single shell command inside the workspacePath, capturing all stdout and stderr.
@@ -122,7 +139,8 @@ export function runCommand(command: string, workspacePath: string, timeoutMs: nu
     child.once('error', (error) => finish({ command, exitCode: -1, stdout: '', stderr: error.message, durationMs: Date.now() - startTime, error: error.message, autoDetected, signal: null, policyReasonCode: 'SPAWN_FAILED', executionStatus: 'spawn_failed' }));
     child.once('close', (code, signal) => {
       if (timingOut) return;
-      finish({ command, exitCode: code ?? (signal ? -1 : 1), stdout: '', stderr: '', durationMs: Date.now() - startTime, error: signal ? `Process terminated by ${signal}` : undefined, autoDetected, signal, executionStatus: signal ? 'terminated' : 'completed' });
+      const effectiveSignal = deriveSignalFromExit(code, signal);
+      finish({ command, exitCode: effectiveSignal ? -1 : (code ?? 1), stdout: '', stderr: '', durationMs: Date.now() - startTime, error: effectiveSignal ? `Process terminated by ${effectiveSignal}` : undefined, autoDetected, signal: effectiveSignal, executionStatus: effectiveSignal ? 'terminated' : 'completed' });
     });
 
     // Handle timeout

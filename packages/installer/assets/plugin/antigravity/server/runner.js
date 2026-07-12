@@ -43,6 +43,7 @@ exports.getGitDiff = getGitDiff;
 exports.gatherCandidates = gatherCandidates;
 const child_process_1 = require("child_process");
 const fs = __importStar(require("fs"));
+const os = __importStar(require("os"));
 const path = __importStar(require("path"));
 const registry_1 = require("./registry");
 const command_policy_1 = require("./command-policy");
@@ -50,6 +51,20 @@ const process_tree_1 = require("./process-tree");
 const log_store_1 = require("./log-store");
 const redaction_1 = require("./redaction");
 const log_excerpt_1 = require("./log-excerpt");
+const SIGNAL_NAME_BY_NUMBER = Object.fromEntries(Object.entries(os.constants.signals).map(([name, num]) => [num, name]));
+/* We spawn with shell:true, so a self- or externally-signaled grandchild is only visible through
+ * the wrapping shell's own exit. On Linux (dash/POSIX sh) the shell reports that as its own normal
+ * exit with code 128+signum and signal:null, never surfacing the signal on the 'close' event
+ * (unlike macOS's default shell, which does propagate signal:null differently but still loses it
+ * without this fallback). Deriving the signal from the 128+n exit-code convention is the standard
+ * POSIX way shells report a child killed by a signal. */
+function deriveSignalFromExit(code, signal) {
+    if (signal)
+        return signal;
+    if (code !== null && code > 128)
+        return SIGNAL_NAME_BY_NUMBER[code - 128] ?? null;
+    return null;
+}
 /**
  * Runs a single shell command inside the workspacePath, capturing all stdout and stderr.
  */
@@ -163,7 +178,8 @@ function runCommand(command, workspacePath, timeoutMs = 300000, execution, logFi
         child.once('close', (code, signal) => {
             if (timingOut)
                 return;
-            finish({ command, exitCode: code ?? (signal ? -1 : 1), stdout: '', stderr: '', durationMs: Date.now() - startTime, error: signal ? `Process terminated by ${signal}` : undefined, autoDetected, signal, executionStatus: signal ? 'terminated' : 'completed' });
+            const effectiveSignal = deriveSignalFromExit(code, signal);
+            finish({ command, exitCode: effectiveSignal ? -1 : (code ?? 1), stdout: '', stderr: '', durationMs: Date.now() - startTime, error: effectiveSignal ? `Process terminated by ${effectiveSignal}` : undefined, autoDetected, signal: effectiveSignal, executionStatus: effectiveSignal ? 'terminated' : 'completed' });
         });
         // Handle timeout
         timeout = setTimeout(async () => {
