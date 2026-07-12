@@ -71,6 +71,16 @@ test('win32 scanning denies POSIX-only escapes and single-quote grouping that cm
     assert.equal(win32.allowed, false, `expected win32 to deny: ${command}`);
     assert.equal(win32.allowed === false ? win32.reasonCode : undefined, 'SHELL_METACHARACTER');
   }
+  /* Regression: disabling single-quote grouping on win32 (above) must not also disable
+   * "unmatched quote" detection. A stray single quote never leaves `quote` open on win32
+   * (grouping is disabled), so unmatchedQuote must be tracked by parity instead, or an odd
+   * number of single quotes silently passes through as allowed. */
+  for (const command of [`printf 'unterminated`, `printf 'a' 'b`]) {
+    const win32 = await evaluateCommand({ command, workspacePath: root, profile: 'unrestricted', platform: 'win32' });
+    assert.equal(win32.allowed, false, `expected win32 to deny an odd count of single quotes: ${command}`);
+  }
+  const balanced = await evaluateCommand({ command: `printf '%3B'`, workspacePath: root, profile: 'unrestricted', platform: 'win32' });
+  assert.equal(balanced.allowed, true, 'a balanced (even-count) single-quote pair with no metacharacters must still be allowed on win32');
   fs.rmSync(root, { recursive: true, force: true });
 });
 

@@ -54,6 +54,11 @@ function matchesPrefix(command, prefixes = []) {
 function scanShellSyntax(command, platform = process.platform) {
     const posix = platform !== 'win32';
     let quote;
+    /* On win32, a single quote never groups content (cmd.exe reality) and is scanned through as
+     * an ordinary character -- but that must not also disable "unmatched quote" detection, since
+     * `quote` then never gets left open regardless of how many stray single quotes appear. Track
+     * parity independently so an odd count still fails closed, without granting POSIX grouping. */
+    let win32SingleQuoteCount = 0;
     for (let index = 0; index < command.length; index += 1) {
         const char = command[index];
         if (quote === 'single') {
@@ -74,8 +79,12 @@ function scanShellSyntax(command, platform = process.platform) {
             index += 1;
             continue;
         }
-        if (posix && char === "'") {
-            quote = 'single';
+        if (char === "'") {
+            if (posix) {
+                quote = 'single';
+                continue;
+            }
+            win32SingleQuoteCount += 1;
             continue;
         }
         if (char === '"') {
@@ -87,7 +96,7 @@ function scanShellSyntax(command, platform = process.platform) {
         if (/[;|&`<>\r\n]/.test(char))
             return { composition: true, unmatchedQuote: false };
     }
-    return { composition: false, unmatchedQuote: quote !== undefined };
+    return { composition: false, unmatchedQuote: quote !== undefined || (!posix && win32SingleQuoteCount % 2 === 1) };
 }
 async function canonicalPath(candidate) {
     let current = node_path_1.default.resolve(candidate);
