@@ -142,7 +142,7 @@ function runCommand(command, workspacePath, timeoutMs = 300000, execution, logFi
         child.once('close', (code, signal) => {
             if (timingOut)
                 return;
-            finish({ command, exitCode: code ?? (signal ? -1 : 1), stdout: '', stderr: '', durationMs: Date.now() - startTime, error: signal ? `Process terminated by ${signal}` : undefined, autoDetected, signal, executionStatus: 'completed' });
+            finish({ command, exitCode: code ?? (signal ? -1 : 1), stdout: '', stderr: '', durationMs: Date.now() - startTime, error: signal ? `Process terminated by ${signal}` : undefined, autoDetected, signal, executionStatus: signal ? 'terminated' : 'completed' });
         });
         // Handle timeout
         timeout = setTimeout(async () => {
@@ -228,12 +228,15 @@ function formatCommandLog(res) {
     block += `\n--- EXIT CODE: ${res.exitCode} (Duration: ${res.durationMs}ms) ---\n\n`;
     return block;
 }
-async function appendFileStream(destination, sourcePath) {
+async function appendFileStream(write, sourcePath) {
     await new Promise((resolve, reject) => {
         const source = fs.createReadStream(sourcePath);
         source.on('error', reject);
-        source.on('end', () => resolve());
-        source.pipe(destination, { end: false });
+        source.on('data', (chunk) => {
+            source.pause();
+            write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)).then(() => source.resume(), reject);
+        });
+        source.on('end', resolve);
     });
 }
 /**
@@ -242,7 +245,7 @@ async function appendFileStream(destination, sourcePath) {
  * emitted in command order regardless of execution mode.
  */
 async function runSuite(commands, workspacePath, options = {}) {
-    const { maxOutputLines, timeoutMs, parallel, execution, storageMode = 'raw-local', retentionDays, maxDiskMb } = options;
+    const { maxOutputLines, timeoutMs, parallel, execution, storageMode = 'raw-local', retentionDays, maxDiskMb, logFs } = options;
     const logDir = await (0, log_store_1.ensureSafeRoot)(workspacePath);
     // Ensure log directory exists
     if (!fs.existsSync(logDir)) {
@@ -270,23 +273,42 @@ async function runSuite(commands, workspacePath, options = {}) {
         fs.rmSync(tempDir, { recursive: true, force: true });
         throw error;
     }
-    await (0, log_store_1.ensureLogGitignore)(workspacePath);
-    const managedLog = await (0, log_store_1.createRunLog)(workspacePath, { runId: logFileName.replace(/\.log$/, ''), storageMode });
+    const warnings = [];
+    await (0, log_store_1.ensureLogGitignore)(workspacePath).catch((error) => warnings.push(`log gitignore update failed: ${error instanceof Error ? error.message : String(error)}`));
+    let managedLog;
+    let auditStatus = 'persisted';
+    let auditFailure;
+    let auditStage = 'create';
     try {
+        managedLog = await (0, log_store_1.createRunLog)(workspacePath, { runId: logFileName.replace(/\.log$/, ''), storageMode, fs: logFs });
+        auditStage = 'write';
         for (let i = 0; i < results.length; i++) {
             const header = `========================================================\nCOMMAND: ${results[i].command}\n========================================================\n\n`;
             await managedLog.write(header);
             const commandOutputPath = path.join(tempDir, `${i}.out`);
             if (fs.existsSync(commandOutputPath))
-                await managedLog.write(await fs.promises.readFile(commandOutputPath));
+                await appendFileStream((chunk) => managedLog.write(chunk), commandOutputPath);
             await managedLog.write(`\n--- EXIT CODE: ${results[i].exitCode} (Duration: ${results[i].durationMs}ms) ---\n\n`);
         }
+        auditStage = 'fsync_or_rename';
         await managedLog.close();
     }
     catch (error) {
-        await managedLog.close().catch(() => undefined);
-        fs.rmSync(tempDir, { recursive: true, force: true });
-        throw error;
+        auditStatus = 'failed';
+        const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : undefined;
+        let evidenceExists = Boolean(managedLog?.temporaryPath && fs.existsSync(managedLog.temporaryPath));
+        let tempCleanup = evidenceExists ? 'retained' : 'none';
+        if (auditStage === 'write' && managedLog) {
+            await managedLog.abort();
+            evidenceExists = fs.existsSync(managedLog.temporaryPath);
+            tempCleanup = evidenceExists ? 'retained' : 'removed';
+        }
+        auditFailure = {
+            stage: auditStage,
+            ...(code ? { code } : {}), message: error instanceof Error ? error.message : String(error),
+            ...(evidenceExists ? { evidencePath: path.relative(workspacePath, managedLog.temporaryPath) } : {}),
+            tempCleanup,
+        };
     }
     const rawSourceBytes = results.reduce((sum, result) => sum + (result.rawSourceBytes || 0), 0);
     /* Keep the model-facing excerpt bounded by construction; the complete source remains only on disk. */
@@ -324,18 +346,21 @@ async function runSuite(commands, workspacePath, options = {}) {
             lineCount: trimmedLogContent.split('\n').length
         });
     }
-    catch {
-        /* ignore registry write failures */
+    catch (error) {
+        warnings.push(`run registry update failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     const result = {
         results,
-        rawLogPath: relativeLogPath,
+        rawLogPath: auditStatus === 'persisted' ? relativeLogPath : (auditFailure?.evidencePath || ''),
         trimmedLogContent,
         rawSourceBytes,
-        rawSourceTokens: Math.ceil(rawSourceBytes / 4)
+        rawSourceTokens: Math.ceil(rawSourceBytes / 4),
+        auditStatus,
+        ...(auditFailure ? { auditFailure } : {}),
+        warnings
     };
     fs.rmSync(tempDir, { recursive: true, force: true });
-    await (0, log_store_1.pruneLogs)(workspacePath, { storageMode, retentionDays, maxDiskMb });
+    await (0, log_store_1.pruneLogs)(workspacePath, { storageMode, retentionDays, maxDiskMb }).catch((error) => warnings.push(`log pruning failed: ${error instanceof Error ? error.message : String(error)}`));
     return result;
 }
 /* Prefix every line with its 1-based line number so a model (query_log) can cite exact line ranges back to the caller. */

@@ -10,7 +10,22 @@ export const DEFAULT_LOG_POLICY: LogPolicy = { retentionDays: 7, maxDiskMb: 500,
 export interface LogPolicy { retentionDays?: number; maxDiskMb?: number; storageMode?: 'raw-local' | 'redacted-local' }
 export interface RemovedLog { path: string; bytes: number; reason: 'expired' | 'quota' | 'purged' }
 export interface LogLifecycleResult { removed: RemovedLog[]; freedBytes: number; warnings: string[]; quota: { bytes: number; maxBytes: number; overQuota: boolean } }
-export interface RunLog { absolutePath: string; relativePath: string; write(chunk: string | Buffer): Promise<void>; close(): Promise<void> }
+export interface RunLog { absolutePath: string; temporaryPath: string; relativePath: string; write(chunk: string | Buffer): Promise<void>; close(): Promise<void>; abort(): Promise<void> }
+export interface RunLogFs {
+  createWriteStream: typeof fs.createWriteStream;
+  rename(from: string, to: string): Promise<void>;
+  unlink(file: string): Promise<void>;
+  fsync(fd: number): Promise<void>;
+  close(fd: number): Promise<void>;
+}
+
+const defaultRunLogFs: RunLogFs = {
+  createWriteStream: fs.createWriteStream,
+  rename: fs.promises.rename,
+  unlink: fs.promises.unlink,
+  fsync: (fd) => new Promise<void>((resolve, reject) => fs.fsync(fd, (error) => error ? reject(error) : resolve())),
+  close: (fd) => new Promise<void>((resolve, reject) => fs.close(fd, (error) => error ? reject(error) : resolve())),
+};
 
 function canonicalDir(workspacePath: string): string { return path.resolve(workspacePath, LOG_DIR); }
 export async function ensureSafeRoot(workspacePath: string): Promise<string> {
@@ -42,20 +57,45 @@ export async function ensureLogGitignore(workspacePath: string): Promise<void> {
   if (!lines.includes(`${LOG_DIR}/`)) lines.push(`${LOG_DIR}/`);
   await fs.promises.writeFile(file, `${lines.join('\n')}\n`);
 }
-export async function createRunLog(workspacePath: string, options: { storageMode?: 'raw-local' | 'redacted-local'; runId?: string } = {}): Promise<RunLog> {
+export async function createRunLog(workspacePath: string, options: { storageMode?: 'raw-local' | 'redacted-local'; runId?: string; fs?: Partial<RunLogFs> } = {}): Promise<RunLog> {
   const dir = await ensureSafeRoot(workspacePath);
   const id = options.runId || `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`;
   const absolutePath = path.join(dir, `${id}.log`);
-  const stream = fs.createWriteStream(absolutePath, { flags: 'w', mode: 0o600 });
+  const temporaryPath = path.join(dir, `.${id}.${process.pid}.${Date.now()}.audit.tmp`);
+  const io = { ...defaultRunLogFs, ...options.fs };
+  const stream = io.createWriteStream(temporaryPath, { flags: 'wx', mode: 0o600, autoClose: false });
   const mode = options.storageMode || DEFAULT_LOG_POLICY.storageMode; let carry = '';
   const write = (chunk: string | Buffer) => new Promise<void>((resolve, reject) => {
     let value: string | Buffer = chunk;
     if (mode === 'redacted-local') { const text = carry + (Buffer.isBuffer(chunk) ? chunk.toString() : chunk); const cut = Math.max(0, text.length - 128); value = redactText(text.slice(0, cut)).text; carry = text.slice(cut); }
-    if (!stream.write(value)) stream.once('drain', resolve); else resolve();
-    stream.once('error', reject);
+    stream.write(value, (error) => error ? reject(error) : resolve());
   });
-  const close = () => new Promise<void>((resolve, reject) => { stream.once('error', reject); if (mode === 'redacted-local' && carry) { stream.write(redactText(carry).text); carry = ''; } stream.end(resolve); });
-  return { absolutePath, relativePath: path.relative(workspacePath, absolutePath), write, close };
+  /* Finalization fsyncs the complete temporary evidence before the atomic rename. A
+   * failed rename deliberately retains that temp file so the caller can report it. */
+  let closePromise: Promise<void> | undefined;
+  const close = () => closePromise ||= new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => reject(error);
+    stream.once('error', onError);
+    if (mode === 'redacted-local' && carry) { stream.write(redactText(carry).text); carry = ''; }
+    stream.once('finish', async () => {
+      try {
+        const fd = (stream as fs.WriteStream & { fd?: number }).fd;
+        if (typeof fd !== 'number') throw new Error('audit log file descriptor unavailable');
+        await io.fsync(fd);
+        await io.close(fd);
+        await io.rename(temporaryPath, absolutePath);
+        stream.removeListener('error', onError);
+        resolve();
+      } catch (error) {
+        const fd = (stream as fs.WriteStream & { fd?: number }).fd;
+        if (typeof fd === 'number') await io.close(fd).catch(() => undefined);
+        reject(error);
+      }
+    });
+    stream.end();
+  });
+  const abort = async () => { if (!stream.destroyed) stream.destroy(); await io.unlink(temporaryPath).catch(() => undefined); };
+  return { absolutePath, temporaryPath, relativePath: path.relative(workspacePath, absolutePath), write, close, abort };
 }
 interface Entry { file: string; bytes: number; mtimeMs: number }
 async function entries(workspacePath: string): Promise<Entry[]> {

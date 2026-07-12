@@ -50,7 +50,7 @@ const execution_metadata_1 = require("./execution-metadata");
 const log_store_1 = require("./log-store");
 const server = new index_js_1.Server({
     name: 'token-optimizer-mcp',
-    version: '2.0.0-beta.6',
+    version: '2.0.0-beta.7',
 }, {
     capabilities: {
         tools: {},
@@ -451,7 +451,7 @@ async function handleToolCall(request) {
                 needsRawLogs: triage.needsRawLogs,
                 likelyRelevantToRecentChanges: triage.likelyRelevantToRecentChanges,
                 ...(0, llm_1.getLLMMetadata)(triage),
-                ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, effective.warnings),
+                ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, [...effective.warnings, ...suiteResult.warnings], suiteResult),
                 providerStatus: triage.llmAvailable === false ? 'unavailable' : (triage.fallbackReason ? 'fallback' : 'available')
             };
             if (triageResult) {
@@ -718,7 +718,7 @@ async function handleToolCall(request) {
                 comparison,
                 currentRun: currentRunData,
                 rawLogPath: suiteResult.rawLogPath,
-                ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, effective.warnings),
+                ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, [...effective.warnings, ...suiteResult.warnings], suiteResult),
                 providerStatus: 'unknown'
             };
             const text = jsonText(output);
@@ -787,7 +787,7 @@ async function handleToolCall(request) {
                 rawLogPath: suiteResult.rawLogPath,
                 needsRawLogs: digest.needsRawLogs,
                 ...(0, llm_1.getLLMMetadata)(digest),
-                ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, effective.warnings),
+                ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, [...effective.warnings, ...suiteResult.warnings], suiteResult),
                 providerStatus: digest.llmAvailable === false ? 'unavailable' : (digest.fallbackReason ? 'fallback' : 'available')
             };
             const text = jsonText(output);

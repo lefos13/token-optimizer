@@ -34,7 +34,9 @@ export interface VerdictResult extends LLMResponseMetadata {
   needsRawLogs?: boolean;
   likelyRelevantToRecentChanges?: boolean;
   triage?: LogQueryResponse;
-  executionStatus?: 'completed' | 'timed_out' | 'blocked' | 'spawn_failed';
+  executionStatus?: 'completed' | 'timed_out' | 'terminated' | 'blocked' | 'spawn_failed';
+  auditStatus?: 'persisted' | 'failed';
+  auditFailure?: { stage: string; code?: string; message: string; evidencePath?: string; tempCleanup: 'removed' | 'retained' | 'none' };
   signal?: string | null;
   policyDecision?: string;
   logTruncated?: boolean;

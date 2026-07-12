@@ -5,7 +5,7 @@ process.env.TOKEN_OPTIMIZER_NO_AUTOSTART = '1';
 import { handleToolCall } from '../../src/index';
 
 test('command response compatibility preserves legacy fields and additive metadata', () => {
-  for (const [status, reason] of [['completed', undefined], ['blocked', 'COMMAND_NOT_ALLOWED'], ['timed_out', undefined], ['spawn_failed', 'SPAWN_FAILED']] as const) {
+  for (const [status, reason] of [['completed', undefined], ['terminated', undefined], ['blocked', 'COMMAND_NOT_ALLOWED'], ['timed_out', undefined], ['spawn_failed', 'SPAWN_FAILED']] as const) {
     const legacy = { verdict: status === 'completed' ? 'pass' : 'fail', exitCode: status === 'completed' ? 0 : -1, rawLogPath: '.codex-local-test-runs/run.log', failures: [] };
     const additive = buildExecutionMetadata([{ executionStatus: status, policyReasonCode: reason, autoDetected: status === 'completed' }], 'short', 100, ['config warning']);
     assert.equal(typeof legacy.verdict, 'string');
@@ -18,6 +18,13 @@ test('command response compatibility preserves legacy fields and additive metada
     assert.equal(typeof additive.autoDetected, 'boolean');
     assert.deepEqual(additive.warnings, ['config warning']);
   }
+});
+
+test('signal termination is distinct from timeout and retains the signal', async () => {
+  const result = await import('../../src/runner').then(({ runCommand }) => runCommand(`node -e "process.kill(process.pid, 'SIGTERM')"`, process.cwd(), 5000));
+  assert.equal(result.executionStatus, 'terminated');
+  assert.equal(result.signal, 'SIGTERM');
+  assert.equal(result.exitCode, -1);
 });
 
 test('MCP CallTool handler returns blocked compatibility shape', async () => {

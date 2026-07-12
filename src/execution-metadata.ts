@@ -1,4 +1,4 @@
-export type ExecutionStatus = 'completed' | 'timed_out' | 'blocked' | 'spawn_failed';
+export type ExecutionStatus = 'completed' | 'timed_out' | 'terminated' | 'blocked' | 'spawn_failed';
 
 export interface ExecutionMetadataInput {
   executionStatus?: string;
@@ -8,9 +8,9 @@ export interface ExecutionMetadataInput {
 }
 
 /* Shared response shaping seam keeps machine-readable execution fields testable without starting the stdio transport. */
-export function buildExecutionMetadata(results: ExecutionMetadataInput[], trimmed: string, rawBytes: number, warnings: string[] = []) {
-  const executionStatus: ExecutionStatus = results.some(r => r.executionStatus === 'blocked') ? 'blocked' : results.some(r => r.executionStatus === 'timed_out') ? 'timed_out' : results.some(r => r.executionStatus === 'spawn_failed') ? 'spawn_failed' : 'completed';
+export function buildExecutionMetadata(results: ExecutionMetadataInput[], trimmed: string, rawBytes: number, warnings: string[] = [], audit?: { auditStatus: 'persisted' | 'failed'; auditFailure?: unknown }) {
+  const executionStatus: ExecutionStatus = results.some(r => r.executionStatus === 'blocked') ? 'blocked' : results.some(r => r.executionStatus === 'timed_out') ? 'timed_out' : results.some(r => r.executionStatus === 'spawn_failed') ? 'spawn_failed' : results.some(r => r.executionStatus === 'terminated') ? 'terminated' : 'completed';
   const policyDecision = results.find(r => r.policyReasonCode)?.policyReasonCode;
   const signal = results.find(r => r.signal)?.signal || null;
-  return { executionStatus, signal, ...(policyDecision ? { policyDecision } : {}), autoDetected: results.some(r => r.autoDetected === true), logTruncated: rawBytes > Buffer.byteLength(trimmed), warnings };
+  return { executionStatus, signal, ...(policyDecision ? { policyDecision } : {}), autoDetected: results.some(r => r.autoDetected === true), logTruncated: rawBytes > Buffer.byteLength(trimmed), warnings, ...(audit || {}) };
 }

@@ -8,7 +8,7 @@ Execution profiles are `safe`, `standard`, and `unrestricted`; tool/project requ
 
 # Token Optimizer
 
-Execution metadata uses `signal: null` when no OS signal was observed; a value appears only for signal-terminated processes.
+Execution metadata uses `signal: null` when no OS signal was observed; a value appears only for signal-terminated processes. `executionStatus: terminated` distinguishes those exits from `timed_out`. Command outcomes remain authoritative when audit-log persistence fails: inspect additive `auditStatus` and `auditFailure`, including any retained temporary evidence path.
 
 ## Overview
 

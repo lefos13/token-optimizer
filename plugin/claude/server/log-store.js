@@ -50,6 +50,13 @@ const redaction_1 = require("./redaction");
  * operate only on ordinary run logs so registry and analytics metadata survive pruning. */
 exports.LOG_DIR = '.codex-local-test-runs';
 exports.DEFAULT_LOG_POLICY = { retentionDays: 7, maxDiskMb: 500, storageMode: 'raw-local' };
+const defaultRunLogFs = {
+    createWriteStream: fs.createWriteStream,
+    rename: fs.promises.rename,
+    unlink: fs.promises.unlink,
+    fsync: (fd) => new Promise((resolve, reject) => fs.fsync(fd, (error) => error ? reject(error) : resolve())),
+    close: (fd) => new Promise((resolve, reject) => fs.close(fd, (error) => error ? reject(error) : resolve())),
+};
 function canonicalDir(workspacePath) { return path.resolve(workspacePath, exports.LOG_DIR); }
 async function ensureSafeRoot(workspacePath) {
     const root = canonicalDir(workspacePath);
@@ -103,7 +110,9 @@ async function createRunLog(workspacePath, options = {}) {
     const dir = await ensureSafeRoot(workspacePath);
     const id = options.runId || `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`;
     const absolutePath = path.join(dir, `${id}.log`);
-    const stream = fs.createWriteStream(absolutePath, { flags: 'w', mode: 0o600 });
+    const temporaryPath = path.join(dir, `.${id}.${process.pid}.${Date.now()}.audit.tmp`);
+    const io = { ...defaultRunLogFs, ...options.fs };
+    const stream = io.createWriteStream(temporaryPath, { flags: 'wx', mode: 0o600, autoClose: false });
     const mode = options.storageMode || exports.DEFAULT_LOG_POLICY.storageMode;
     let carry = '';
     const write = (chunk) => new Promise((resolve, reject) => {
@@ -114,17 +123,41 @@ async function createRunLog(workspacePath, options = {}) {
             value = (0, redaction_1.redactText)(text.slice(0, cut)).text;
             carry = text.slice(cut);
         }
-        if (!stream.write(value))
-            stream.once('drain', resolve);
-        else
-            resolve();
-        stream.once('error', reject);
+        stream.write(value, (error) => error ? reject(error) : resolve());
     });
-    const close = () => new Promise((resolve, reject) => { stream.once('error', reject); if (mode === 'redacted-local' && carry) {
-        stream.write((0, redaction_1.redactText)(carry).text);
-        carry = '';
-    } stream.end(resolve); });
-    return { absolutePath, relativePath: path.relative(workspacePath, absolutePath), write, close };
+    /* Finalization fsyncs the complete temporary evidence before the atomic rename. A
+     * failed rename deliberately retains that temp file so the caller can report it. */
+    let closePromise;
+    const close = () => closePromise ||= new Promise((resolve, reject) => {
+        const onError = (error) => reject(error);
+        stream.once('error', onError);
+        if (mode === 'redacted-local' && carry) {
+            stream.write((0, redaction_1.redactText)(carry).text);
+            carry = '';
+        }
+        stream.once('finish', async () => {
+            try {
+                const fd = stream.fd;
+                if (typeof fd !== 'number')
+                    throw new Error('audit log file descriptor unavailable');
+                await io.fsync(fd);
+                await io.close(fd);
+                await io.rename(temporaryPath, absolutePath);
+                stream.removeListener('error', onError);
+                resolve();
+            }
+            catch (error) {
+                const fd = stream.fd;
+                if (typeof fd === 'number')
+                    await io.close(fd).catch(() => undefined);
+                reject(error);
+            }
+        });
+        stream.end();
+    });
+    const abort = async () => { if (!stream.destroyed)
+        stream.destroy(); await io.unlink(temporaryPath).catch(() => undefined); };
+    return { absolutePath, temporaryPath, relativePath: path.relative(workspacePath, absolutePath), write, close, abort };
 }
 async function entries(workspacePath) {
     const dir = await ensureSafeRoot(workspacePath);

@@ -19,7 +19,7 @@ import { ensureSafeRoot, atomicWriteJson } from './log-store';
 const server = new Server(
   {
     name: 'token-optimizer-mcp',
-    version: '2.0.0-beta.6',
+    version: '2.0.0-beta.7',
   },
   {
     capabilities: {
@@ -467,7 +467,7 @@ export async function handleToolCall(request: any) {
         needsRawLogs: triage.needsRawLogs,
         likelyRelevantToRecentChanges: triage.likelyRelevantToRecentChanges,
         ...getLLMMetadata(triage),
-        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, effective.warnings),
+        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, [...effective.warnings, ...suiteResult.warnings], suiteResult),
         providerStatus: triage.llmAvailable === false ? 'unavailable' : (triage.fallbackReason ? 'fallback' : 'available')
       };
 
@@ -744,7 +744,7 @@ export async function handleToolCall(request: any) {
         comparison,
         currentRun: currentRunData,
         rawLogPath: suiteResult.rawLogPath,
-        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, effective.warnings),
+        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, [...effective.warnings, ...suiteResult.warnings], suiteResult),
         providerStatus: 'unknown'
       };
       const text = jsonText(output);
@@ -824,7 +824,7 @@ export async function handleToolCall(request: any) {
         rawLogPath: suiteResult.rawLogPath,
         needsRawLogs: digest.needsRawLogs,
         ...getLLMMetadata(digest),
-        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, effective.warnings),
+        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, [...effective.warnings, ...suiteResult.warnings], suiteResult),
         providerStatus: digest.llmAvailable === false ? 'unavailable' : (digest.fallbackReason ? 'fallback' : 'available')
       };
       const text = jsonText(output);
