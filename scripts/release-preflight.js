@@ -54,7 +54,11 @@ function runPreflight(root, injected = {}) {
   let distTag;
   try { distTag = policy.distTagForVersion(rootPackage.version); } catch (error) { fail(error.message, rootPackage.version); }
   if (argv.includes("--dist-tag")) return { ok: true, code: "DIST_TAG_DERIVED", version: rootPackage.version, distTag };
-  const tag = env.RELEASE_TAG || env.GITHUB_REF_NAME;
+  /* GITHUB_REF_NAME is set on every workflow run (branch pushes and PRs included), not just tag
+   * pushes, so it must only be trusted as a release tag when GITHUB_REF_TYPE says the triggering
+   * ref actually is a tag -- otherwise an ordinary branch push (e.g. "main") gets validated as if
+   * it were a release tag and rejected by tag-format policy instead of taking the no-tag path. */
+  const tag = env.RELEASE_TAG || (env.GITHUB_REF_TYPE === "tag" ? env.GITHUB_REF_NAME : undefined);
   const tagPolicy = policy.validateReleaseTag(rootPackage.version, tag, argv.includes("--allow-no-tag") || argv.includes("--sbom-only"));
   if (tagPolicy.code) fail(tagPolicy.code, { tag, version: rootPackage.version });
 

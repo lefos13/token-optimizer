@@ -166,11 +166,13 @@ test('version drift from an injected filesystem reports VERSION_MISMATCH', () =>
 });
 
 test('CLI emits one machine-readable stderr object and exits exactly one on policy failure', () => {
-  /* CI runners set GITHUB_REF_NAME to the branch name; release-preflight.js falls back to it
-   * when RELEASE_TAG is unset, so it must be scrubbed for this "no tag" case to be deterministic. */
+  /* CI runners set GITHUB_REF_NAME/GITHUB_REF_TYPE from the branch; release-preflight.js only
+   * trusts GITHUB_REF_NAME as a tag when GITHUB_REF_TYPE is "tag", but scrub all three so this
+   * "no tag" case stays deterministic regardless of how that guard is implemented. */
   const env: Record<string, string | undefined> = { ...process.env, RELEASE_TAG: '' };
   delete env.GITHUB_REF_NAME;
   delete env.GITHUB_REF;
+  delete env.GITHUB_REF_TYPE;
   const result = spawnSync(process.execPath, ['scripts/release-preflight.js'], { cwd: root, encoding: 'utf8', env });
   assert.equal(result.status, 1);
   assert.equal(result.stdout, '');
