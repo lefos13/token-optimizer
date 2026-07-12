@@ -151,7 +151,11 @@ test('every git command failure is authoritative and machine-coded', () => {
 
 test('publish workflow runs the complete release suite before preflight and publish', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/publish-npm.yml'), 'utf8');
-  const commands = ['npm run build', 'npm run build:gateway', 'npm run test:security', 'npm test', 'npm run verify:generated', 'npm pack . --dry-run --json', 'npm pack ./packages/installer --dry-run --json', 'npm run release:preflight', 'npm publish'];
+  /* verify:generated (via build:installer -> build:plugin) is what regenerates the gitignored
+   * plugin/antigravity, plugin/opencode, and plugin/cursor bundles -- it must run before npm test,
+   * not after, or plugin-generators.test.ts fails on a fresh checkout that has never run it. This
+   * exact ordering bug shipped and broke the real v2.0.0-rc.6 release trigger. */
+  const commands = ['npm run build', 'npm run build:gateway', 'npm run test:security', 'npm run verify:generated', 'npm test', 'npm pack . --dry-run --json', 'npm pack ./packages/installer --dry-run --json', 'npm run release:preflight', 'npm publish'];
   let previous = -1;
   for (const command of commands) { const current = workflow.indexOf(command); assert.ok(current > previous, `${command} must follow the prior release gate`); previous = current; }
 });
