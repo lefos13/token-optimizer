@@ -29,9 +29,21 @@ test('profiles narrow authority and all profiles reject shell composition', asyn
   assert.equal((await evaluateCommand({ ...base, command: 'npm run lint', profile: 'safe' })).allowed, false);
   assert.equal((await evaluateCommand({ ...base, command: 'npm run lint', profile: 'standard' })).allowed, true);
   assert.equal((await evaluateCommand({ ...base, command: 'node fixture.js', profile: 'unrestricted' })).allowed, true);
-  for (const command of ['npm test; cat .env', 'npm test && printenv', 'npm test || env', 'npm test `env`', 'npm test $(env)', 'npm test%3Bcat%20.env']) {
+  for (const command of ['npm test; cat .env', 'npm test && printenv', 'npm test || env', 'npm test | env', 'npm test\nenv', 'npm test\renv', 'npm test `env`', 'npm test $(env)', 'npm test%3Bcat%20.env']) {
     assert.equal((await evaluateCommand({ ...base, command, profile: 'unrestricted' })).allowed, false, command);
   }
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('pipe and line-break composition cannot create a marker before spawn', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'to-security-compose-'));
+  for (const suffix of ['| tee marker', '\nprintf owned > marker', '\rprintf owned > marker']) {
+    const result = await runCommand(`printf fixture ${suffix}`, root, 1000, { profile: 'unrestricted', allowedCommandPrefixes: [] });
+    assert.equal(result.executionStatus, 'blocked', JSON.stringify(suffix));
+    assert.equal(fs.existsSync(path.join(root, 'marker')), false, JSON.stringify(suffix));
+  }
+  const quoted = await runCommand(`node -e "process.stdout.write('a|b')"`, root, 1000, { profile: 'unrestricted', allowedCommandPrefixes: [] });
+  assert.equal(quoted.exitCode, 0);
   fs.rmSync(root, { recursive: true, force: true });
 });
 

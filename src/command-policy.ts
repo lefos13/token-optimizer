@@ -129,7 +129,7 @@ export async function evaluateCommand(input: PolicyInput): Promise<PolicyDecisio
   if (nestedShellPattern.test(inspected)) return deny(input.profile, 'NESTED_SHELL', 'Nested shell execution is not permitted.');
   if (destructivePattern.test(inspected) || hasDestructiveRm(inspected)) return deny(input.profile, 'DESTRUCTIVE_PATTERN', 'Destructive command pattern is not permitted.');
   if (networkPattern.test(inspected) || /(?:^|\s)(?:>|>>).*https?:\/\//i.test(inspected)) return deny(input.profile, 'NETWORK_EXFILTRATION', 'Network access or exfiltration is not permitted.');
-  if (/(?:;|&&|\|\||`|\$\()/.test(unquotedShellSyntax(inspected))) return deny(input.profile, 'SHELL_METACHARACTER', 'Command chaining and substitution are not permitted.');
+  if (/(?:;|&&|\||`|\$\(|\r|\n)/.test(unquotedShellSyntax(inspected))) return deny(input.profile, 'SHELL_METACHARACTER', 'Command chaining and substitution are not permitted.');
   if (input.profile === 'unrestricted') return { allowed: true, profile: input.profile, reasonCode: 'PROFILE_UNRESTRICTED' };
   if (matchesPrefix(command, input.allowedCommandPrefixes)) return { allowed: true, profile: input.profile, reasonCode: 'ALLOWLIST_MATCH' };
   if (input.profile === 'standard' && matchesPrefix(command, input.autoDetectedCommands)) return { allowed: true, profile: input.profile, reasonCode: 'AUTO_DETECTED' };

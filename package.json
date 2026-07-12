@@ -15,7 +15,7 @@
     "build:gateway": "tsc -p tsconfig.gateway.json",
     "start:gateway": "node gateway/dist/index.js",
     "test": "tsc -p tsconfig.test.json && node scripts/run-tests.js",
-    "test:security": "tsc -p tsconfig.test.json && node scripts/run-tests.js test/security/command-boundary.test.js test/security/inference-boundary.test.js test/security/installer-boundary.test.js",
+    "test:security": "tsc -p tsconfig.test.json && node scripts/run-tests.js test/security/command-boundary.test.js test/security/inference-boundary.test.js test/security/installer-boundary.test.js test/security/gateway-boundary.test.js test/installer/credential-store.test.js test/installer/repair.test.js test/installer/uninstall.test.js test/scripts/package-hygiene.test.js test/scripts/release-versions.test.js",
     "build:plugin": "npm run build:plugin:antigravity && npm run build:plugin:claude && npm run build:plugin:codex && npm run build:plugin:opencode && npm run build:plugin:cursor",
     "build:plugin:antigravity": "node scripts/generate-plugin-antigravity.js",
     "build:plugin:claude": "node scripts/generate-plugin-claude.js",

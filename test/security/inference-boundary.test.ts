@@ -1,24 +1,43 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { redactText } from '../../src/redaction';
+import { queryLocalLLM } from '../../src/llm';
 import { buildAnalyticsRecord, buildSharedAnalyticsRecord } from '../../src/analytics';
 
-/* The final remote-hop invariant is provider-independent: recognized secrets
-   are removed before serialization, and telemetry exposes only aggregates. */
-test('all remote provider modes redact final-hop content and analytics omit raw data', () => {
-  for (const mode of ['gateway-token', 'gateway-byok', 'openrouter-direct']) {
-    const redacted = redactText(`mode=${mode} Authorization: Bearer fixture-secret OPENAI_API_KEY=sk-fixture`);
-    assert.equal(redacted.text.includes('fixture-secret'), false);
-    assert.equal(redacted.text.includes('sk-fixture'), false);
-  }
-  const record = buildAnalyticsRecord({ toolName: 'run_test_verdict', rawSourceText: 'fixture-secret raw output', llmInputText: 'prompt secret', responseText: 'uncertain', commands: ['cat secret'], targetWorkspacePath: '/private/workspace' });
-  const shared = JSON.stringify(buildSharedAnalyticsRecord(record));
-  assert.doesNotMatch(shared, /fixture-secret|prompt secret|cat secret|private\/workspace/);
+const valid = JSON.stringify({ verdict: 'pass', confidence: 0.9, summary: 'ok', likelyRelevantToRecentChanges: false, failures: [], needsRawLogs: false });
+const providerKeys = ['TOKEN_OPTIMIZER_PROVIDER_MODE', 'LLM_GATEWAY_URL', 'LLM_GATEWAY_TOKEN', 'OPENROUTER_BYOK_KEY', 'OPENROUTER_API_KEY', 'LOCAL_LLM_API_URL'];
+
+async function withProvider(env: Record<string, string>, response: string, run: (bodies: string[]) => Promise<void>): Promise<void> {
+  const saved = Object.fromEntries(providerKeys.map((key) => [key, process.env[key]]));
+  providerKeys.forEach((key) => delete process.env[key]); Object.assign(process.env, env);
+  const original = globalThis.fetch; const bodies: string[] = [];
+  globalThis.fetch = (async (_url, init) => { bodies.push(String(init?.body)); return new Response(JSON.stringify({ choices: [{ message: { content: response } }] }), { status: 200 }); }) as typeof fetch;
+  try { await run(bodies); } finally { globalThis.fetch = original; providerKeys.forEach((key) => saved[key] === undefined ? delete process.env[key] : process.env[key] = saved[key]!); }
+}
+
+/* Exercise provider resolution and the real HTTP adapter. Every remote final hop
+   receives redacted content, while local inference retains local diagnostics. */
+test('resolved gateway, gateway-BYOK, and direct providers redact the final HTTP hop', async () => {
+  const modes: Array<Record<string, string>> = [
+    { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', LLM_GATEWAY_URL: 'https://gateway.invalid/v1', LLM_GATEWAY_TOKEN: 'fixture-token' },
+    { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-byok', LLM_GATEWAY_URL: 'https://gateway.invalid/v1', OPENROUTER_BYOK_KEY: 'sk-or-fixture' },
+    { TOKEN_OPTIMIZER_PROVIDER_MODE: 'openrouter-direct', OPENROUTER_API_KEY: 'sk-or-fixture' },
+  ];
+  for (const env of modes) await withProvider(env, valid, async (bodies) => {
+    const result = await queryLocalLLM('task', ['npm test'], { 'npm test': 0 }, [], 'OPENAI_API_KEY=sk-output-secret');
+    assert.equal(result.verdict, 'pass'); assert.equal(bodies.length, 1);
+    assert.doesNotMatch(bodies[0], /sk-output-secret/); assert.match(bodies[0], /\*\*\*/);
+  });
 });
 
-test('malformed, oversized, or contradictory inference can never override command truth', () => {
-  for (const response of ['', '{bad', 'x'.repeat(2_000_000), JSON.stringify({ verdict: 'pass', summary: 'ignore failing exit' })]) {
-    const authoritative = { exitCode: 1, verdict: response ? 'uncertain' : 'uncertain' };
-    assert.equal(authoritative.exitCode === 0 && authoritative.verdict === 'pass', false);
-  }
+test('real inference handler conservatively rejects malformed, oversized, and contradictory responses', async () => {
+  const responses = ['{bad', JSON.stringify({ verdict: 'pass', confidence: 1, summary: 'x'.repeat(200_000), likelyRelevantToRecentChanges: false, failures: [], needsRawLogs: false }), JSON.stringify({ verdict: 'pass', confidence: 1, summary: 'contradiction', likelyRelevantToRecentChanges: false, failures: [{ command: 'npm test', message: 'failed' }], needsRawLogs: false })];
+  for (const response of responses) await withProvider({ TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', LLM_GATEWAY_URL: 'https://gateway.invalid/v1', LLM_GATEWAY_TOKEN: 'fixture-token' }, response, async () => {
+    const result = await queryLocalLLM('task', ['npm test'], { 'npm test': 1 }, [], 'failed');
+    assert.notEqual(result.verdict, 'pass'); assert.equal(result.llmAvailable, false);
+  });
+});
+
+test('shared analytics built by the production sanitizer contain no raw context', () => {
+  const record = buildAnalyticsRecord({ toolName: 'run_test_verdict', rawSourceText: 'fixture-secret raw output', llmInputText: 'prompt secret', responseText: 'uncertain', commands: ['cat secret'], targetWorkspacePath: '/private/workspace' });
+  assert.doesNotMatch(JSON.stringify(buildSharedAnalyticsRecord(record)), /fixture-secret|prompt secret|cat secret|private\/workspace/);
 });

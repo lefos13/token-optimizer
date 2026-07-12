@@ -127,7 +127,7 @@ async function evaluateCommand(input) {
         return deny(input.profile, 'DESTRUCTIVE_PATTERN', 'Destructive command pattern is not permitted.');
     if (networkPattern.test(inspected) || /(?:^|\s)(?:>|>>).*https?:\/\//i.test(inspected))
         return deny(input.profile, 'NETWORK_EXFILTRATION', 'Network access or exfiltration is not permitted.');
-    if (/(?:;|&&|\|\||`|\$\()/.test(unquotedShellSyntax(inspected)))
+    if (/(?:;|&&|\||`|\$\(|\r|\n)/.test(unquotedShellSyntax(inspected)))
         return deny(input.profile, 'SHELL_METACHARACTER', 'Command chaining and substitution are not permitted.');
     if (input.profile === 'unrestricted')
         return { allowed: true, profile: input.profile, reasonCode: 'PROFILE_UNRESTRICTED' };
