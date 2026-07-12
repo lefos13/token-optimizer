@@ -59,12 +59,13 @@ function directMeasure(spec) {
   });
 }
 
-function startMock(secret) {
+function startMock(secret, hang = false) {
   const observed = { calls: 0, redactionCount: 0 };
   const server = http.createServer((request, response) => {
     let body = '';
     request.setEncoding('utf8'); request.on('data', chunk => { body += chunk; });
     request.on('end', () => {
+      if (hang) return;
       const payload = JSON.parse(body);
       if (!Array.isArray(payload.messages)) { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ ok: true })); return; }
       const prompt = payload.messages.map(item => item.content).join('\n');
@@ -82,18 +83,19 @@ function startMock(secret) {
  * one tool call. This prevents a hidden second execution from supplying metrics. */
 async function productMeasure(spec) {
   const secret = `bench_${process.pid}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  const mock = await startMock(secret);
+  const mock = await startMock(secret, spec.mockHang);
   const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'token-optimizer-benchmark-'));
   fs.writeFileSync(path.join(configHome, 'config.json'), JSON.stringify({ execution: { profile: 'unrestricted' } }));
   const transport = new StdioClientTransport({ command: 'node', args: ['dist/index.js'], cwd: root, stderr: 'pipe', env: {
     PATH: process.env.PATH || '', HOME: process.env.HOME || '', TOKEN_OPTIMIZER_CONFIG_HOME: configHome, LLM_GATEWAY_URL: mock.url, LLM_GATEWAY_TOKEN: 'benchmark-token', LOCAL_LLM_MODEL: 'unused-local'
   }});
   const client = new Client({ name: 'release-benchmark', version: '1.0.0' });
-  const state = { peakKb: 0, available: false }; const started = process.hrtime.bigint(); let timer;
+  const state = { peakKb: 0, available: false }; const started = process.hrtime.bigint(); let timer; let callDeadline;
   try {
     await client.connect(transport); sampleTree(transport.pid, state); timer = setInterval(() => sampleTree(transport.pid, state), 2);
     const command = [spec.command, ...spec.args].map(part => JSON.stringify(part)).join(' ');
-    const result = await client.callTool({ name: 'run_command_digest', arguments: { workspacePath: root, command, intent: `Inspect TOKEN=${secret}`, executionProfile: 'unrestricted', timeoutMs: 180000 } });
+    const toolCall = client.callTool({ name: 'run_command_digest', arguments: { workspacePath: root, command, intent: `Inspect TOKEN=${secret}`, executionProfile: 'unrestricted', timeoutMs: spec.productTimeoutMs || 180000 } });
+    const result = await Promise.race([toolCall, new Promise((_, reject) => { callDeadline = setTimeout(() => reject(Object.assign(new Error('product tool call timed out'), { code: 'BENCHMARK_PRODUCT_TIMEOUT' })), spec.productTimeoutMs || 185000); })]);
     sampleTree(transport.pid, state);
     const output = JSON.parse(result.content[0].text);
     if (mock.observed.calls !== 1) throw new Error(`mock received ${mock.observed.calls} calls`);
@@ -101,7 +103,7 @@ async function productMeasure(spec) {
     return { exitCode: output.exitCode, rawBytes: output.rawSourceBytes, returnedBytes: serializedBytes, peakRssMb: state.available ? state.peakKb / 1024 : null,
       durationMs: Number(process.hrtime.bigint() - started) / 1e6, provider: { model: output.llmModel, latencyMs: output.llmLatencyMs }, redaction: output.redactionSummary };
   } finally {
-    if (timer) clearInterval(timer); await client.close().catch(() => {}); await new Promise(resolve => mock.server.close(resolve)); fs.rmSync(configHome, { recursive: true, force: true });
+    if (timer) clearInterval(timer); if (callDeadline) clearTimeout(callDeadline); await client.close().catch(() => {}); await transport.close().catch(() => {}); await new Promise(resolve => mock.server.close(resolve)); fs.rmSync(configHome, { recursive: true, force: true });
   }
 }
 
@@ -122,41 +124,51 @@ async function runSpec(spec) {
 }
 
 function median(values) { const sorted = [...values].sort((a, b) => a - b); return sorted[Math.floor(sorted.length / 2)]; }
+function stats(values) { return { median: median(values), min: Math.min(...values), max: Math.max(...values), range: Math.max(...values) - Math.min(...values) }; }
 async function runRepeated(spec, repetitions) {
   const samples = [];
   for (let i = 0; i < repetitions; i += 1) samples.push(await runSpec(spec));
   const first = samples[0];
   if (samples.some(sample => sample.exitCode !== first.exitCode || sample.rawBytes !== first.rawBytes)) throw new Error(`BENCHMARK_SAMPLE_INCONSISTENT:${spec.name}`);
-  if (samples.some(sample => sample.rssStatus !== 'measured')) return { ...first, repetitions, samples, rssStatus: 'unavailable', productOverheadRssMb: null, rss: { medianMb: null, minMb: null, maxMb: null, uncertaintyMb: null } };
-  const values = samples.map(sample => sample.productOverheadRssMb);
-  const med = median(values); return { ...first, repetitions, samples, productOverheadRssMb: med, rss: { medianMb: med, minMb: Math.min(...values), maxMb: Math.max(...values), uncertaintyMb: Math.max(...values) - Math.min(...values) } };
+  const invariant = { workload: first.workload, ecosystem: first.ecosystem, command: first.command, outcome: first.outcome, exitCode: first.exitCode, rawBytes: first.rawBytes, rawTokens: first.rawTokens, repetitions, samples };
+  const duration = stats(samples.map(sample => sample.durationMs)); const baselineDuration = stats(samples.map(sample => sample.baselineDurationMs)); const providerLatency = stats(samples.map(sample => sample.provider.latencyMs));
+  if (samples.some(sample => sample.rssStatus !== 'measured')) return { ...invariant, rssStatus: 'unavailable', aggregates: { durationMs: duration, baselineDurationMs: baselineDuration, providerLatencyMs: providerLatency, baselineRssMb: null, productRssMb: null, overheadRssMb: null } };
+  return { ...invariant, rssStatus: 'measured', aggregates: { durationMs: duration, baselineDurationMs: baselineDuration, providerLatencyMs: providerLatency, baselineRssMb: stats(samples.map(sample => sample.baselinePeakRssMb)), productRssMb: stats(samples.map(sample => sample.productPeakRssMb)), overheadRssMb: stats(samples.map(sample => sample.productOverheadRssMb)) } };
 }
 
-const inputFiles = ['dist/index.js', 'dist/runner.js', 'dist/log-excerpt.js', 'dist/redaction.js', 'dist/config.js', 'scripts/run-benchmarks.js', 'package.json', 'package-lock.json'];
+function recursiveFiles(directory, prefix = directory) { return fs.readdirSync(path.join(root, directory), { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? recursiveFiles(`${directory}/${entry.name}`, prefix) : [`${directory}/${entry.name}`]); }
 function benchmarkInputHash() {
-  const files = [...inputFiles, ...fs.readdirSync(path.join(root, 'benchmarks/fixtures')).flatMap(dir => fs.readdirSync(path.join(root, 'benchmarks/fixtures', dir)).map(file => `benchmarks/fixtures/${dir}/${file}`))].sort();
+  const files = [...recursiveFiles('dist'), 'scripts/run-benchmarks.js', ...recursiveFiles('benchmarks/fixtures'), 'package.json', 'package-lock.json'].sort();
   const hash = crypto.createHash('sha256'); for (const file of files) hash.update(`${file}\0`).update(fs.readFileSync(path.join(root, file))).update('\0'); return hash.digest('hex');
 }
 function assertCleanSource() {
   const status = git(['status', '--porcelain', '--untracked-files=all']).split(/\r?\n/).filter(Boolean).filter(line => !line.slice(3).startsWith('benchmarks/results/'));
   if (status.length) { const error = new Error('benchmark source tree is dirty'); error.code = 'BENCHMARK_SOURCE_DIRTY'; throw error; }
 }
+function provenance() { return { benchmarkSourceCommit: git(['rev-parse', 'HEAD']), benchmarkSourceTree: git(['rev-parse', 'HEAD^{tree}']), benchmarkInputHash: benchmarkInputHash(), packageLockHash: crypto.createHash('sha256').update(fs.readFileSync(path.join(root, 'package-lock.json'))).digest('hex'), dependencies: require('../package-lock.json').packages[''].dependencies }; }
+function verifyProvenance(before, skipClean = false) { if (!skipClean) assertCleanSource(); const after = provenance(); if (JSON.stringify(after) !== JSON.stringify(before)) { const error = new Error('benchmark source changed during measurement'); error.code = 'BENCHMARK_SOURCE_CHANGED'; throw error; } }
 
 async function selfTest() {
   const failureSpec = { name: 'failure', ecosystem: 'npm', check: 'node', command: 'node', args: ['benchmarks/fixtures/npm/noisy.js', '--fail'] };
   const largeSpec = { name: 'binary-long-line', ecosystem: 'npm', check: 'node', command: 'node', args: ['benchmarks/fixtures/npm/large.js'] };
   const failure = await runSpec(failureSpec); const large = await runRepeated(largeSpec, 3); large.expectedBytes = 56 * 1024 * 1024 + 3;
-  if (large.rssStatus !== 'measured' || large.rawBytes !== large.expectedBytes || large.productOverheadRssMb >= 100) throw new Error(`large workload contract failed: ${JSON.stringify(large)}`);
-  return { schemaVersion: 2, selfTest: 'passed', benchmarkInputHash: benchmarkInputHash(), failure, large, redaction: large.redaction, provider: large.provider };
+  if (large.rssStatus !== 'measured' || large.rawBytes !== large.expectedBytes || large.aggregates.overheadRssMb.median >= 100) throw new Error(`large workload contract failed: ${JSON.stringify(large)}`);
+  return { schemaVersion: 2, selfTest: 'passed', benchmarkInputHash: benchmarkInputHash(), failure, large };
 }
 
 function git(args) { const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' }); if (result.status !== 0) throw new Error(result.stderr); return result.stdout.trim(); }
 async function main() {
   if (process.argv.includes('--check-clean-fixture')) { const error = new Error('fixture'); error.code = 'BENCHMARK_SOURCE_DIRTY'; throw error; }
+  if (process.argv.includes('--source-change-self-test')) { const before = provenance(); before.benchmarkInputHash = '0'.repeat(64); verifyProvenance(before, true); }
   if (process.argv.includes('--cleanup-self-test')) {
     const started = Date.now(); const result = await directMeasure({ command: 'node', args: ['-e', 'setInterval(()=>{},1000)'], measurementTimeoutMs: 50 });
     if (result.exitCode !== -1 || Date.now() - started > 5000) throw new Error('BENCHMARK_CLEANUP_FAILED');
     process.stdout.write('{"cleanup":"passed"}\n'); return;
+  }
+  if (process.argv.includes('--product-cleanup-self-test')) {
+    try { await productMeasure({ command: 'node', args: ['-e', 'console.log(1)'], productTimeoutMs: 50, mockHang: true }); }
+    catch (error) { if (error.code === 'BENCHMARK_PRODUCT_TIMEOUT') { process.stdout.write('{"cleanup":"passed"}\n'); return; } throw error; }
+    throw new Error('BENCHMARK_PRODUCT_TIMEOUT_EXPECTED');
   }
   if (process.argv[2] === '--baseline-worker') {
     const spec = JSON.parse(Buffer.from(process.argv[3], 'base64url').toString());
@@ -168,6 +180,7 @@ async function main() {
   }
   if (process.argv.includes('--self-test')) { process.stdout.write(`${JSON.stringify(await selfTest())}\n`); return; }
   assertCleanSource();
+  const before = provenance();
   const specs = [];
   for (const fail of [false, true]) {
     specs.push({ name: `npm-${fail ? 'failure' : 'success'}`, ecosystem: 'npm', check: 'node', command: 'node', args: ['benchmarks/fixtures/npm/noisy.js', ...(fail ? ['--fail'] : [])] });
@@ -180,9 +193,10 @@ async function main() {
   try {
     workloads = []; for (const spec of specs) workloads.push(await runSpec(spec));
     large = await runRepeated({ name: 'binary-long-line-56mb', ecosystem: 'npm', check: 'node', command: 'node', args: ['benchmarks/fixtures/npm/large.js'] }, 3); workloads.push(large);
-    if (large.rssStatus !== 'measured' || large.rawBytes !== 56 * 1024 * 1024 + 3 || large.productOverheadRssMb >= 100) throw new Error('large workload release gate failed');
+    if (large.rssStatus !== 'measured' || large.rawBytes !== 56 * 1024 * 1024 + 3 || large.aggregates.overheadRssMb.median >= 100) throw new Error('large workload release gate failed');
   } finally { fs.rmSync(rustBin, { force: true }); }
-  const report = { schemaVersion: 2, release: '2.0.0-rc.1', benchmarkSourceCommit: git(['rev-parse', 'HEAD']), benchmarkSourceTree: git(['rev-parse', 'HEAD^{tree}']), benchmarkInputHash: benchmarkInputHash(), timestamp: new Date().toISOString(), platform: `${process.platform}-${process.arch}`,
+  verifyProvenance(before);
+  const report = { schemaVersion: 2, release: '2.0.0-rc.1', ...before, timestamp: new Date().toISOString(), platform: `${process.platform}-${process.arch}`,
     methodology: { executionsPerMeasurement: 1, baseline: 'dedicated Node measurement worker plus shell and workload descendants', product: 'compiled MCP server over SDK stdio plus deterministic local OpenAI-compatible HTTP mock', executionConfig: 'fresh temporary user config permits unrestricted execution only for controlled fixture commands and is deleted after each measurement', rss: 'peak aggregate RSS of root process and descendants sampled via ps every 2ms', limitations: process.platform === 'win32' ? ['RSS unavailable on Windows'] : ['Very short-lived processes between samples may be missed; RSS is platform-reported and not cross-platform comparable.'] }, workloads };
   const output = path.join(root, 'benchmarks/results/v2.0.0-rc.1.json'); fs.mkdirSync(path.dirname(output), { recursive: true }); fs.writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`); console.log(JSON.stringify({ output: safe(output), workloads: workloads.length }));
 }
