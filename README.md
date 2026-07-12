@@ -211,7 +211,8 @@ are open-once and limited to 64 KiB. POSIX uses `O_NOFOLLOW`; Node exposes no
 equivalent Windows open flag, so Windows relies on canonical containment and
 post-open regular-file validation. Lower layers may only tighten command/log
 policy. Their redaction rules use a linear-safe grammar—concatenated literals,
-classes, safe escapes, edge anchors, and small exact repetitions—and are added
+classes, safe escapes, edge anchors, and exact repetitions with a total expanded
+match width capped at 64—and are added
 to mandatory user and built-in rules at every final remote inference hop.
 
 - Restart your client after installing or changing provider settings.

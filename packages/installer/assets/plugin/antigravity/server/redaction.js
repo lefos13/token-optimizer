@@ -5,6 +5,7 @@ const MAX_CUSTOM_RULES = 20;
 const MAX_PATTERN_LENGTH = 500;
 const MAX_REPLACEMENT_LENGTH = 256;
 const MAX_REDACTION_INPUT_LENGTH = 1024 * 1024;
+const MAX_EXPANDED_PATTERN_WIDTH = 64;
 const SAFE_FLAGS = /^[dgimsuv]*$/;
 /* User patterns intentionally support only concatenated literals, classes,
  * safe character escapes, edge anchors, and small exact repetitions. This
@@ -12,6 +13,7 @@ const SAFE_FLAGS = /^[dgimsuv]*$/;
  * time linear in the bounded input size. */
 function assertLinearPattern(source) {
     let index = 0;
+    let expandedWidth = 0;
     while (index < source.length) {
         const char = source[index];
         if ((char === '^' && index === 0) || (char === '$' && index === source.length - 1)) {
@@ -46,12 +48,17 @@ function assertLinearPattern(source) {
                 throw new TypeError('unsafe redaction rule pattern');
             index += 1;
         }
+        let repetitions = 1;
         if (source[index] === '{') {
             const exact = source.slice(index).match(/^\{(\d{1,3})\}/);
             if (!exact || Number(exact[1]) > 100)
                 throw new TypeError('unsafe redaction rule pattern');
+            repetitions = Number(exact[1]);
             index += exact[0].length;
         }
+        expandedWidth += repetitions;
+        if (expandedWidth > MAX_EXPANDED_PATTERN_WIDTH)
+            throw new TypeError('unsafe redaction rule pattern exceeds expanded-width limit');
     }
 }
 /* These rules target credential-shaped values while retaining labels, routes, and

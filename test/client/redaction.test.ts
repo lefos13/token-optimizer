@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
 import { redactText } from '../../src/redaction';
 
 test('redacts credentials while preserving actionable context', () => {
@@ -71,4 +73,14 @@ test('rejects ambiguous or stateful regex constructs and bounds input', () => {
     assert.throws(() => redactText('secret', { customRules: [{ pattern, category: 'unsafe' }] }), /unsafe/i, pattern);
   }
   assert.throws(() => redactText('x'.repeat(1_048_577)), /input is too large/i);
+});
+
+test('rejects aggregate expanded-width amplification within a subprocess budget', () => {
+  const modulePath = path.resolve(__dirname, '../../src/redaction.js');
+  const source = '[a]{100}'.repeat(60) + 'b';
+  const script = `const { redactText } = require(${JSON.stringify(modulePath)}); try { redactText('a'.repeat(1048000), { customRules: [{ pattern: ${JSON.stringify(source)}, category: 'amplification' }] }); process.exit(2); } catch (error) { if (!/expanded-width|unsafe/.test(String(error))) process.exit(3); }`;
+  const started = Date.now();
+  const result = spawnSync(process.execPath, ['-e', script], { timeout: 1000, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr || `signal=${result.signal}`);
+  assert.ok(Date.now() - started < 1000, 'adversarial validation exceeded subprocess budget');
 });
