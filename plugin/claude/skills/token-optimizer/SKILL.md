@@ -270,3 +270,5 @@ the installer never persists a supplied secret into its own environment.
 - Avoid `run_regression_check` when writing or replacing `.codex-local-test-runs/baseline.json` would be undesirable.
 - If an MCP tool returns placeholder text, no analysis, or anything clearly non-authoritative, fall back to reading the smallest useful raw-log slice or running normal local commands.
 - If the MCP tool is unavailable, fall back to local commands and summarize output manually, then tell the user the MCP validation path was unavailable.
+
+Large binary output and single long lines are retained through bounded streaming excerpts. Maintainers validate this production path with the deterministic release benchmark documented in `benchmarks/README.md`.

@@ -1,6 +1,6 @@
 {
   "name": "token-optimizer-mcp",
-  "version": "2.0.0-beta.11",
+  "version": "2.0.0-rc.1",
   "description": "An MCP server for running workspace tests and triaging failures using Token Optimizer.",
   "main": "dist/index.js",
   "files": [
@@ -31,6 +31,7 @@
     ,"verify:generated": "node scripts/verify-generated-assets.js"
     ,"sbom": "node scripts/release-preflight.js --sbom-only"
     ,"release:preflight": "node scripts/release-preflight.js"
+    ,"benchmark": "npm run build && node scripts/run-benchmarks.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.1",

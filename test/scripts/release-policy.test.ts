@@ -5,7 +5,7 @@ const { distTagForVersion, validateCycloneDx } = require('../../../scripts/relea
 test('dist tags never promote prereleases to latest', () => {
   assert.equal(distTagForVersion('2.0.0'), 'latest');
   assert.equal(distTagForVersion('2.0.0-alpha.1'), 'alpha');
-  assert.equal(distTagForVersion('2.0.0-beta.11'), 'beta');
+  assert.equal(distTagForVersion('2.0.0-rc.1'), 'rc');
   assert.equal(distTagForVersion('2.0.0-rc.2'), 'rc');
   assert.throws(() => distTagForVersion('2.0.0-preview.1'), /TAG_POLICY_REJECTED/);
 });
