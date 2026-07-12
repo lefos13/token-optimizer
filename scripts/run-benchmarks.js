@@ -145,7 +145,7 @@ function assertCleanSource() {
   const status = git(['status', '--porcelain', '--untracked-files=all']).split(/\r?\n/).filter(Boolean).filter(line => !line.slice(3).startsWith('benchmarks/results/'));
   if (status.length) { const error = new Error('benchmark source tree is dirty'); error.code = 'BENCHMARK_SOURCE_DIRTY'; throw error; }
 }
-function provenance() { return { benchmarkSourceCommit: git(['rev-parse', 'HEAD']), benchmarkSourceTree: git(['rev-parse', 'HEAD^{tree}']), benchmarkInputHash: benchmarkInputHash(), packageLockHash: crypto.createHash('sha256').update(fs.readFileSync(path.join(root, 'package-lock.json'))).digest('hex'), dependencies: require('../package-lock.json').packages[''].dependencies }; }
+function provenance() { const lock = require('../package-lock.json'); const declared = lock.packages[''].dependencies; return { benchmarkSourceCommit: git(['rev-parse', 'HEAD']), benchmarkSourceTree: git(['rev-parse', 'HEAD^{tree}']), benchmarkInputHash: benchmarkInputHash(), packageLockHash: crypto.createHash('sha256').update(fs.readFileSync(path.join(root, 'package-lock.json'))).digest('hex'), dependencyVersions: Object.fromEntries(Object.keys(declared).sort().map(name => [name, lock.packages[`node_modules/${name}`]?.version || 'missing'])) }; }
 function verifyProvenance(before, skipClean = false) { if (!skipClean) assertCleanSource(); const after = provenance(); if (JSON.stringify(after) !== JSON.stringify(before)) { const error = new Error('benchmark source changed during measurement'); error.code = 'BENCHMARK_SOURCE_CHANGED'; throw error; } }
 
 async function selfTest() {
