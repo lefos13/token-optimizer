@@ -8,7 +8,7 @@ const root = path.resolve(__dirname, '..', '..', '..');
 const releaseVersion = JSON.parse(
   fs.readFileSync(path.join(root, 'package.json'), 'utf8'),
 ).version;
-assert.equal(releaseVersion, '2.0.0-beta.7');
+assert.equal(releaseVersion, '2.0.0-beta.8');
 const generators = [
   'generate-plugin-antigravity.js',
   'generate-plugin-claude.js',

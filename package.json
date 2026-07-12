@@ -1,8 +1,15 @@
 {
   "name": "token-optimizer-mcp",
-  "version": "2.0.0-beta.7",
+  "version": "2.0.0-beta.8",
   "description": "An MCP server for running workspace tests and triaging failures using Token Optimizer.",
   "main": "dist/index.js",
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "license": "Apache-2.0",
   "scripts": {
     "build": "tsc",
     "build:gateway": "tsc -p tsconfig.gateway.json",
@@ -23,7 +30,6 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.1",
-    "@softawarest/token-optimizer-installer": "^1.7.1",
     "nodemailer": "^9.0.3",
     "zod": "^4.4.3"
   },
