@@ -201,15 +201,15 @@ as `NO_RELEASE_TAG` and is never used by the publishing workflow.
 
 ## Troubleshooting
 
-Configuration resolves in the order tool-call override, project
-`.token-optimizer.json`, user config, defaults, then legacy environment
-compatibility. Provider destination/model selection follows that order, while
-credentials remain launcher-resolved environment values; `credentialRef` is
-secret-free reporting metadata. User command, log, and privacy policy is a
-security ceiling: project/tool layers may only narrow it. Config files must be
-canonical regular files inside their configured roots and cannot be symlinks.
-Custom redaction rules are bounded and applied with the built-ins at every final
-remote inference hop; built-ins cannot be disabled.
+Execution and log requests are evaluated across user, project, and MCP tool
+layers, but provider destination, model routing, and runtime credential use are
+user-authoritative. Project and tool provider objects are ignored with a stable
+warning, so repository content cannot redirect an inherited credential. Legacy
+provider environment variables are consulted only when user provider policy is
+absent. User config must be a private, owned regular file on POSIX; all config
+reads are no-follow, open-once, and limited to 64 KiB. Lower layers may only
+tighten command/log policy. Their bounded redaction rules are added to mandatory
+user and built-in rules at every final remote inference hop.
 
 - Restart your client after installing or changing provider settings.
 - Run `check_local_llm_health` to verify the selected LLM provider (local, gateway, or direct OpenRouter).

@@ -17,7 +17,6 @@ const configSchema = z.object({
     mode: z.enum(['local', 'gateway-token', 'gateway-byok', 'openrouter-direct']).optional(),
     apiUrl: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
-    credentialRef: z.string().min(1).max(256).optional(),
     taskRouting: z.partialRecord(z.enum(['verdict', 'triage', 'review', 'digest', 'scout', 'query']), z.string().min(1).max(256)).optional(),
   }).partial().optional(),
   execution: z.object({
@@ -46,19 +45,38 @@ function parseConfig(value: unknown, source: string): TokenOptimizerConfig {
   return parsed.data as TokenOptimizerConfig;
 }
 
-export function loadConfigFile(filePath: string, rootPath: string = path.dirname(filePath)): TokenOptimizerConfig | undefined {
+const MAX_CONFIG_BYTES = 64 * 1024;
+
+/* Config bytes are read from the same descriptor that is validated. This
+ * prevents a path swap between validation and read and rejects symlinks at open. */
+export function loadConfigFile(filePath: string, rootPath: string = path.dirname(filePath), authoritativeUser = false): TokenOptimizerConfig | undefined {
   if (!fs.existsSync(filePath)) return undefined;
+  const requestedRoot = path.resolve(rootPath);
+  const requestedFile = path.resolve(filePath);
+  const relative = path.relative(requestedRoot, requestedFile);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error(`Configuration path escapes its trusted root: ${filePath}`);
   const root = fs.realpathSync(rootPath);
-  const stat = fs.lstatSync(filePath);
-  if (stat.isSymbolicLink()) throw new Error(`Configuration file must not be a symbolic link: ${filePath}`);
-  if (!stat.isFile()) throw new Error(`Configuration path is not a regular file: ${filePath}`);
-  const canonical = fs.realpathSync(filePath);
-  if (canonical !== root && !canonical.startsWith(`${root}${path.sep}`)) throw new Error(`Configuration path escapes its trusted root: ${filePath}`);
+  const resolved = path.join(root, relative);
+  let descriptor: number | undefined;
   let value: unknown;
   try {
-    value = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const noFollow = (fs.constants as typeof fs.constants & { O_NOFOLLOW?: number }).O_NOFOLLOW || 0;
+    descriptor = fs.openSync(resolved, fs.constants.O_RDONLY | noFollow);
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile()) throw new Error(`Configuration path is not a regular file: ${filePath}`);
+    if (stat.size > MAX_CONFIG_BYTES) throw new Error(`Configuration file is too large: ${filePath}`);
+    if (authoritativeUser && process.platform !== 'win32') {
+      if ((stat.mode & 0o077) !== 0) throw new Error(`Authoritative user configuration has unsafe permissions: ${filePath}`);
+      if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) throw new Error(`Authoritative user configuration has unexpected ownership: ${filePath}`);
+    }
+    const bytes = Buffer.alloc(stat.size);
+    let offset = 0;
+    while (offset < bytes.length) { const count = fs.readSync(descriptor, bytes, offset, bytes.length - offset, offset); if (count === 0) break; offset += count; }
+    value = JSON.parse(bytes.subarray(0, offset).toString('utf8'));
   } catch (error) {
     throw new Error(`Unable to read ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
   }
   return parseConfig(value, filePath);
 }
@@ -66,7 +84,7 @@ export function loadConfigFile(filePath: string, rootPath: string = path.dirname
 export function loadUserConfig(env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env): TokenOptimizerConfig | undefined {
   const home = env.TOKEN_OPTIMIZER_CONFIG_HOME || path.join(os.homedir(), '.config', 'token-optimizer');
   const root = path.resolve(home.replace(/^~(?=$|\/)/, os.homedir()));
-  return loadConfigFile(path.join(root, 'config.json'), root);
+  return loadConfigFile(path.join(root, 'config.json'), root, true);
 }
 
 export function loadProjectConfig(workspacePath: string): TokenOptimizerConfig | undefined {
@@ -80,7 +98,9 @@ function narrowerProfile(ceiling: ExecutionProfile, requested: ExecutionProfile)
 
 function resolveProviderConfig(input: ConfigLayers, warnings: string[]): EffectiveConfig['provider'] {
   const env = input.env || process.env;
-  const explicitMode = input.tool?.provider?.mode || input.project?.provider?.mode || input.user?.provider?.mode;
+  const userProvider = input.user?.provider;
+  if (input.project?.provider || input.tool?.provider) warnings.push('lower-trust provider configuration ignored; provider destination and routing require user approval');
+  const explicitMode = userProvider?.mode;
   const configuredMode = explicitMode || env.TOKEN_OPTIMIZER_PROVIDER_MODE;
   let explicit: ProviderMode | undefined;
   let invalidExplicit = false;
@@ -91,9 +111,9 @@ function resolveProviderConfig(input: ConfigLayers, warnings: string[]): Effecti
       warnings.push(`invalid provider mode TOKEN_OPTIMIZER_PROVIDER_MODE="${configuredMode}"; using local provider`);
     }
   }
-  const configuredUrl = input.tool?.provider?.apiUrl || input.project?.provider?.apiUrl || input.user?.provider?.apiUrl;
+  const configuredUrl = userProvider?.apiUrl;
   const url = configuredUrl || env.LLM_GATEWAY_URL;
-  const model = input.tool?.provider?.model || input.project?.provider?.model || input.user?.provider?.model;
+  const model = userProvider?.model;
   const byok = env.OPENROUTER_BYOK_KEY;
   const gatewayToken = env.LLM_GATEWAY_TOKEN;
   const directKey = env.OPENROUTER_API_KEY;
@@ -112,7 +132,7 @@ function resolveProviderConfig(input: ConfigLayers, warnings: string[]): Effecti
   }
   if (mode === 'gateway-token' && !explicit) warnings.push('gateway environment variables are a legacy compatibility configuration');
   if (mode === 'gateway-byok' && !explicit) warnings.push('OPENROUTER_BYOK_KEY is a legacy gateway-byok credential');
-  const metadata = { credentialRef: input.tool?.provider?.credentialRef || input.project?.provider?.credentialRef || input.user?.provider?.credentialRef, taskRouting: input.tool?.provider?.taskRouting || input.project?.provider?.taskRouting || input.user?.provider?.taskRouting };
+  const metadata = { taskRouting: userProvider?.taskRouting };
   if (mode === 'local') return { mode, apiUrl: configuredUrl || env.LOCAL_LLM_API_URL || DEFAULT_LOCAL_URL, model: model || env.LOCAL_LLM_MODEL || DEFAULT_LOCAL_MODEL, ...metadata };
   if (mode === 'openrouter-direct') return { mode, apiUrl: configuredUrl || DEFAULT_OPENROUTER_URL, model: model || env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL, ...metadata, credentialEnv: 'OPENROUTER_API_KEY', credential: directKey };
   return { mode, apiUrl: url as string, model: model || DEFAULT_LOCAL_MODEL, ...metadata, credentialEnv: mode === 'gateway-token' ? 'LLM_GATEWAY_TOKEN' : 'OPENROUTER_BYOK_KEY', credential: mode === 'gateway-token' ? gatewayToken : byok, byokCredential: mode === 'gateway-token' ? byok : undefined, byokModel: env.OPENROUTER_BYOK_MODEL?.trim() || undefined };
@@ -144,12 +164,12 @@ export function resolveEffectiveConfig(input: ConfigLayers = {}): EffectiveConfi
     },
     /* Lower-trust layers may reduce retention/quota or request redaction, but may
      * never restore raw logs or enlarge limits fixed by the user policy. */
-    logs: (() => { const base = layers.user?.logs; const requested = layers.tool?.logs || layers.project?.logs; return {
-      retentionDays: Math.min(base?.retentionDays ?? 7, requested?.retentionDays ?? Infinity),
-      maxDiskMb: Math.min(base?.maxDiskMb ?? 500, requested?.maxDiskMb ?? Infinity),
-      storageMode: base?.storageMode === 'redacted-local' || requested?.storageMode === 'redacted-local' ? 'redacted-local' as const : 'raw-local' as const,
+    logs: (() => { const candidates = [layers.user?.logs, layers.project?.logs, layers.tool?.logs]; return {
+      retentionDays: Math.min(7, ...candidates.map((value) => value?.retentionDays ?? Infinity)),
+      maxDiskMb: Math.min(500, ...candidates.map((value) => value?.maxDiskMb ?? Infinity)),
+      storageMode: candidates.some((value) => value?.storageMode === 'redacted-local') ? 'redacted-local' as const : 'raw-local' as const,
     }; })(),
-    redaction: { rules: layers.tool?.redaction?.rules || layers.project?.redaction?.rules || layers.user?.redaction?.rules || [] },
+    redaction: (() => { const rules = [...(layers.user?.redaction?.rules || []), ...(layers.project?.redaction?.rules || []), ...(layers.tool?.redaction?.rules || [])]; if (rules.length > 20) throw new Error('Effective redaction configuration has too many rules (maximum 20)'); return { rules }; })(),
     warnings,
   };
 }

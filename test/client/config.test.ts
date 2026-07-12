@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveEffectiveConfig } from '../../src/config';
+import { loadConfigFile, resolveEffectiveConfig } from '../../src/config';
 
 test('project config cannot elevate a safe user ceiling', () => {
   const config = resolveEffectiveConfig({
@@ -25,6 +25,7 @@ test('legacy BYOK maps to gateway-byok without changing destination', () => {
 test('user config loads without a workspace path', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'token-optimizer-config-'));
   fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ execution: { profile: 'standard' } }));
+  if (process.platform !== 'win32') fs.chmodSync(path.join(home, 'config.json'), 0o600);
   const config = resolveEffectiveConfig({ env: { TOKEN_OPTIMIZER_CONFIG_HOME: home } });
   assert.equal(config.execution.profile, 'standard');
   fs.rmSync(home, { recursive: true, force: true });
@@ -64,25 +65,29 @@ test('effective provider configuration selects each documented destination', () 
   }
 });
 
-test('explicit layers outrank legacy environment while security policy only narrows', () => {
+test('user provider policy binds credential-bearing destination against lower-trust redirects', () => {
   const config = resolveEffectiveConfig({
-    env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'local', LOCAL_LLM_API_URL: 'http://legacy/v1', OPENROUTER_API_KEY: 'runtime-secret' },
-    user: { execution: { profile: 'standard' }, logs: { retentionDays: 3, maxDiskMb: 100, storageMode: 'redacted-local' } },
-    project: { provider: { mode: 'gateway-token', apiUrl: 'https://project/v1', credentialRef: 'project-token' }, execution: { profile: 'unrestricted' }, logs: { retentionDays: 30, maxDiskMb: 1000, storageMode: 'raw-local' } },
-    tool: { provider: { mode: 'openrouter-direct', apiUrl: 'https://tool/v1', model: 'tool-model', credentialRef: 'tool-key' }, execution: { profile: 'safe' } },
+    env: { LLM_GATEWAY_TOKEN: 'runtime-secret', OPENROUTER_API_KEY: 'other-secret' },
+    user: { provider: { mode: 'gateway-token', apiUrl: 'https://approved/v1', model: 'approved-model' }, execution: { profile: 'standard' }, logs: { retentionDays: 3, maxDiskMb: 100, storageMode: 'redacted-local' } },
+    project: { provider: { mode: 'openrouter-direct', apiUrl: 'https://project/v1' }, execution: { profile: 'unrestricted' }, logs: { retentionDays: 2, maxDiskMb: 1000, storageMode: 'raw-local' } },
+    tool: { provider: { mode: 'openrouter-direct', apiUrl: 'https://tool/v1', model: 'tool-model' }, execution: { profile: 'safe' }, logs: { retentionDays: 30, maxDiskMb: 50 } },
   });
-  assert.equal(config.provider.mode, 'openrouter-direct');
-  assert.equal(config.provider.apiUrl, 'https://tool/v1');
-  assert.equal(config.provider.credentialRef, 'tool-key');
+  assert.equal(config.provider.mode, 'gateway-token');
+  assert.equal(config.provider.apiUrl, 'https://approved/v1');
+  assert.equal(config.provider.model, 'approved-model');
   assert.equal(config.execution.profile, 'safe');
-  assert.deepEqual(config.logs, { retentionDays: 3, maxDiskMb: 100, storageMode: 'redacted-local' });
+  assert.deepEqual(config.logs, { retentionDays: 2, maxDiskMb: 50, storageMode: 'redacted-local' });
+  assert.match(config.warnings.join('\n'), /lower-trust provider/i);
 });
 
-test('provider task routing and custom redaction are retained without secret material', () => {
-  const config = resolveEffectiveConfig({ user: { provider: { mode: 'local', credentialRef: 'keychain:token', taskRouting: { verdict: 'model/verdict' } }, redaction: { rules: [{ pattern: 'PRIVATE-[0-9]+', flags: 'g', category: 'private' }] } } });
-  assert.equal(config.provider.credentialRef, 'keychain:token');
+test('provider task routing remains user-authoritative and redaction rules accumulate', () => {
+  const config = resolveEffectiveConfig({
+    user: { provider: { mode: 'local', taskRouting: { verdict: 'model/verdict' } }, redaction: { rules: [{ pattern: 'USER-[0-9]+', category: 'user' }] } },
+    project: { provider: { taskRouting: { verdict: 'evil/model' } }, redaction: { rules: [{ pattern: 'PROJECT-[0-9]+', category: 'project' }] } },
+    tool: { redaction: { rules: [{ pattern: 'TOOL-[0-9]+', category: 'tool' }] } },
+  });
   assert.equal(config.provider.taskRouting?.verdict, 'model/verdict');
-  assert.equal(config.redaction.rules.length, 1);
+  assert.deepEqual(config.redaction.rules.map((rule) => rule.category), ['user', 'project', 'tool']);
 });
 
 test('project config rejects symlink escape', () => {
@@ -93,4 +98,25 @@ test('project config rejects symlink escape', () => {
   assert.throws(() => resolveEffectiveConfig({ workspacePath: workspace, env: { TOKEN_OPTIMIZER_CONFIG_HOME: path.join(workspace, 'missing') } }), /symbolic link/i);
   fs.rmSync(workspace, { recursive: true, force: true });
   fs.rmSync(outside, { force: true });
+});
+
+test('generic config loader rejects a caller-supplied path outside its root', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'token-optimizer-root-'));
+  const outside = path.join(os.tmpdir(), `token-optimizer-external-${process.pid}.json`);
+  fs.writeFileSync(outside, '{}');
+  assert.throws(() => loadConfigFile(outside, root), /escapes/i);
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(outside, { force: true });
+});
+
+test('authoritative user config rejects broad permissions and oversized files', () => {
+  if (process.platform === 'win32') return;
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'token-optimizer-user-'));
+  const file = path.join(home, 'config.json');
+  fs.writeFileSync(file, '{}', { mode: 0o644 });
+  assert.throws(() => resolveEffectiveConfig({ env: { TOKEN_OPTIMIZER_CONFIG_HOME: home } }), /permissions/i);
+  fs.chmodSync(file, 0o600);
+  fs.writeFileSync(file, ' '.repeat(70_000));
+  assert.throws(() => resolveEffectiveConfig({ env: { TOKEN_OPTIMIZER_CONFIG_HOME: home } }), /too large/i);
+  fs.rmSync(home, { recursive: true, force: true });
 });

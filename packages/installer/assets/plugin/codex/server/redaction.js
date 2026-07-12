@@ -4,6 +4,7 @@ exports.redactText = redactText;
 const MAX_CUSTOM_RULES = 20;
 const MAX_PATTERN_LENGTH = 500;
 const MAX_REPLACEMENT_LENGTH = 256;
+const MAX_REDACTION_INPUT_LENGTH = 1024 * 1024;
 const SAFE_FLAGS = /^[dgimsuv]*$/;
 /* These rules target credential-shaped values while retaining labels, routes, and
  * surrounding diagnostics. They intentionally avoid matching prose placeholders. */
@@ -59,7 +60,10 @@ function normalizeRule(rule) {
         try {
             /* Nested unbounded quantifiers are rejected before compilation because they
              * are the common catastrophic-backtracking shape in user configuration. */
-            if (/\([^)]*[+*][^)]*\)[+*{]/.test(rule.pattern))
+            /* Custom expressions use a deliberately small safe subset. Ambiguous
+             * branching, backreferences, lookarounds, and quantified groups are
+             * excluded because JavaScript has no dependable regex execution budget. */
+            if (/\||\\[1-9]|\(\?|\)[+*?{]|(?:[+*?]|\{\d+(?:,\d*)?\})(?:[+*?]|\{)/.test(rule.pattern))
                 throw new TypeError('unsafe redaction rule pattern');
             const flags = rule.flags || '';
             pattern = new RegExp(rule.pattern, flags.includes('g') ? flags : `${flags}g`);
@@ -74,6 +78,8 @@ function normalizeRule(rule) {
     return { ...rule, pattern };
 }
 function redactText(text, options = {}) {
+    if (text.length > MAX_REDACTION_INPUT_LENGTH)
+        throw new RangeError('redaction input is too large');
     const customRules = options.customRules ?? [];
     if (customRules.length > MAX_CUSTOM_RULES)
         throw new RangeError(`too many custom redaction rules (maximum ${MAX_CUSTOM_RULES})`);

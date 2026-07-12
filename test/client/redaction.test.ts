@@ -65,3 +65,10 @@ test('rejects unsafe flags, replacements, and catastrophic nested quantifiers', 
   assert.throws(() => redactText('a'.repeat(100), { customRules: [{ pattern: '(a+)+$', category: 'bad' }] }), /unsafe/i);
   assert.throws(() => redactText('x', { customRules: [{ pattern: 'x', category: 'bad', replacement: 'z'.repeat(257) }] as any }), /replacement/i);
 });
+
+test('rejects ambiguous or stateful regex constructs and bounds input', () => {
+  for (const pattern of ['a|aa', '(a){1,3}{2}', '(a+){2}', '(?=secret)secret', '(a)\\1', '[a-z]+(?:x)?']) {
+    assert.throws(() => redactText('secret', { customRules: [{ pattern, category: 'unsafe' }] }), /unsafe/i, pattern);
+  }
+  assert.throws(() => redactText('x'.repeat(1_048_577)), /input is too large/i);
+});
