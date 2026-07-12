@@ -25,6 +25,12 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
+      # npm's OIDC Trusted Publishing (the id-token:write permission above, used instead of a
+      # static NPM_TOKEN secret) requires npm CLI >= 11.5.1. Node 22's bundled npm is older than
+      # that, so without this the OIDC exchange silently never happens and the final publish step
+      # falls back to an unauthenticated request -- which the registry answers with 404 rather
+      # than a clear auth error, even though the package already exists.
+      - run: npm install -g npm@latest
       - run: npm ci
       - run: npm run build
       - run: npm run build:gateway
