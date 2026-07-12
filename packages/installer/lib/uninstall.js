@@ -124,9 +124,11 @@ function applyLifecyclePlan(plan, options = {}) {
       applyOperation(operation, options);
       applied.push(operation);
     }
+    for (const inverse of inverses) if (typeof inverse.dispose === 'function') inverse.dispose();
   } catch (error) {
     const rollbackErrors = [];
     for (let index = inverses.length - 1; index >= 0; index -= 1) try { inverses[index](); } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+    for (const inverse of inverses) if (typeof inverse.dispose === 'function') try { inverse.dispose(); } catch (_) {}
     const safe = new Error(rollbackErrors.length ? 'lifecycle operation failed and rollback was incomplete' : 'lifecycle operation failed; earlier mutations were rolled back');
     safe.cause = error; safe.applied = applied; safe.rollbackErrors = rollbackErrors.length;
     throw safe;
@@ -146,7 +148,7 @@ function prepareInverse(operation, options) {
     return () => {};
   }
   if (typeof adapter.capture !== 'function' || typeof adapter.apply !== 'function' || typeof adapter.restore !== 'function') throw new Error(`reversible ${operation.kind} adapter unavailable`);
-  const state = adapter.capture(operation); return () => adapter.restore(operation, state);
+  const state = adapter.capture(operation); const inverse = () => adapter.restore(operation, state); inverse.dispose = () => { if (typeof adapter.dispose === 'function') adapter.dispose(operation, state); }; return inverse;
 }
 
 function applyOperation(operation, options) {
@@ -174,7 +176,7 @@ function credentialStore(operation, options) { const ref = operation.reference; 
 function snapshotPath(target) {
   const existed = fs.existsSync(target); const root = fs.mkdtempSync(path.join(os.tmpdir(), 'token-optimizer-lifecycle-')); const copy = path.join(root, 'state');
   if (existed) fs.cpSync(target, copy, { recursive: true });
-  return () => { fs.rmSync(target, { recursive: true, force: true }); if (existed) { fs.mkdirSync(path.dirname(target), { recursive: true }); fs.cpSync(copy, target, { recursive: true }); } fs.rmSync(root, { recursive: true, force: true }); };
+  const inverse = () => { fs.rmSync(target, { recursive: true, force: true }); if (existed) { fs.mkdirSync(path.dirname(target), { recursive: true }); fs.cpSync(copy, target, { recursive: true }); } }; inverse.dispose = () => fs.rmSync(root, { recursive: true, force: true }); return inverse;
 }
 
 function removeManagedBlock(filePath, marker) {

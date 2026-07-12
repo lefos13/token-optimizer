@@ -7,6 +7,7 @@ const https = require("https");
 const { execFileSync } = require("child_process");
 const pkg = require("../package.json");
 const { createCredentialStore } = require("./credential-store");
+const { marketplaceLocations } = require("./marketplace-locations");
 
 const CLIENTS = ["claude", "codex", "antigravity", "opencode", "cursor"];
 const PLACEHOLDER = /^(?:none|null|undefined|placeholder|change[-_ ]?me|.*(?:your|insert|replace)[-_ ]?(?:with[-_ ]?)?(?:token|key).*|<[^>]+>|\$\{[^}]+\})$/i;
@@ -121,17 +122,12 @@ function inspectClients(home, options = {}) {
 function inspectMarketplaceRegistrations(home, options = {}) {
   const provided = options.pluginListings || {};
   const result = [];
-  const claudeSkills = path.join(home, ".claude", "skills", "token-optimizer");
-  if (fs.existsSync(path.join(claudeSkills, ".claude-plugin", "plugin.json"))) { let version = null; try { version = JSON.parse(fs.readFileSync(path.join(claudeSkills, ".claude-plugin", "plugin.json"), "utf8")).version; } catch (_) {} const launcherPath = [path.join(claudeSkills, "server", "start.js"), path.join(claudeSkills, "server", "start.sh")].find((file) => fs.existsSync(file)) || null; result.push({ client: "claude", configPath: path.join(claudeSkills, ".claude-plugin", "plugin.json"), name: "token-optimizer", command: "skills-dir", args: [], env: {}, launcherPath, marketplace: true, version, installedPath: claudeSkills, stale: !launcherPath }); }
-  const caches = [
-    ["claude", path.join(home, ".claude", "plugins", "cache", "token-optimizer-marketplace", "token-optimizer")],
-    ["codex", path.join(home, ".codex", "plugins", "cache", "Softaware-marketplace", "token-optimizer")],
-    ["codex", path.join(home, ".codex", "plugins", "token-optimizer")],
-  ];
-  for (const [client, root] of caches) {
-    let versions = []; try { versions = fs.readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name); } catch (_) { continue; }
+  const caches = marketplaceLocations(home);
+  for (const { client, root, layout } of caches) {
+    let versions = []; try { versions = layout === "single" ? [""] : fs.readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name); } catch (_) { continue; }
     for (const versionDir of versions) {
-      const installedPath = path.join(root, versionDir); const manifest = [path.join(installedPath, ".claude-plugin", "plugin.json"), path.join(installedPath, ".codex-plugin", "plugin.json")].find((file) => fs.existsSync(file));
+      const installedPath = versionDir ? path.join(root, versionDir) : root; const manifest = [path.join(installedPath, ".claude-plugin", "plugin.json"), path.join(installedPath, ".codex-plugin", "plugin.json")].find((file) => fs.existsSync(file));
+      if (layout === "single" && !manifest) continue;
       let version = versionDir; try { version = JSON.parse(fs.readFileSync(manifest, "utf8")).version || version; } catch (_) {}
       const launcherPath = [path.join(installedPath, "server", "start.js"), path.join(installedPath, "server", "start.sh")].find((file) => fs.existsSync(file)) || null;
       result.push({ client, configPath: manifest || installedPath, name: "token-optimizer", command: "marketplace-cache", args: [], env: {}, launcherPath, marketplace: true, version, installedPath, stale: fs.existsSync(path.join(installedPath, ".orphaned_at")) || !launcherPath });
