@@ -51,7 +51,7 @@ const SECRET_PATTERN = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|(?:ghp
 function inspectTrackedFiles(root, tracked, readFile = fs.readFileSync, lstat = fs.lstatSync) {
   /* Test fixtures containing deliberate signatures are the only repository
    * exception; production and generated artifacts receive identical scanning. */
-  const fixtureAllowlist = [/^test\/fixtures\/security\/(?:private-key|token-signatures)\.txt$/, /^test\/.*\.test\.ts$/];
+  const fixtureAllowlist = [/^test\/fixtures\/security\/(?:private-key|token-signatures)\.txt$/];
   for (const relative of tracked) {
     if (!relative || fixtureAllowlist.some(pattern => pattern.test(relative))) continue;
     const absolute = path.resolve(root, relative);

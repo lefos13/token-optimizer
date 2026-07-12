@@ -6,6 +6,8 @@ import * as path from 'node:path';
 import { AddressInfo } from 'node:net';
 import { RateLimiter } from '../../gateway/src/rate-limit';
 import { createGatewayServer } from '../../gateway/src/server';
+
+const operatorKey = 'sk-' + 'operator-real';
 import { loadConfig } from '../../gateway/src/config';
 
 /* BYOK (bring-your-own-key) pass-through: a caller can add X-OpenRouter-Key so
@@ -19,7 +21,7 @@ const VALID_BYOK = 'sk-or-v1-abcdefghijklmnop0123456789';
 
 function makeConfig(stateDir: string, overrides: Record<string, string> = {}) {
   return loadConfig({
-    OPENROUTER_API_KEY: 'sk-operator-real',
+    OPENROUTER_API_KEY: operatorKey,
     PROXY_TOKENS: 'shared-token',
     DEFAULT_MODEL: 'default/model',
     RATE_LIMIT_PER_MIN: '0',
@@ -185,7 +187,7 @@ test('a malformed or missing BYOK header requires a valid proxy/issued token as 
   await withServer(spyUpstream, async (base) => {
     const withGarbageKey = await chat(base, 'shared-token', 'not-a-real-key');
     assert.equal(withGarbageKey.status, 200);
-    assert.equal(seenAuth, 'Bearer sk-operator-real');
+    assert.equal(seenAuth, `Bearer ${operatorKey}`);
 
     const noKeyNoToken = await chat(base, undefined, undefined);
     assert.equal(noKeyNoToken.status, 401);

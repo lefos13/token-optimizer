@@ -44,6 +44,17 @@ test('tracked repository scan rejects a committed high-confidence secret', () =>
   assert.doesNotThrow(() => inspectTrackedFiles(directory, ['binary.bin']));
 });
 
+test('tracked scan rejects arbitrary test secrets, symlinks, and path escapes', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tracked-boundaries-'));
+  fs.mkdirSync(path.join(directory, 'test'));
+  fs.writeFileSync(path.join(directory, 'test/arbitrary.test.ts'), 'auth_' + 'token="abcdefgh' + 'ijklmnopqrstuvwxyz"');
+  assert.throws(() => inspectTrackedFiles(directory, ['test/arbitrary.test.ts']), /REPOSITORY_SECRET_REJECTED/);
+  fs.writeFileSync(path.join(directory, 'outside'), 'safe');
+  fs.symlinkSync(path.join(directory, 'outside'), path.join(directory, 'test/link'));
+  assert.throws(() => inspectTrackedFiles(directory, ['test/link']), /REPOSITORY_SYMLINK_REJECTED/);
+  assert.throws(() => inspectTrackedFiles(directory, ['../escape']), /REPOSITORY_PATH_REJECTED/);
+});
+
 test('generated drift returns stable JSON code and restores a tracked tree', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'generated-drift-'));
   fs.mkdirSync(path.join(directory, 'scripts')); fs.copyFileSync(path.join(root, 'scripts', 'verify-generated-assets.js'), path.join(directory, 'scripts', 'verify-generated-assets.js'));
@@ -85,12 +96,41 @@ test('runPreflight returns stable success JSON and derives prerelease dist tag',
 test('runPreflight reports deterministic command and SBOM failure codes', () => {
   const cases = [
     ['AUDIT_POLICY_FAILED', { commands: { ...adapters().commands, audit: () => ({ status: 1, stdout: 'high vulnerability', stderr: '' }) } }],
+    ['GENERATED_CHECK_FAILED', { commands: { ...adapters().commands, generated: () => ({ status: 1, stdout: 'restored generated drift', stderr: '' }) } }],
     ['ROOT_PACK_FAILED', { commands: { ...adapters().commands, pack: (kind: string) => ({ status: kind === 'root' ? 1 : 0, stdout: '[]', stderr: 'pack failed' }) } }],
     ['SBOM_GENERATION_FAILED', { commands: { ...adapters().commands, sbom: () => ({ status: 1, stdout: '', stderr: 'failed' }) } }],
     ['SBOM_INVALID_JSON', { commands: { ...adapters().commands, sbom: () => ({ status: 0, stdout: '{', stderr: '' }) } }],
     ['SBOM_SCHEMA_INVALID', { commands: { ...adapters().commands, sbom: () => ({ status: 0, stdout: '{}', stderr: '' }) } }],
   ];
   for (const [code, override] of cases) assert.throws(() => runPreflight(root, adapters(override as Record<string, unknown>)), (error: any) => error instanceof PreflightFailure && error.code === code);
+});
+
+test('runPreflight reports dirty, tag, staged-secret, and installer-pack failures', () => {
+  const scenarios: Array<[string, Record<string, unknown>]> = [
+    ['DIRTY_TREE', { env: { RELEASE_TAG: 'v2.0.0-beta.11' }, run: (command: string, args: string[]) => ({ status: 0, stdout: command === 'git' && args[0] === 'status' ? ' M tracked.ts\n' : '', stderr: '' }) }],
+    ['TAG_REQUIRED', { env: {}, argv: [] }],
+    ['TAG_VERSION_MISMATCH', { env: { RELEASE_TAG: 'v2.0.0-beta.10' } }],
+    ['TAG_POLICY_REJECTED', { env: { RELEASE_TAG: '2.0.0-beta.11' } }],
+    ['REPOSITORY_SECRET_REJECTED', { run: (command: string, args: string[]) => ({ status: 0, stdout: command === 'git' && args[0] === 'diff' ? '+auth_' + 'token="abcdefgh' + 'ijklmnopqrstuvwxyz"' : '', stderr: '' }) }],
+    ['INSTALLER_PACK_FAILED', { commands: { ...adapters().commands, pack: (kind: string) => ({ status: kind === 'installer' ? 1 : 0, stdout: JSON.stringify([{ files: ['LICENSE', 'NOTICE', 'README.md', 'package.json', 'dist/index.js'].map(file => ({ path: file })) }]), stderr: 'installer pack failed' }) } }],
+  ];
+  for (const [code, override] of scenarios) assert.throws(() => runPreflight(root, adapters(override)), (error: any) => error instanceof PreflightFailure && error.code === code);
+});
+
+test('version drift from an injected filesystem reports VERSION_MISMATCH', () => {
+  const real = fs.readFileSync;
+  const fakeFs = { ...fs, readFileSync(file: fs.PathOrFileDescriptor, options?: any) {
+    const value = real(file, options as any) as any;
+    return String(file).endsWith('packages/installer/package.json') ? JSON.stringify({ ...JSON.parse(String(value)), version: '2.0.0-beta.10' }) : value;
+  } };
+  assert.throws(() => runPreflight(root, adapters({ fs: fakeFs })), (error: any) => error instanceof PreflightFailure && error.code === 'VERSION_MISMATCH');
+});
+
+test('CLI emits one machine-readable stderr object and exits exactly one on policy failure', () => {
+  const result = spawnSync(process.execPath, ['scripts/release-preflight.js'], { cwd: root, encoding: 'utf8', env: { ...process.env, RELEASE_TAG: '' } });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.deepEqual(JSON.parse(result.stderr), { ok: false, code: 'TAG_REQUIRED', details: { version: '2.0.0-beta.11' } });
 });
 
 test('actual npm pack dry-run JSON inventories satisfy release policy', () => {

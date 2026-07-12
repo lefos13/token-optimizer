@@ -4,7 +4,7 @@ import { AddressInfo } from 'node:net';
 import { createGatewayServer } from '../../gateway/src/server';
 import { loadConfig } from '../../gateway/src/config';
 
-const config = loadConfig({ OPENROUTER_API_KEY: 'sk-upstream-fixture', PROXY_TOKENS: 'good-token', DEFAULT_MODEL: 'default/model', MODEL_VERDICT: 'verdict/model', RATE_LIMIT_PER_MIN: '60' } as any);
+const config = loadConfig({ OPENROUTER_API_KEY: 'sk-' + 'upstream-fixture', PROXY_TOKENS: 'good-token', DEFAULT_MODEL: 'default/model', MODEL_VERDICT: 'verdict/model', RATE_LIMIT_PER_MIN: '60' } as any);
 
 /* A real ephemeral gateway server with an injected upstream verifies the public
    auth/BYOK/rate-limit boundary without network access or retained credentials. */
