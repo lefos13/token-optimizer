@@ -45,8 +45,24 @@ test('scanner follows POSIX quote and escape rules and fails closed on unmatched
   for (const command of [`printf 'unterminated`, `printf "unterminated`]) {
     assert.equal((await runCommand(command, root, 1000, execution)).executionStatus, 'blocked');
   }
-  for (const command of [`printf "x;|&>$()\`"`, `printf "C:\\Program Files\\A&B"`, `printf '%3B'`]) {
+  for (const command of [`printf "x;|&>"`, `printf "C:\\Program Files\\A&B"`, `printf '%3B'`]) {
     assert.equal((await evaluateCommand({ command, workspacePath: root, profile: 'unrestricted' })).allowed, true, command);
+  }
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('double quotes block active command substitution but allow escaped literals', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'to-security-double-substitution-'));
+  const execution = { profile: 'unrestricted' as const, allowedCommandPrefixes: [] };
+  for (const command of [`printf "$(touch marker)"`, 'printf "`touch marker`"']) {
+    const result = await runCommand(command, root, 1000, execution);
+    assert.equal(result.executionStatus, 'blocked', command);
+    assert.equal(fs.existsSync(path.join(root, 'marker')), false, command);
+  }
+  for (const command of [`printf "\\$(touch marker)"`, 'printf "\\`touch marker\\`"']) {
+    const result = await runCommand(command, root, 1000, execution);
+    assert.equal(result.exitCode, 0, command);
+    assert.equal(fs.existsSync(path.join(root, 'marker')), false, command);
   }
   fs.rmSync(root, { recursive: true, force: true });
 });

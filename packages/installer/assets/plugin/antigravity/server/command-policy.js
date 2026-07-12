@@ -58,6 +58,8 @@ function scanShellSyntax(command) {
                 quote = undefined;
             else if (char === '\\' && /[$`"\\\n]/.test(command[index + 1] || ''))
                 index += 1;
+            else if (char === '`' || (char === '$' && command[index + 1] === '('))
+                return { composition: true, unmatchedQuote: false };
             continue;
         }
         if (char === '\\') {
