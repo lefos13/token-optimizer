@@ -1,3 +1,11 @@
+# Every generator (scripts/generate-plugin-*.js, scripts/build-installer-package.js) writes LF
+# unconditionally. scripts/verify-generated-assets.js regenerates those tracked outputs and diffs
+# them against the checkout with `git status`; on Windows, core.autocrlf=true (the Git for
+# Windows default) converts the checked-out copies to CRLF, so the freshly-regenerated LF content
+# always differs from the checkout and every tracked generated file shows as modified. Force LF
+# for all text files repo-wide so a checkout always byte-matches what a generator produces.
+* text=auto eol=lf
+
 # Linux deploy assets must use LF (CRLF breaks shebangs on droplets).
 *.sh text eol=lf
 *.service text eol=lf
