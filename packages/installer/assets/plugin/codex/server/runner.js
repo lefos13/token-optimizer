@@ -52,7 +52,7 @@ const log_excerpt_1 = require("./log-excerpt");
 /**
  * Runs a single shell command inside the workspacePath, capturing all stdout and stderr.
  */
-function runCommand(command, workspacePath, timeoutMs = 300000, execution, logFilePath, storageMode = 'raw-local') {
+function runCommand(command, workspacePath, timeoutMs = 300000, execution, logFilePath, storageMode = 'raw-local', commandLogFs = { createWriteStream: fs.createWriteStream }) {
     const startTime = Date.now();
     return new Promise(async (resolve) => {
         let settled = false;
@@ -90,19 +90,25 @@ function runCommand(command, workspacePath, timeoutMs = 300000, execution, logFi
         let outBytes = 0, errBytes = 0;
         let fileStream;
         let fileCarry = '';
+        let fileFailure;
         try {
-            if (logFilePath)
-                fileStream = fs.createWriteStream(logFilePath, { flags: 'w' });
+            if (logFilePath) {
+                fileStream = commandLogFs.createWriteStream(logFilePath, { flags: 'w', mode: 0o600 });
+                fileStream.on('error', (error) => { fileFailure ||= error; });
+            }
         }
-        catch { /* best effort */ }
+        catch (error) {
+            fileFailure = error;
+        }
         const collect = (chunk, stream) => {
             const bytes = chunk.byteLength;
             if (stream === 'stdout')
                 outBytes += bytes;
             else
                 errBytes += bytes;
-            fileStream?.write(`[${stream}] `);
-            if (fileStream) {
+            if (fileStream && !fileFailure)
+                fileStream.write(`[${stream}] `);
+            if (fileStream && !fileFailure) {
                 if (storageMode === 'redacted-local') {
                     const text = fileCarry + chunk.toString();
                     const cut = Math.max(0, text.length - 128);
@@ -117,20 +123,34 @@ function runCommand(command, workspacePath, timeoutMs = 300000, execution, logFi
         };
         child.stdout?.on('data', (c) => collect(c, 'stdout'));
         child.stderr?.on('data', (c) => collect(c, 'stderr'));
-        const closeFile = () => { if (fileStream) {
-            if (storageMode === 'redacted-local' && fileCarry)
-                fileStream.write((0, redaction_1.redactText)(fileCarry).text);
-            fileCarry = '';
-            fileStream.end();
+        const closeFile = async () => {
+            const stream = fileStream;
             fileStream = undefined;
-        } };
-        const finish = (result) => {
+            if (!stream)
+                return;
+            if (storageMode === 'redacted-local' && fileCarry && !fileFailure)
+                stream.write((0, redaction_1.redactText)(fileCarry).text);
+            fileCarry = '';
+            await new Promise((resolve) => {
+                if (stream.destroyed) {
+                    resolve();
+                    return;
+                }
+                const done = () => { stream.removeListener('finish', done); stream.removeListener('close', done); resolve(); };
+                stream.once('finish', done);
+                stream.once('close', done);
+                stream.end();
+            });
+        };
+        const finish = async (result) => {
             if (settled)
                 return;
             settled = true;
             if (timeout)
                 clearTimeout(timeout);
-            closeFile();
+            await closeFile();
+            if (fileFailure)
+                result.commandLogFailure = { ...(fileFailure.code ? { code: fileFailure.code } : {}), message: fileFailure.message };
             result.stdout = result.stdout || outCollector.finish().text;
             result.stderr = result.stderr || errCollector.finish().text;
             result.interleaved = interleavedCollector.finish().text;
@@ -245,7 +265,7 @@ async function appendFileStream(write, sourcePath) {
  * emitted in command order regardless of execution mode.
  */
 async function runSuite(commands, workspacePath, options = {}) {
-    const { maxOutputLines, timeoutMs, parallel, execution, storageMode = 'raw-local', retentionDays, maxDiskMb, logFs } = options;
+    const { maxOutputLines, timeoutMs, parallel, execution, storageMode = 'raw-local', retentionDays, maxDiskMb, logFs, commandLogFs } = options;
     const logDir = await (0, log_store_1.ensureSafeRoot)(workspacePath);
     // Ensure log directory exists
     if (!fs.existsSync(logDir)) {
@@ -256,7 +276,7 @@ async function runSuite(commands, workspacePath, options = {}) {
     const rawLogPath = path.join(logDir, logFileName);
     const tempDir = path.join(logDir, `.stream-${process.pid}-${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
-    const runOne = (cmd, index) => timeoutMs ? runCommand(cmd, workspacePath, timeoutMs, execution, path.join(tempDir, `${index}.out`), storageMode) : runCommand(cmd, workspacePath, 300000, execution, path.join(tempDir, `${index}.out`), storageMode);
+    const runOne = (cmd, index) => timeoutMs ? runCommand(cmd, workspacePath, timeoutMs, execution, path.join(tempDir, `${index}.out`), storageMode, commandLogFs) : runCommand(cmd, workspacePath, 300000, execution, path.join(tempDir, `${index}.out`), storageMode, commandLogFs);
     let results;
     try {
         if (parallel) {
@@ -280,6 +300,11 @@ async function runSuite(commands, workspacePath, options = {}) {
     let auditFailure;
     let auditStage = 'create';
     try {
+        const commandLogFailure = results.find((result) => result.commandLogFailure)?.commandLogFailure;
+        if (commandLogFailure) {
+            auditStage = 'write';
+            throw Object.assign(new Error(`command output persistence failed: ${commandLogFailure.message}`), { code: commandLogFailure.code });
+        }
         managedLog = await (0, log_store_1.createRunLog)(workspacePath, { runId: logFileName.replace(/\.log$/, ''), storageMode, fs: logFs });
         auditStage = 'write';
         for (let i = 0; i < results.length; i++) {
@@ -332,7 +357,10 @@ async function runSuite(commands, workspacePath, options = {}) {
     // Return path relative to the workspace path for the client
     const relativeLogPath = path.relative(workspacePath, rawLogPath);
     /* Register the run so its log is addressable by a stable runId via query_log / grep_log. Best-effort: a failed index write must never fail the run itself. */
+    const registeredLogPath = auditStatus === 'persisted' ? relativeLogPath : auditFailure?.evidencePath;
     try {
+        if (!registeredLogPath)
+            throw new Error('run has no persisted audit evidence to register');
         const exitCodes = {};
         for (const r of results) {
             exitCodes[r.command] = r.exitCode;
@@ -342,7 +370,7 @@ async function runSuite(commands, workspacePath, options = {}) {
             commands,
             exitCodes,
             timestamp: new Date().toISOString(),
-            rawLogPath: relativeLogPath,
+            rawLogPath: registeredLogPath,
             lineCount: trimmedLogContent.split('\n').length
         });
     }

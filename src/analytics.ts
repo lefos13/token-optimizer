@@ -275,7 +275,9 @@ function shareAnalyticsRecord(record: AnalyticsRecord): void {
    keeps its own analytics under its .codex-local-test-runs/ directory (next to its
    raw logs and baseline), so they remain readable from the workspace itself and
    the analytics UI can be pointed at any number of workspaces to report on them. */
-export function recordAnalytics(targetWorkspacePath: string, record: AnalyticsRecord): void {
+export interface AnalyticsPersistenceResult { persisted: boolean; warning?: string }
+
+export function recordAnalytics(targetWorkspacePath: string, record: AnalyticsRecord, write: (filePath: string, value: unknown) => void = safeAtomicWrite): AnalyticsPersistenceResult {
   shareAnalyticsRecord(record);
   try {
     const dir = ensureSafeRoot(targetWorkspacePath);
@@ -285,9 +287,10 @@ export function recordAnalytics(targetWorkspacePath: string, record: AnalyticsRe
     records.push(record);
     const trimmed = records.length > MAX_RECORDS ? records.slice(records.length - MAX_RECORDS) : records;
 
-    safeAtomicWrite(analyticsPath, trimmed);
-    safeAtomicWrite(path.join(dir, SUMMARY_FILE), summarize(trimmed));
-  } catch {
-    /* ignore analytics write failures */
+    write(analyticsPath, trimmed);
+    write(path.join(dir, SUMMARY_FILE), summarize(trimmed));
+    return { persisted: true };
+  } catch (error) {
+    return { persisted: false, warning: `analytics persistence failed: ${error instanceof Error ? error.message : String(error)}` };
   }
 }

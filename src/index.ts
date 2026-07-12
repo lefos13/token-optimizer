@@ -51,8 +51,8 @@ function recordToolAnalytics(workspacePath: string, input: {
   logPath?: string;
   commands?: string[];
   exitCodes?: Record<string, number>;
-}): void {
-  recordAnalytics(workspacePath, buildAnalyticsRecord({
+}) {
+  return recordAnalytics(workspacePath, buildAnalyticsRecord({
     toolName: input.toolName,
     rawSourceText: input.rawSourceText,
     rawSourceBytes: input.rawSourceBytes,
@@ -475,8 +475,8 @@ export async function handleToolCall(request: any) {
         output.triage = triageResult;
       }
 
-      const text = jsonText(output);
-      recordToolAnalytics(workspacePath, {
+      let text = jsonText(output);
+      const analyticsResult = recordToolAnalytics(workspacePath, {
         toolName: 'run_test_verdict',
         rawSourceText: '',
         rawSourceBytes: suiteResult.rawSourceBytes,
@@ -490,6 +490,7 @@ export async function handleToolCall(request: any) {
         commands: commandsToRun,
         exitCodes
       });
+      if (analyticsResult.warning) { output.warnings = [...(output.warnings || []), analyticsResult.warning]; text = jsonText(output); }
 
       return {
         content: [
@@ -644,9 +645,9 @@ export async function handleToolCall(request: any) {
 
       const review = await queryCodeReview(filesToReview, workspacePath);
       const rawSourceText = filesToReview.map((f) => f.content).join('\n');
-      const output = { ...review, skipped };
-      const text = jsonText(output);
-      recordToolAnalytics(workspacePath, {
+      const output: any = { ...review, skipped };
+      let text = jsonText(output);
+      const analyticsResult = recordToolAnalytics(workspacePath, {
         toolName: 'run_changed_files_review',
         rawSourceText,
         llmInputText: rawSourceText,
@@ -654,6 +655,7 @@ export async function handleToolCall(request: any) {
         llmResult: review,
         avoidedRawOutput: true
       });
+      if (analyticsResult.warning) { output.warnings = [...(output.warnings || []), analyticsResult.warning]; text = jsonText(output); }
       return {
         content: [
           {
@@ -747,8 +749,8 @@ export async function handleToolCall(request: any) {
         ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, [...effective.warnings, ...suiteResult.warnings], suiteResult),
         providerStatus: 'unknown'
       };
-      const text = jsonText(output);
-      recordToolAnalytics(workspacePath, {
+      let text = jsonText(output);
+      const analyticsResult = recordToolAnalytics(workspacePath, {
         toolName: 'run_regression_check',
         rawSourceText: '',
         rawSourceBytes: suiteResult.rawSourceBytes,
@@ -759,6 +761,7 @@ export async function handleToolCall(request: any) {
         exitCodes,
         avoidedRawOutput: true
       });
+      if (analyticsResult.warning) { output.warnings = [...(output.warnings || []), analyticsResult.warning]; text = jsonText(output); }
 
       return {
         content: [
@@ -827,8 +830,8 @@ export async function handleToolCall(request: any) {
         ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, [...effective.warnings, ...suiteResult.warnings], suiteResult),
         providerStatus: digest.llmAvailable === false ? 'unavailable' : (digest.fallbackReason ? 'fallback' : 'available')
       };
-      const text = jsonText(output);
-      recordToolAnalytics(workspacePath, {
+      let text = jsonText(output);
+      const analyticsResult = recordToolAnalytics(workspacePath, {
         toolName: 'run_command_digest',
         rawSourceText: '',
         rawSourceBytes: suiteResult.rawSourceBytes,
@@ -841,6 +844,7 @@ export async function handleToolCall(request: any) {
         commands: commandsToRun,
         exitCodes
       });
+      if (analyticsResult.warning) { output.warnings = [...(output.warnings || []), analyticsResult.warning]; text = jsonText(output); }
 
       return {
         content: [{ type: 'text', text }]

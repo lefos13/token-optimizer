@@ -10,6 +10,8 @@ Execution profiles are `safe`, `standard`, and `unrestricted`; tool/project requ
 
 Execution metadata uses `signal: null` when no OS signal was observed; a value appears only for signal-terminated processes. `executionStatus: terminated` distinguishes those exits from `timed_out`. Command outcomes remain authoritative when audit-log persistence fails: inspect additive `auditStatus` and `auditFailure`, including any retained temporary evidence path.
 
+Command temp-stream and final audit failures never override exit/signal truth. Incomplete temp output is removed; fully fsynced evidence is retained and registered when rename alone fails. Treat registry, log-lifecycle, and analytics persistence entries in `warnings` as operational advisories.
+
 ## Overview
 
 Use the `mcp__token_optimizer` tools as the first validation path after code changes. Let the MCP server run validation commands, persist full logs under the target workspace, and ask Token Optimizer for compact verdicts, changed-file review, failure triage, or regression checks before deciding whether raw logs are needed.

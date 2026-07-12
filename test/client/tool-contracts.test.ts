@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { buildExecutionMetadata } from '../../src/execution-metadata';
 process.env.TOKEN_OPTIMIZER_NO_AUTOSTART = '1';
 import { handleToolCall } from '../../src/index';
@@ -69,4 +72,18 @@ test('MCP CallTool handler preserves spawn-failure compatibility shape', async (
   assert.equal(payload.exitCode, -1);
   assert.equal(typeof payload.rawLogPath, 'string');
   assert.equal(Array.isArray(payload.warnings), true);
+});
+
+test('MCP command response includes local analytics persistence warning', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'analytics-warning-'));
+  const dir = path.join(root, '.codex-local-test-runs'); fs.mkdirSync(dir);
+  const outside = path.join(root, 'outside.json'); fs.writeFileSync(outside, '[]');
+  fs.symlinkSync(outside, path.join(dir, 'analytics.json'));
+  const result: any = await handleToolCall({ params: { name: 'run_command_digest', arguments: {
+    workspacePath: root, command: 'printf ok', intent: 'contract', executionProfile: 'safe', allowedCommandPrefixes: ['printf']
+  } } });
+  const payload = JSON.parse(result.content[0].text);
+  assert.equal(payload.exitCode, 0);
+  assert.ok(payload.warnings.some((warning: string) => /analytics persistence failed/.test(warning)));
+  fs.rmSync(root, { recursive: true, force: true });
 });
