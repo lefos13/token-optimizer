@@ -87,3 +87,39 @@ test('MCP command response includes local analytics persistence warning', async 
   assert.ok(payload.warnings.some((warning: string) => /analytics persistence failed/.test(warning)));
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+function analyticsFailureWorkspace(): { root: string; log: string } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'analytics-all-tools-'));
+  const dir = path.join(root, '.codex-local-test-runs'); fs.mkdirSync(dir);
+  const log = path.join(dir, 'run.log'); fs.writeFileSync(log, 'alpha\nbeta\n');
+  const outside = path.join(root, 'outside.json'); fs.writeFileSync(outside, '[]');
+  fs.symlinkSync(outside, path.join(dir, 'analytics.json'));
+  return { root, log };
+}
+
+test('early changed-file review response includes analytics persistence warning', async () => {
+  const { root } = analyticsFailureWorkspace();
+  const result: any = await handleToolCall({ params: { name: 'run_changed_files_review', arguments: { workspacePath: root, changedFiles: ['missing.ts'] } } });
+  const payload = JSON.parse(result.content[0].text);
+  assert.equal(payload.summary, 'No changed files could be read for review.');
+  assert.ok(payload.warnings.some((warning: string) => /analytics persistence failed/.test(warning)));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('grep log response includes analytics persistence warning', async () => {
+  const { root, log } = analyticsFailureWorkspace();
+  const result: any = await handleToolCall({ params: { name: 'grep_log', arguments: { workspacePath: root, logPath: log, pattern: 'beta' } } });
+  const payload = JSON.parse(result.content[0].text);
+  assert.equal(payload.totalMatches, 1);
+  assert.ok(payload.warnings.some((warning: string) => /analytics persistence failed/.test(warning)));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('early scout response includes analytics persistence warning', async () => {
+  const { root } = analyticsFailureWorkspace();
+  const result: any = await handleToolCall({ params: { name: 'scout_codebase', arguments: { workspacePath: root, goal: 'the and for' } } });
+  const payload = JSON.parse(result.content[0].text);
+  assert.equal(payload.scoutAvailable, false);
+  assert.ok(payload.warnings.some((warning: string) => /analytics persistence failed/.test(warning)));
+  fs.rmSync(root, { recursive: true, force: true });
+});
