@@ -51,7 +51,7 @@ function directMeasure(spec) {
     const deadline = setTimeout(terminate, spec.measurementTimeoutMs || 240000);
     child.stdout.on('data', collect); child.stderr.on('data', collect); child.on('error', error => { clearTimeout(deadline); terminate(); reject(error); });
     sampleTree(child.pid, state);
-    const timer = setInterval(() => sampleTree(child.pid, state), 2);
+    const timer = setInterval(() => sampleTree(child.pid, state), 20);
     child.on('close', code => {
       sampleTree(child.pid, state); clearInterval(timer); clearTimeout(deadline);
       setImmediate(() => resolve({ exitCode: code ?? -1, rawBytes: state.bytes, peakRssMb: state.available ? state.peakKb / 1024 : null, durationMs: Number(process.hrtime.bigint() - started) / 1e6 }));
@@ -92,7 +92,7 @@ async function productMeasure(spec) {
   const client = new Client({ name: 'release-benchmark', version: '1.0.0' });
   const state = { peakKb: 0, available: false }; const started = process.hrtime.bigint(); let timer; let callDeadline;
   try {
-    await client.connect(transport); sampleTree(transport.pid, state); timer = setInterval(() => sampleTree(transport.pid, state), 2);
+    await client.connect(transport); sampleTree(transport.pid, state); timer = setInterval(() => sampleTree(transport.pid, state), 20);
     const command = [spec.command, ...spec.args].map(part => JSON.stringify(part)).join(' ');
     const toolCall = client.callTool({ name: 'run_command_digest', arguments: { workspacePath: root, command, intent: `Inspect TOKEN=${secret}`, executionProfile: 'unrestricted', timeoutMs: spec.productTimeoutMs || 180000 } });
     const result = await Promise.race([toolCall, new Promise((_, reject) => { callDeadline = setTimeout(() => reject(Object.assign(new Error('product tool call timed out'), { code: 'BENCHMARK_PRODUCT_TIMEOUT' })), spec.productTimeoutMs || 185000); })]);

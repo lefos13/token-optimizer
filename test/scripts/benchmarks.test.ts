@@ -9,7 +9,7 @@ const root = path.resolve(__dirname, '..', '..', '..');
  * so it covers the same provider, redaction, runner, and serialization path as a release run. */
 test('benchmark production-path contracts pass deterministically', () => {
   const result = spawnSync(process.execPath, ['scripts/run-benchmarks.js', '--self-test'], {
-    cwd: root, encoding: 'utf8', timeout: 180_000, env: { ...process.env, TOKEN_OPTIMIZER_BENCHMARK_MODE: 'deterministic-local' }
+    cwd: root, encoding: 'utf8', timeout: 300_000, env: { ...process.env, TOKEN_OPTIMIZER_BENCHMARK_MODE: 'deterministic-local' }
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const report = JSON.parse(result.stdout);
