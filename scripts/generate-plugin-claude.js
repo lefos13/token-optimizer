@@ -74,7 +74,7 @@ try {
   /* Bump this on every meaningful change. Claude only pulls plugin updates
      when the version changes; keeping it static pins installs to the commit
      they were first installed from and updates become silent no-ops. */
-  const VERSION = "2.0.0-beta.10";
+  const VERSION = "2.0.0-beta.11";
 
   /* Pin the runtime dep to the version this repo was built and tested against. */
   const sdkVersion = require(
@@ -275,7 +275,7 @@ the local path must be a git repository (this one is).
 For local development without a marketplace:
 
 \`\`\`bash
-claude --plugin-dir ${pluginDir}
+claude --plugin-dir ./plugin/claude
 \`\`\`
 
 Then restart Claude Code (or run \`/reload-plugins\`) so the server and skill load.

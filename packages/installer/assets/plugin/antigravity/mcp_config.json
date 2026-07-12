@@ -1,10 +1,8 @@
 {
   "mcpServers": {
     "token_optimizer": {
-      "command": "node",
-      "args": [
-        "/Users/eevangelinos/.gemini/config/plugins/token-optimizer/server/start.js"
-      ],
+      "command": "./server/start.sh",
+      "args": [],
       "env": {
         "LLM_GATEWAY_URL": "https://llm-proxy.lnf.gr/v1",
         "LOCAL_LLM_API_URL": "http://localhost:8080/v1",

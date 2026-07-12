@@ -1,6 +1,5 @@
 const fs = require("fs");
 const path = require("path");
-const os = require("os");
 const { buildStartJs } = require("./launcher-template");
 
 /* Antigravity plugin flow.
@@ -89,7 +88,7 @@ try {
      install (Antigravity does not document version-gated update pulls the way
      Claude Code's marketplace install does, but keeping this accurate still
      matters for users diffing or re-staging the plugin folder). */
-  const VERSION = "2.0.0-beta.10";
+  const VERSION = "2.0.0-beta.11";
 
   const sdkVersion = require(
     path.join(
@@ -132,8 +131,8 @@ try {
   const mcpConfigJson = {
     mcpServers: {
       token_optimizer: {
-        command: "node",
-        args: [path.join(os.homedir(), ".gemini", "config", "plugins", PLUGIN_NAME, "server", "start.js")],
+        command: "./server/start.sh",
+        args: [],
         env: {
           LLM_GATEWAY_URL: "https://llm-proxy.lnf.gr/v1",
           LOCAL_LLM_API_URL: "http://localhost:8080/v1",
@@ -266,7 +265,7 @@ generated \`plugin/antigravity/\` directory where Antigravity looks for plugins:
 
 \`\`\`bash
 mkdir -p ~/.gemini/config/plugins
-cp -R ${pluginDir} ~/.gemini/config/plugins/${PLUGIN_NAME}
+cp -R ./plugin/antigravity ~/.gemini/config/plugins/${PLUGIN_NAME}
 \`\`\`
 
 Then restart Antigravity (or reload plugins, if your version exposes that

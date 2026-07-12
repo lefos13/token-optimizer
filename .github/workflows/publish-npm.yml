@@ -1,8 +1,8 @@
 name: Publish npm package
 
 on:
-  push:
-    branches: [main]
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -21,23 +21,16 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '22'
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
       - run: npm ci
-      - run: npm test
-      - run: npm run build:installer
-      - run: npm pack ./packages/installer --dry-run
-
-      - name: Publish a new installer version
-        working-directory: packages/installer
-        run: |
-          PACKAGE_NAME=$(node -p "require('./package.json').name")
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-
-          if npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version >/dev/null 2>&1; then
-            echo "$PACKAGE_NAME@$PACKAGE_VERSION already exists; skipping publish."
-          else
-            npm publish --access public
-          fi
+      - run: npm run release:preflight
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+      - id: policy
+        shell: bash
+        run: echo "dist_tag=$(node scripts/release-preflight.js --dist-tag | node -pe 'JSON.parse(fs.readFileSync(0)).distTag')" >> "$GITHUB_OUTPUT"
+      - working-directory: packages/installer
+        run: npm publish --provenance --access public --tag "${{ steps.policy.outputs.dist_tag }}"

@@ -11,7 +11,7 @@ flooding chat context with raw logs.
 
 ## Contents
 
-- `plugin.json` — required plugin marker/manifest (`token-optimizer` v2.0.0-beta.10).
+- `plugin.json` — required plugin marker/manifest (`token-optimizer` v2.0.0-beta.11).
 - `mcp_config.json` — registers the `token_optimizer` stdio server (tools exposed as `mcp__token_optimizer__*`), using the same `mcpServers` shape as Antigravity's global `~/.gemini/config/mcp_config.json`.
 - `server/` — the compiled MCP server plus a self-locating launcher (`start.sh`) and a minimal `package.json`.
 - `skills/token-optimizer/SKILL.md` — usage guidance, copied from `skill/skill-example.md`.
@@ -60,7 +60,7 @@ generated `plugin/antigravity/` directory where Antigravity looks for plugins:
 
 ```bash
 mkdir -p ~/.gemini/config/plugins
-cp -R /Users/eevangelinos/.gemini/antigravity/scratch/local-tester-mcp-production/plugin/antigravity ~/.gemini/config/plugins/token-optimizer
+cp -R ./plugin/antigravity ~/.gemini/config/plugins/token-optimizer
 ```
 
 Then restart Antigravity (or reload plugins, if your version exposes that

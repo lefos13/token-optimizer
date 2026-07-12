@@ -183,6 +183,22 @@ If a local or gateway provider is unavailable, validation command exit codes
 remain authoritative and Token Optimizer reports the unavailable summary rather
 than claiming an LLM verdict.
 
+## Release procedure
+
+Releases are published only from an approved GitHub Release whose tag is exactly
+`v<package version>`. Stable versions publish under `latest`; `alpha`, `beta`,
+and `rc` versions publish only under their matching npm dist-tag. Before creating the tag, commit generated
+assets and run `npm ci`, `npm run release:preflight`, and `npm test`. The
+preflight rejects dirty trees, version or tag mismatches, generated drift,
+high/critical audit findings, and invalid package/SBOM output. CycloneDX files
+are written to the ignored `release-artifacts/` directory. The release workflow
+publishes the installer with npm trusted-publishing provenance; it never
+publishes from a branch push.
+
+Local and pull-request validation can use
+`npm run release:preflight -- --allow-no-tag`; this explicit bypass is reported
+as `NO_RELEASE_TAG` and is never used by the publishing workflow.
+
 ## Troubleshooting
 
 - Restart your client after installing or changing provider settings.

@@ -57,7 +57,7 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "2.0.0-beta.10";
+  const VERSION = "2.0.0-beta.11";
 
   const sdkVersion = require(
     path.join(
@@ -335,7 +335,7 @@ install or enable the \`token-optimizer\` plugin from Codex.
 codex plugin marketplace add /path/to/token-optimizer-mcp
 \`\`\`
 
-For local development without marketplace installation, load \`${pluginDir}\`
+For local development without marketplace installation, load \`./plugin/codex\`
 directly if your Codex surface supports direct plugin paths.
 `;
   fs.writeFileSync(path.join(pluginDir, "README.md"), readme);

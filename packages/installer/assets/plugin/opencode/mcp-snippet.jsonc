@@ -3,7 +3,7 @@
     "type": "local",
     "command": [
       "node",
-      "/Users/eevangelinos/.config/opencode/token-optimizer-server/start.js"
+      "${HOME}/.config/opencode/token-optimizer-server/start.js"
     ],
     "environment": {
       "LLM_GATEWAY_URL": "{env:LLM_GATEWAY_URL}",

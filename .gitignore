@@ -18,3 +18,4 @@ plugin/cursor/
 
 .DS_Store
 graphify-out/
+release-artifacts/

@@ -1,0 +1,28 @@
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  cross-platform:
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest, node: 20, full: true }
+          - { os: ubuntu-latest, node: 22, full: true }
+          - { os: macos-latest, node: 22, full: false }
+          - { os: windows-latest, node: 22, full: false }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with: { node-version: '${{ matrix.node }}', cache: npm }
+      - run: npm ci
+      - run: npm run build && npm run build:gateway
+      - run: npm run test:security
+      - if: matrix.full
+        run: npm test
+      - run: npm run verify:generated
+      - if: matrix.full
+        run: npm pack --dry-run && npm pack ./packages/installer --dry-run
+      - if: matrix.full
+        run: npm run release:preflight -- --allow-no-tag
