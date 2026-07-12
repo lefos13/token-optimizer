@@ -41,4 +41,21 @@ function inspectInventory(pack, packageRoot, kind) {
   }
 }
 
-module.exports = { DIST_TAGS, distTagForVersion, validateReleaseTag, validateCycloneDx, inspectInventory };
+const SECRET_PATTERN = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|(?:ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|npm_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{32,})|(?:password|api[_-]?key|auth[_-]?token)\s*[:=]\s*["'][^"'\s]{16,}["']/i;
+
+function inspectTrackedFiles(root, tracked, readFile = fs.readFileSync, lstat = fs.lstatSync) {
+  /* Test fixtures containing deliberate signatures are the only repository
+   * exception; production and generated artifacts receive identical scanning. */
+  const fixtureAllowlist = [/^test\/fixtures\/security\/(?:private-key|token-signatures)\.txt$/];
+  for (const relative of tracked) {
+    if (!relative || fixtureAllowlist.some(pattern => pattern.test(relative))) continue;
+    const absolute = path.resolve(root, relative);
+    if (!absolute.startsWith(path.resolve(root) + path.sep)) throw new Error(`REPOSITORY_PATH_REJECTED:${relative}`);
+    const stat = lstat(absolute); if (stat.isSymbolicLink()) throw new Error(`REPOSITORY_SYMLINK_REJECTED:${relative}`);
+    if (!stat.isFile() || stat.size > 1024 * 1024) continue;
+    const buffer = readFile(absolute); if (buffer.subarray(0, 8192).includes(0)) continue;
+    if (SECRET_PATTERN.test(buffer.toString('utf8'))) throw new Error(`REPOSITORY_SECRET_REJECTED:${relative}`);
+  }
+}
+
+module.exports = { DIST_TAGS, distTagForVersion, validateReleaseTag, validateCycloneDx, inspectInventory, inspectTrackedFiles };

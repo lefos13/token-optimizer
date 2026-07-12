@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const root = path.resolve(__dirname, '..', '..', '..');
-const { validateReleaseTag, inspectInventory, validateCycloneDx } = require('../../../scripts/release-policy');
+const { validateReleaseTag, inspectInventory, validateCycloneDx, inspectTrackedFiles } = require('../../../scripts/release-policy');
 
 test('tag policy reports stable machine codes and never maps prerelease to latest', () => {
   assert.deepEqual(validateReleaseTag('2.0.0', undefined), { code: 'TAG_REQUIRED' });
@@ -32,6 +32,14 @@ test('package inventory rejects forbidden paths and secrets in bounded content',
 test('schema validator rejects missing and structurally plausible invalid SBOMs', () => {
   assert.equal(validateCycloneDx(undefined), false);
   assert.equal(validateCycloneDx({ bomFormat: 'CycloneDX', specVersion: '1.6', serialNumber: 'x', version: 1, metadata: { timestamp: 'not-a-date', component: {} }, components: [] }), false);
+});
+
+test('tracked repository scan rejects a committed high-confidence secret', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tracked-secret-'));
+  fs.writeFileSync(path.join(directory, 'config.txt'), 'api_key="abcdefghijklmnopqrstuvwxyz123456"\n');
+  assert.throws(() => inspectTrackedFiles(directory, ['config.txt']), /REPOSITORY_SECRET_REJECTED:config\.txt/);
+  fs.writeFileSync(path.join(directory, 'binary.bin'), Buffer.from([0, 1, 2, 3]));
+  assert.doesNotThrow(() => inspectTrackedFiles(directory, ['binary.bin']));
 });
 
 test('generated drift returns stable JSON code and restores a tracked tree', () => {

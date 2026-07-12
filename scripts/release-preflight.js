@@ -1,7 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
-const { distTagForVersion, validateReleaseTag, validateCycloneDx, inspectInventory } = require("./release-policy");
+const { distTagForVersion, validateReleaseTag, validateCycloneDx, inspectInventory, inspectTrackedFiles } = require("./release-policy");
 const root = path.resolve(__dirname, "..");
 const artifacts = path.join(root, process.env.RELEASE_ARTIFACT_DIR || "release-artifacts");
 const run = (command, args, options = {}) => spawnSync(command, args, { cwd: root, encoding: "utf8", shell: process.platform === "win32", ...options });
@@ -34,6 +34,10 @@ if (!process.env.PREFLIGHT_ALLOW_DIRTY && !process.argv.includes("--sbom-only"))
 }
 const trackedDiff = run("git", ["diff", "--cached", "--no-ext-diff", "--unified=0"]).stdout;
 if (/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|(?:ghp|github_pat|sk|npm)_[A-Za-z0-9_-]{16,}/.test(trackedDiff)) fail("REPOSITORY_SECRET_REJECTED", "staged diff");
+try {
+  const tracked = run("git", ["ls-files", "-z"]).stdout.split("\0").filter(Boolean);
+  inspectTrackedFiles(root, tracked);
+} catch (error) { fail(error.message.split(":")[0], error.message); }
 fs.mkdirSync(artifacts, { recursive: true });
 for (const [name, dir] of [["root", root], ["installer", path.join(root, "packages/installer")]]) {
   const output = path.join(artifacts, `${name}.cdx.json`);
