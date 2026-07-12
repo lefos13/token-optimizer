@@ -126,7 +126,11 @@ exec node "$ROOT/start.js"
   const mcpSnippet = {
     token_optimizer: {
       type: "local",
-      command: ["node", path.join(installedServerDir, "start.js")],
+      /* installedServerDir is a portable "${HOME}/..." placeholder string, not a real
+         filesystem path on the machine running this generator -- path.join would use this
+         platform's separator (backslash on Windows) and produce a mismatched output
+         depending on which OS generated the file. Always forward-slash join instead. */
+      command: ["node", `${installedServerDir}/start.js`],
       environment: {
         LLM_GATEWAY_URL: "{env:LLM_GATEWAY_URL}",
         LLM_GATEWAY_TOKEN: "{env:LLM_GATEWAY_TOKEN}",
