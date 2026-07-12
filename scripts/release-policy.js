@@ -12,6 +12,14 @@ function distTagForVersion(version) {
   return match[4] || "latest";
 }
 
+function validateReleaseTag(version, tag, allowNoTag = false) {
+  if (!tag) return allowNoTag ? { distTag: distTagForVersion(version), warning: "NO_RELEASE_TAG" } : { code: "TAG_REQUIRED" };
+  let distTag; try { distTag = distTagForVersion(version); } catch (error) { return { code: error.message }; }
+  if (!/^v\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?$/.test(tag)) return { code: "TAG_POLICY_REJECTED" };
+  if (tag !== `v${version}`) return { code: "TAG_VERSION_MISMATCH" };
+  return { distTag, warning: null };
+}
+
 function validateCycloneDx(document) {
   const schema = JSON.parse(fs.readFileSync(path.join(__dirname, "schemas", "cyclonedx-1.6-release.schema.json"), "utf8"));
   const ajv = new Ajv({ strict: true }); addFormats(ajv);
@@ -33,4 +41,4 @@ function inspectInventory(pack, packageRoot, kind) {
   }
 }
 
-module.exports = { DIST_TAGS, distTagForVersion, validateCycloneDx, inspectInventory };
+module.exports = { DIST_TAGS, distTagForVersion, validateReleaseTag, validateCycloneDx, inspectInventory };

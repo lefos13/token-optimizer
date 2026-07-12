@@ -1,7 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
-const { distTagForVersion, validateCycloneDx, inspectInventory } = require("./release-policy");
+const { distTagForVersion, validateReleaseTag, validateCycloneDx, inspectInventory } = require("./release-policy");
 const root = path.resolve(__dirname, "..");
 const artifacts = path.join(root, process.env.RELEASE_ARTIFACT_DIR || "release-artifacts");
 const run = (command, args, options = {}) => spawnSync(command, args, { cwd: root, encoding: "utf8", shell: process.platform === "win32", ...options });
@@ -26,9 +26,8 @@ for (const directory of ["plugin/claude", "plugin/codex", "packages/installer/as
 const tag = process.env.RELEASE_TAG || process.env.GITHUB_REF_NAME;
 const distTag = (() => { try { return distTagForVersion(rootPackage.version); } catch (error) { fail(error.message, rootPackage.version); } })();
 if (process.argv.includes("--dist-tag")) { console.log(JSON.stringify({ ok: true, code: "DIST_TAG_DERIVED", version: rootPackage.version, distTag })); process.exit(0); }
-if (!tag && !process.argv.includes("--allow-no-tag") && !process.argv.includes("--sbom-only")) fail("TAG_REQUIRED", null);
-if (tag && tag !== `v${rootPackage.version}`) fail("TAG_VERSION_MISMATCH", { tag, version: rootPackage.version });
-if (tag && !/^v\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?$/.test(tag)) fail("TAG_POLICY_REJECTED", tag);
+const tagPolicy = validateReleaseTag(rootPackage.version, tag, process.argv.includes("--allow-no-tag") || process.argv.includes("--sbom-only"));
+if (tagPolicy.code) fail(tagPolicy.code, { tag, version: rootPackage.version });
 if (!process.env.PREFLIGHT_ALLOW_DIRTY && !process.argv.includes("--sbom-only")) {
   const dirty = run("git", ["status", "--porcelain", "--untracked-files=all"]).stdout.split(/\r?\n/).filter(Boolean).filter(line => !line.slice(3).startsWith("release-artifacts/"));
   if (dirty.length) fail("DIRTY_TREE", dirty);
@@ -52,8 +51,9 @@ if (!process.argv.includes("--sbom-only")) {
     if (result.status !== 0) fail(code, result.stderr || result.stdout);
   }
   for (const [kind, packagePath, packageRoot] of [["root", ".", root], ["installer", "./packages/installer", path.join(root, "packages/installer")]]) {
+    const packCode = kind === "root" ? "ROOT_PACK_FAILED" : "INSTALLER_PACK_FAILED";
     const result = run("npm", ["pack", packagePath, "--dry-run", "--json"]);
-    if (result.status !== 0) fail(`${kind.toUpperCase()}_PACK_FAILED`, result.stderr);
+    if (result.status !== 0) fail(packCode, result.stderr);
     let pack; try { [pack] = JSON.parse(result.stdout); inspectInventory(pack, packageRoot, kind); } catch (error) { fail(error.message.split(":")[0], error.message); }
   }
 }

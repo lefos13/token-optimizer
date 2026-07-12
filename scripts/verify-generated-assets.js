@@ -9,7 +9,9 @@ const generated = spawnSync("npm", ["run", "build:installer"], { stdio: "inherit
 if (generated.status !== 0) process.exit(20);
 const status = spawnSync("git", ["status", "--porcelain", "--", ".claude-plugin", ".agents", "plugin/claude", "plugin/codex", "packages/installer/assets"], { encoding: "utf8" });
 if (status.stdout.trim()) {
-  spawnSync("git", ["checkout", "HEAD", "--", ".claude-plugin", ".agents", "plugin/claude", "plugin/codex", "packages/installer/assets"]);
+  for (const target of [".claude-plugin", ".agents", "plugin/claude", "plugin/codex", "packages/installer/assets"]) {
+    spawnSync("git", ["checkout", "HEAD", "--", target]);
+  }
   if (before.stdout) spawnSync("git", ["apply", "--binary", "-"], { input: before.stdout });
   console.error(JSON.stringify({ ok: false, code: "GENERATED_ASSET_DRIFT", files: status.stdout.trim().split(/\r?\n/) }));
   process.exit(21);
