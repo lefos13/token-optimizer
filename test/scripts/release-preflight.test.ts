@@ -28,6 +28,8 @@ test('package inventory rejects forbidden paths and secrets in bounded content',
   assert.throws(() => inspectInventory({ files: [...base, { path: 'node_modules/x.js' }] }, directory, 'root'), /PACKAGE_INVENTORY_REJECTED/);
   fs.writeFileSync(path.join(directory, 'dist/index.js'), '-----BEGIN PRIVATE' + ' KEY-----');
   assert.throws(() => inspectInventory({ files: base }, directory, 'root'), /PACKAGE_SECRET_REJECTED/);
+  fs.writeFileSync(path.join(directory, 'dist/index.js'), 'x'.repeat(1024 * 1024 + 1));
+  assert.throws(() => inspectInventory({ files: base }, directory, 'root'), /PACKAGE_FILE_OVERSIZE/);
 });
 
 test('schema validator rejects missing and structurally plausible invalid SBOMs', () => {
@@ -65,6 +67,25 @@ test('generated drift returns stable JSON code and restores a tracked tree', () 
   assert.equal(result.status, 21); assert.match(result.stderr, /"code":"GENERATED_ASSET_DRIFT"/);
   assert.equal(fs.readFileSync(path.join(directory, 'plugin/codex/value.txt'), 'utf8'), 'before\n');
   assert.equal(spawnSync('git', ['status', '--porcelain'], { cwd: directory, encoding: 'utf8' }).stdout, '');
+});
+
+test('generated verification rejects caller state before mutation and preserves index and bytes', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'generated-dirty-'));
+  fs.mkdirSync(path.join(directory, 'scripts')); fs.copyFileSync(path.join(root, 'scripts', 'verify-generated-assets.js'), path.join(directory, 'scripts', 'verify-generated-assets.js'));
+  fs.writeFileSync(path.join(directory, 'tracked.txt'), 'before\n');
+  fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ scripts: { 'build:installer': "node -e \"require('fs').writeFileSync('mutated','yes')\"" } }));
+  for (const args of [['init'], ['config', 'user.email', 'test@example.com'], ['config', 'user.name', 'Test'], ['add', '.'], ['commit', '-m', 'fixture']]) assert.equal(spawnSync('git', args, { cwd: directory }).status, 0);
+  fs.writeFileSync(path.join(directory, 'tracked.txt'), 'staged\n'); spawnSync('git', ['add', 'tracked.txt'], { cwd: directory });
+  fs.writeFileSync(path.join(directory, 'tracked.txt'), 'unstaged\n'); fs.writeFileSync(path.join(directory, 'untracked.txt'), 'owned\n');
+  const beforeIndex = spawnSync('git', ['diff', '--cached', '--binary'], { cwd: directory, encoding: 'utf8' }).stdout;
+  const beforeStatus = spawnSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: directory, encoding: 'utf8' }).stdout;
+  const result = spawnSync(process.execPath, ['scripts/verify-generated-assets.js'], { cwd: directory, encoding: 'utf8' });
+  assert.equal(result.status, 22); assert.match(result.stderr, /GENERATED_CHECK_DIRTY/);
+  assert.equal(fs.readFileSync(path.join(directory, 'tracked.txt'), 'utf8'), 'unstaged\n');
+  assert.equal(fs.readFileSync(path.join(directory, 'untracked.txt'), 'utf8'), 'owned\n');
+  assert.equal(spawnSync('git', ['diff', '--cached', '--binary'], { cwd: directory, encoding: 'utf8' }).stdout, beforeIndex);
+  assert.equal(spawnSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: directory, encoding: 'utf8' }).stdout, beforeStatus);
+  assert.equal(fs.existsSync(path.join(directory, 'mutated')), false);
 });
 
 /*
@@ -115,6 +136,24 @@ test('runPreflight reports dirty, tag, staged-secret, and installer-pack failure
     ['INSTALLER_PACK_FAILED', { commands: { ...adapters().commands, pack: (kind: string) => ({ status: kind === 'installer' ? 1 : 0, stdout: JSON.stringify([{ files: ['LICENSE', 'NOTICE', 'README.md', 'package.json', 'dist/index.js'].map(file => ({ path: file })) }]), stderr: 'installer pack failed' }) } }],
   ];
   for (const [code, override] of scenarios) assert.throws(() => runPreflight(root, adapters(override)), (error: any) => error instanceof PreflightFailure && error.code === code);
+});
+
+test('every git command failure is authoritative and machine-coded', () => {
+  for (const operation of ['status', 'diff', 'ls-files']) {
+    const base = adapters();
+    const env = operation === 'status' ? { RELEASE_TAG: 'v2.0.0-beta.11' } : base.env;
+    const run = (command: string, args: string[]) => command === 'git' && args[0] === operation
+      ? { status: 128, stdout: '', stderr: 'not a git repository', error: undefined }
+      : { status: 0, stdout: '', stderr: '' };
+    assert.throws(() => runPreflight(root, adapters({ env, run })), (error: any) => error instanceof PreflightFailure && error.code === 'GIT_COMMAND_FAILED');
+  }
+});
+
+test('publish workflow runs the complete release suite before preflight and publish', () => {
+  const workflow = fs.readFileSync(path.join(root, '.github/workflows/publish-npm.yml'), 'utf8');
+  const commands = ['npm run build', 'npm run build:gateway', 'npm run test:security', 'npm test', 'npm run verify:generated', 'npm pack . --dry-run --json', 'npm pack ./packages/installer --dry-run --json', 'npm run release:preflight', 'npm publish'];
+  let previous = -1;
+  for (const command of commands) { const current = workflow.indexOf(command); assert.ok(current > previous, `${command} must follow the prior release gate`); previous = current; }
 });
 
 test('version drift from an injected filesystem reports VERSION_MISMATCH', () => {

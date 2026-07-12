@@ -21,6 +21,11 @@ function runPreflight(root, injected = {}) {
   }));
   const commands = injected.commands || {};
   const fail = (code, details) => { throw new PreflightFailure(code, details); };
+  const git = args => {
+    const result = execute("git", args);
+    if (result.status !== 0 || result.error) fail("GIT_COMMAND_FAILED", { command: args[0], status: result.status, error: result.error?.message, stderr: result.stderr });
+    return result;
+  };
   const readJson = file => JSON.parse(io.readFileSync(path.join(root, file), "utf8"));
   const rootPackage = readJson("package.json");
   const installerPackage = readJson("packages/installer/package.json");
@@ -54,13 +59,13 @@ function runPreflight(root, injected = {}) {
   if (tagPolicy.code) fail(tagPolicy.code, { tag, version: rootPackage.version });
 
   if (!env.PREFLIGHT_ALLOW_DIRTY && !argv.includes("--sbom-only")) {
-    const dirty = execute("git", ["status", "--porcelain", "--untracked-files=all"]).stdout.split(/\r?\n/).filter(Boolean).filter(line => !line.slice(3).startsWith("release-artifacts/"));
+    const dirty = git(["status", "--porcelain", "--untracked-files=all"]).stdout.split(/\r?\n/).filter(Boolean).filter(line => !line.slice(3).startsWith("release-artifacts/"));
     if (dirty.length) fail("DIRTY_TREE", dirty);
   }
-  const staged = execute("git", ["diff", "--cached", "--no-ext-diff", "--unified=0"]).stdout;
+  const staged = git(["diff", "--cached", "--no-ext-diff", "--unified=0"]).stdout;
   if (policy.SECRET_PATTERN.test(staged)) fail("REPOSITORY_SECRET_REJECTED", "staged diff");
   try {
-    const tracked = execute("git", ["ls-files", "-z"]).stdout.split("\0").filter(Boolean);
+    const tracked = git(["ls-files", "-z"]).stdout.split("\0").filter(Boolean);
     policy.inspectTrackedFiles(root, tracked);
   } catch (error) { fail(error.message.split(":")[0], error.message); }
 

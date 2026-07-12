@@ -41,8 +41,11 @@ function inspectInventory(pack, packageRoot, kind) {
   for (const file of paths) {
     if (!allowed(file) || forbiddenPath.test(file)) throw new Error(`PACKAGE_INVENTORY_REJECTED:${kind}:${file}`);
     const absolute = path.resolve(packageRoot, file);
-    if (!absolute.startsWith(path.resolve(packageRoot) + path.sep) || !fs.existsSync(absolute) || fs.statSync(absolute).size > 1024 * 1024) continue;
-    if (secret.test(fs.readFileSync(absolute, "utf8"))) throw new Error(`PACKAGE_SECRET_REJECTED:${kind}:${file}`);
+    if (!absolute.startsWith(path.resolve(packageRoot) + path.sep) || !fs.existsSync(absolute)) continue;
+    const content = fs.readFileSync(absolute);
+    if (content.subarray(0, 8192).includes(0)) continue;
+    if (content.length > 1024 * 1024) throw new Error(`PACKAGE_FILE_OVERSIZE:${kind}:${file}`);
+    if (secret.test(content.toString("utf8"))) throw new Error(`PACKAGE_SECRET_REJECTED:${kind}:${file}`);
   }
 }
 

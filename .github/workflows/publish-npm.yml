@@ -26,6 +26,13 @@ jobs:
           package-manager-cache: false
 
       - run: npm ci
+      - run: npm run build
+      - run: npm run build:gateway
+      - run: npm run test:security
+      - run: npm test
+      - run: npm run verify:generated
+      - run: npm pack . --dry-run --json
+      - run: npm pack ./packages/installer --dry-run --json
       - run: npm run release:preflight
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
