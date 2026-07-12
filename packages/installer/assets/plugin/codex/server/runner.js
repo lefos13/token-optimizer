@@ -346,17 +346,19 @@ async function runSuite(commands, workspacePath, options = {}) {
         let evidenceExists = Boolean(retainedPath && fs.existsSync(retainedPath));
         let tempCleanup = evidenceExists ? 'retained' : 'none';
         if (failureStage === 'write' && managedLog) {
-            await managedLog.abort();
-            tempCleanup = fs.existsSync(managedLog.temporaryPath) ? 'retained' : 'removed';
+            const cleanup = await managedLog.abort();
+            tempCleanup = cleanup.status;
         }
         if ((failureStage === 'fsync' || failureStage === 'close') && !evidenceExists)
             tempCleanup = 'removed';
-        if (failureStage === 'rename' && typeof error === 'object' && error && 'retentionFailed' in error)
-            tempCleanup = 'removed';
+        if (typeof error === 'object' && error && 'cleanupOutcome' in error)
+            tempCleanup = error.cleanupOutcome;
+        const orphanPath = typeof error === 'object' && error && 'orphanPath' in error ? String(error.orphanPath) : undefined;
         auditFailure = {
             stage: failureStage,
             ...(code ? { code } : {}), message: error instanceof Error ? error.message : String(error),
             ...(evidenceExists ? { evidencePath: path.relative(workspacePath, retainedPath) } : {}),
+            ...(orphanPath && path.resolve(orphanPath).startsWith(fs.realpathSync(path.resolve(workspacePath, '.codex-local-test-runs')) + path.sep) ? { orphanPath: path.relative(fs.realpathSync(workspacePath), orphanPath) } : {}),
             tempCleanup,
         };
     }

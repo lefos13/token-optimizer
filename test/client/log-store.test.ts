@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { Writable } from 'node:stream';
 import { createRunLog, ensureLogGitignore, getLogStatus, purgeLogs, pruneLogs } from '../../src/log-store';
 import { appendRun, loadRun } from '../../src/registry';
 import { resolveLogPath } from '../../src/registry';
@@ -61,6 +62,28 @@ test('prune and purge exclude active logs until final close', async () => {
   assert.equal(await fs.access(second.temporaryPath).then(() => true, () => false), true);
   await second.close();
   assert.equal(await fs.readFile(second.absolutePath, 'utf8'), 'survives purge');
+});
+
+test('close-time stream error settles as close failure and cleans active state', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'task5-stream-error-'));
+  const log = await createRunLog(root, { runId: 'stream-error', fs: {
+    createWriteStream: (() => new Writable({
+      write(_chunk, _encoding, callback) { callback(); },
+      final(callback) { callback(Object.assign(new Error('injected stream end error'), { code: 'EIO' })); },
+    })) as any,
+  } });
+  await log.write('content');
+  await assert.rejects(log.close(), (error: any) => error.auditStage === 'close' && error.cleanupOutcome === 'removed');
+  assert.equal(await fs.access(log.temporaryPath).then(() => true, () => false), false);
+});
+
+test('abort returns failed cleanup with contained orphan path when unlink fails', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'task5-abort-fail-'));
+  const log = await createRunLog(root, { runId: 'abort-fail', fs: { unlink: async () => { throw Object.assign(new Error('unlink denied'), { code: 'EACCES' }); } } });
+  await log.write('content');
+  const cleanup = await log.abort();
+  assert.equal(cleanup.status, 'failed');
+  assert.equal(cleanup.orphanPath, log.temporaryPath);
 });
 
 test('registry rejects log symlink escapes', async () => {

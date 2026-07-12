@@ -10,7 +10,8 @@ export const DEFAULT_LOG_POLICY: LogPolicy = { retentionDays: 7, maxDiskMb: 500,
 export interface LogPolicy { retentionDays?: number; maxDiskMb?: number; storageMode?: 'raw-local' | 'redacted-local' }
 export interface RemovedLog { path: string; bytes: number; reason: 'expired' | 'quota' | 'purged' }
 export interface LogLifecycleResult { removed: RemovedLog[]; freedBytes: number; warnings: string[]; quota: { bytes: number; maxBytes: number; overQuota: boolean } }
-export interface RunLog { absolutePath: string; temporaryPath: string; retainedPath: string; relativePath: string; write(chunk: string | Buffer): Promise<void>; close(): Promise<void>; abort(): Promise<void> }
+export interface CleanupResult { status: 'removed' | 'failed'; orphanPath?: string; error?: string }
+export interface RunLog { absolutePath: string; temporaryPath: string; retainedPath: string; relativePath: string; write(chunk: string | Buffer): Promise<void>; close(): Promise<void>; abort(): Promise<CleanupResult> }
 export interface RunLogFs {
   createWriteStream: typeof fs.createWriteStream;
   rename(from: string, to: string): Promise<void>;
@@ -78,8 +79,22 @@ export async function createRunLog(workspacePath: string, options: { storageMode
   /* Finalization fsyncs the complete temporary evidence before the atomic rename. A
    * failed rename deliberately retains that temp file so the caller can report it. */
   let closePromise: Promise<void> | undefined;
+  const cleanupActive = async (): Promise<CleanupResult> => {
+    try { await io.unlink(temporaryPath); return { status: 'removed' }; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return { status: 'removed' };
+      return { status: 'failed', orphanPath: temporaryPath, error: error instanceof Error ? error.message : String(error) };
+    }
+  };
   const close = () => closePromise ||= new Promise<void>((resolve, reject) => {
-    const onError = (error: Error) => reject(error);
+    let settled = false;
+    const rejectOnce = (error: Error) => { if (settled) return; settled = true; reject(error); };
+    const onError = async (error: Error) => {
+      const fd = (stream as fs.WriteStream & { fd?: number }).fd;
+      if (typeof fd === 'number') await defaultRunLogFs.close(fd).catch(() => undefined);
+      const cleanup = await cleanupActive();
+      rejectOnce(Object.assign(error, { auditStage: 'close', cleanupOutcome: cleanup.status, ...(cleanup.orphanPath ? { orphanPath: cleanup.orphanPath } : {}) }));
+    };
     stream.once('error', onError);
     if (mode === 'redacted-local' && carry) { stream.write(redactText(carry).text); carry = ''; }
     stream.once('finish', async () => {
@@ -87,8 +102,8 @@ export async function createRunLog(workspacePath: string, options: { storageMode
       const fail = async (stage: AuditFinalizeStage, error: unknown, remove: boolean) => {
         if (typeof fd === 'number' && stage === 'fsync') await io.close(fd).catch(() => defaultRunLogFs.close(fd).catch(() => undefined));
         if (typeof fd === 'number' && stage === 'close') await defaultRunLogFs.close(fd).catch(() => undefined);
-        if (remove) await io.unlink(temporaryPath).catch(() => undefined);
-        reject(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: stage }));
+        const cleanup = remove ? await cleanupActive() : undefined;
+        rejectOnce(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: stage, ...(cleanup ? { cleanupOutcome: cleanup.status, ...(cleanup.orphanPath ? { orphanPath: cleanup.orphanPath } : {}) } : {}) }));
       };
       if (typeof fd !== 'number') { await fail('fsync', new Error('audit log file descriptor unavailable'), true); return; }
       try { await io.fsync(fd); } catch (error) { await fail('fsync', error, true); return; }
@@ -97,26 +112,28 @@ export async function createRunLog(workspacePath: string, options: { storageMode
       catch (error) {
         try { await io.markRetained(temporaryPath, retainedPath); }
         catch {
-          await io.unlink(temporaryPath).catch(() => undefined);
-          reject(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: 'rename', retentionFailed: true }));
+          const cleanup = await cleanupActive();
+          rejectOnce(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: 'rename', retentionFailed: true, cleanupOutcome: cleanup.status, ...(cleanup.orphanPath ? { orphanPath: cleanup.orphanPath } : {}) }));
           return;
         }
-        reject(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: 'rename', retainedPath }));
+        rejectOnce(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: 'rename', retainedPath }));
         return;
       }
       stream.removeListener('error', onError);
+      settled = true;
       resolve();
     });
     stream.end();
   });
-  const abort = async () => { if (!stream.destroyed) stream.destroy(); await io.unlink(temporaryPath).catch(() => undefined); };
+  const abort = async () => { if (!stream.destroyed) stream.destroy(); return cleanupActive(); };
   return { absolutePath, temporaryPath, retainedPath, relativePath: path.relative(workspacePath, absolutePath), write, close, abort };
 }
 interface Entry { file: string; bytes: number; mtimeMs: number }
-function isRunEvidence(name: string): boolean { return name.endsWith('.log') || name.endsWith('.retained.audit.tmp'); }
+const STALE_ACTIVE_MS = 60 * 60 * 1000;
+function isRunEvidence(name: string, mtimeMs: number, now = Date.now()): boolean { return name.endsWith('.log') || name.endsWith('.retained.audit.tmp') || (name.endsWith('.active.tmp') && now - mtimeMs >= STALE_ACTIVE_MS); }
 async function entries(workspacePath: string): Promise<Entry[]> {
   const dir = await ensureSafeRoot(workspacePath); let names: string[]; try { names = await fs.promises.readdir(dir); } catch { return []; }
-  const out: Entry[] = []; for (const name of names) { if (!isRunEvidence(name)) continue; const file = path.join(dir, name); const st = await fs.promises.lstat(file); if (st.isSymbolicLink()) continue; out.push({ file, bytes: st.size, mtimeMs: st.mtimeMs }); }
+  const out: Entry[] = []; for (const name of names) { const file = path.join(dir, name); const st = await fs.promises.lstat(file); if (!isRunEvidence(name, st.mtimeMs) || st.isSymbolicLink()) continue; out.push({ file, bytes: st.size, mtimeMs: st.mtimeMs }); }
   return out.sort((a, b) => a.mtimeMs - b.mtimeMs);
 }
 export async function pruneLogs(workspacePath: string, policy: LogPolicy = DEFAULT_LOG_POLICY): Promise<LogLifecycleResult> {

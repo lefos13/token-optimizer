@@ -36,7 +36,7 @@ export interface ExecutedSuiteResult {
   rawSourceBytes: number;
   rawSourceTokens: number;
   auditStatus: 'persisted' | 'failed';
-  auditFailure?: { stage: 'create' | 'write' | 'fsync' | 'close' | 'rename'; code?: string; message: string; evidencePath?: string; tempCleanup: 'removed' | 'retained' | 'none' };
+  auditFailure?: { stage: 'create' | 'write' | 'fsync' | 'close' | 'rename'; code?: string; message: string; evidencePath?: string; orphanPath?: string; tempCleanup: 'removed' | 'retained' | 'failed' | 'none' };
   warnings: string[];
 }
 type AuditFailureStage = NonNullable<ExecutedSuiteResult['auditFailure']>['stage'];
@@ -320,17 +320,19 @@ export async function runSuite(commands: string[], workspacePath: string, option
     const code = typeof error === 'object' && error && 'code' in error ? String((error as NodeJS.ErrnoException).code) : undefined;
     const retainedPath = typeof error === 'object' && error && 'retainedPath' in error ? String((error as { retainedPath: string }).retainedPath) : undefined;
     let evidenceExists = Boolean(retainedPath && fs.existsSync(retainedPath));
-    let tempCleanup: 'removed' | 'retained' | 'none' = evidenceExists ? 'retained' : 'none';
+    let tempCleanup: 'removed' | 'retained' | 'failed' | 'none' = evidenceExists ? 'retained' : 'none';
     if (failureStage === 'write' && managedLog) {
-      await managedLog.abort();
-      tempCleanup = fs.existsSync(managedLog.temporaryPath) ? 'retained' : 'removed';
+      const cleanup = await managedLog.abort();
+      tempCleanup = cleanup.status;
     }
     if ((failureStage === 'fsync' || failureStage === 'close') && !evidenceExists) tempCleanup = 'removed';
-    if (failureStage === 'rename' && typeof error === 'object' && error && 'retentionFailed' in error) tempCleanup = 'removed';
+    if (typeof error === 'object' && error && 'cleanupOutcome' in error) tempCleanup = (error as { cleanupOutcome: 'removed' | 'failed' }).cleanupOutcome;
+    const orphanPath = typeof error === 'object' && error && 'orphanPath' in error ? String((error as { orphanPath: string }).orphanPath) : undefined;
     auditFailure = {
       stage: failureStage,
       ...(code ? { code } : {}), message: error instanceof Error ? error.message : String(error),
       ...(evidenceExists ? { evidencePath: path.relative(workspacePath, retainedPath!) } : {}),
+      ...(orphanPath && path.resolve(orphanPath).startsWith(fs.realpathSync(path.resolve(workspacePath, '.codex-local-test-runs')) + path.sep) ? { orphanPath: path.relative(fs.realpathSync(workspacePath), orphanPath) } : {}),
       tempCleanup,
     };
   }

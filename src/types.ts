@@ -36,7 +36,7 @@ export interface VerdictResult extends LLMResponseMetadata {
   triage?: LogQueryResponse;
   executionStatus?: 'completed' | 'timed_out' | 'terminated' | 'blocked' | 'spawn_failed';
   auditStatus?: 'persisted' | 'failed';
-  auditFailure?: { stage: string; code?: string; message: string; evidencePath?: string; tempCleanup: 'removed' | 'retained' | 'none' };
+  auditFailure?: { stage: string; code?: string; message: string; evidencePath?: string; orphanPath?: string; tempCleanup: 'removed' | 'retained' | 'failed' | 'none' };
   signal?: string | null;
   policyDecision?: string;
   logTruncated?: boolean;

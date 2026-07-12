@@ -86,6 +86,26 @@ test('failed retained-state transition deletes active evidence and skips registr
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('failed retained marking and unlink reports orphan without claiming removal', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'task4-orphan-'));
+  const result = await runSuite([`node -e "process.stdout.write('executed')"`], root, { logFs: {
+    rename: async () => { throw Object.assign(new Error('final rename failed'), { code: 'EACCES' }); },
+    markRetained: async () => { throw Object.assign(new Error('mark failed'), { code: 'EACCES' }); },
+    unlink: async () => { throw Object.assign(new Error('unlink failed'), { code: 'EACCES' }); },
+  } });
+  assert.equal(result.auditFailure?.stage, 'rename');
+  assert.equal(result.auditFailure?.tempCleanup, 'failed');
+  assert.ok(result.auditFailure?.orphanPath?.endsWith('.active.tmp'));
+  const orphan = path.join(root, result.auditFailure!.orphanPath!);
+  assert.equal(fs.existsSync(orphan), true);
+  assert.equal(result.rawLogPath, '');
+  assert.equal((await import('../../src/log-store').then(({ getLogStatus }) => getLogStatus(root))).quota.bytes, 0);
+  const old = new Date(Date.now() - 2 * 60 * 60 * 1000); fs.utimesSync(orphan, old, old);
+  const recovered = await import('../../src/log-store').then(({ pruneLogs }) => pruneLogs(root, { retentionDays: 0, maxDiskMb: 500 }));
+  assert.ok(recovered.removed.some((entry) => entry.path.endsWith('.active.tmp')));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 for (const stage of ['fsync', 'close'] as const) {
   test(`${stage} failure removes incomplete audit evidence and skips registry`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), `task4-${stage}-`));

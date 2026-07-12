@@ -131,8 +131,28 @@ async function createRunLog(workspacePath, options = {}) {
     /* Finalization fsyncs the complete temporary evidence before the atomic rename. A
      * failed rename deliberately retains that temp file so the caller can report it. */
     let closePromise;
+    const cleanupActive = async () => {
+        try {
+            await io.unlink(temporaryPath);
+            return { status: 'removed' };
+        }
+        catch (error) {
+            if (error?.code === 'ENOENT')
+                return { status: 'removed' };
+            return { status: 'failed', orphanPath: temporaryPath, error: error instanceof Error ? error.message : String(error) };
+        }
+    };
     const close = () => closePromise ||= new Promise((resolve, reject) => {
-        const onError = (error) => reject(error);
+        let settled = false;
+        const rejectOnce = (error) => { if (settled)
+            return; settled = true; reject(error); };
+        const onError = async (error) => {
+            const fd = stream.fd;
+            if (typeof fd === 'number')
+                await defaultRunLogFs.close(fd).catch(() => undefined);
+            const cleanup = await cleanupActive();
+            rejectOnce(Object.assign(error, { auditStage: 'close', cleanupOutcome: cleanup.status, ...(cleanup.orphanPath ? { orphanPath: cleanup.orphanPath } : {}) }));
+        };
         stream.once('error', onError);
         if (mode === 'redacted-local' && carry) {
             stream.write((0, redaction_1.redactText)(carry).text);
@@ -145,9 +165,8 @@ async function createRunLog(workspacePath, options = {}) {
                     await io.close(fd).catch(() => defaultRunLogFs.close(fd).catch(() => undefined));
                 if (typeof fd === 'number' && stage === 'close')
                     await defaultRunLogFs.close(fd).catch(() => undefined);
-                if (remove)
-                    await io.unlink(temporaryPath).catch(() => undefined);
-                reject(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: stage }));
+                const cleanup = remove ? await cleanupActive() : undefined;
+                rejectOnce(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: stage, ...(cleanup ? { cleanupOutcome: cleanup.status, ...(cleanup.orphanPath ? { orphanPath: cleanup.orphanPath } : {}) } : {}) }));
             };
             if (typeof fd !== 'number') {
                 await fail('fsync', new Error('audit log file descriptor unavailable'), true);
@@ -175,23 +194,25 @@ async function createRunLog(workspacePath, options = {}) {
                     await io.markRetained(temporaryPath, retainedPath);
                 }
                 catch {
-                    await io.unlink(temporaryPath).catch(() => undefined);
-                    reject(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: 'rename', retentionFailed: true }));
+                    const cleanup = await cleanupActive();
+                    rejectOnce(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: 'rename', retentionFailed: true, cleanupOutcome: cleanup.status, ...(cleanup.orphanPath ? { orphanPath: cleanup.orphanPath } : {}) }));
                     return;
                 }
-                reject(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: 'rename', retainedPath }));
+                rejectOnce(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: 'rename', retainedPath }));
                 return;
             }
             stream.removeListener('error', onError);
+            settled = true;
             resolve();
         });
         stream.end();
     });
     const abort = async () => { if (!stream.destroyed)
-        stream.destroy(); await io.unlink(temporaryPath).catch(() => undefined); };
+        stream.destroy(); return cleanupActive(); };
     return { absolutePath, temporaryPath, retainedPath, relativePath: path.relative(workspacePath, absolutePath), write, close, abort };
 }
-function isRunEvidence(name) { return name.endsWith('.log') || name.endsWith('.retained.audit.tmp'); }
+const STALE_ACTIVE_MS = 60 * 60 * 1000;
+function isRunEvidence(name, mtimeMs, now = Date.now()) { return name.endsWith('.log') || name.endsWith('.retained.audit.tmp') || (name.endsWith('.active.tmp') && now - mtimeMs >= STALE_ACTIVE_MS); }
 async function entries(workspacePath) {
     const dir = await ensureSafeRoot(workspacePath);
     let names;
@@ -203,11 +224,9 @@ async function entries(workspacePath) {
     }
     const out = [];
     for (const name of names) {
-        if (!isRunEvidence(name))
-            continue;
         const file = path.join(dir, name);
         const st = await fs.promises.lstat(file);
-        if (st.isSymbolicLink())
+        if (!isRunEvidence(name, st.mtimeMs) || st.isSymbolicLink())
             continue;
         out.push({ file, bytes: st.size, mtimeMs: st.mtimeMs });
     }
