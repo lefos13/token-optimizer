@@ -7,7 +7,7 @@ const https = require("https");
 const { execFileSync } = require("child_process");
 const pkg = require("../package.json");
 const { createCredentialStore } = require("./credential-store");
-const { marketplaceLocations } = require("./marketplace-locations");
+const { marketplaceLocations, marketplaceManifest } = require("./marketplace-locations");
 
 const CLIENTS = ["claude", "codex", "antigravity", "opencode", "cursor"];
 const PLACEHOLDER = /^(?:none|null|undefined|placeholder|change[-_ ]?me|.*(?:your|insert|replace)[-_ ]?(?:with[-_ ]?)?(?:token|key).*|<[^>]+>|\$\{[^}]+\})$/i;
@@ -126,9 +126,8 @@ function inspectMarketplaceRegistrations(home, options = {}) {
   for (const { client, root, layout } of caches) {
     let versions = []; try { versions = layout === "single" ? [""] : fs.readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name); } catch (_) { continue; }
     for (const versionDir of versions) {
-      const installedPath = versionDir ? path.join(root, versionDir) : root; const manifest = [path.join(installedPath, ".claude-plugin", "plugin.json"), path.join(installedPath, ".codex-plugin", "plugin.json")].find((file) => fs.existsSync(file));
-      if (layout === "single" && !manifest) continue;
-      let version = versionDir; try { version = JSON.parse(fs.readFileSync(manifest, "utf8")).version || version; } catch (_) {}
+      const installedPath = versionDir ? path.join(root, versionDir) : root; const owned = marketplaceManifest({ client, root, layout }, installedPath); if (!owned) continue; const manifest = owned.path;
+      let version = owned.data.version || versionDir;
       const launcherPath = [path.join(installedPath, "server", "start.js"), path.join(installedPath, "server", "start.sh")].find((file) => fs.existsSync(file)) || null;
       result.push({ client, configPath: manifest || installedPath, name: "token-optimizer", command: "marketplace-cache", args: [], env: {}, launcherPath, marketplace: true, version, installedPath, stale: fs.existsSync(path.join(installedPath, ".orphaned_at")) || !launcherPath });
     }
