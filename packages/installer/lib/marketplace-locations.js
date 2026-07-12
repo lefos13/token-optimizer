@@ -16,7 +16,7 @@ function marketplaceManifest(location, installedPath) {
   const target = path.resolve(installedPath);
   if (location.layout === 'single' ? target !== location.root : path.dirname(target) !== location.root) return null;
   for (const candidate of [path.join(target, '.claude-plugin', 'plugin.json'), path.join(target, '.codex-plugin', 'plugin.json')]) {
-    try { const data = JSON.parse(fs.readFileSync(candidate, 'utf8')); if (/^token[_-]optimizer$/.test(String(data.name || data.id || 'token-optimizer'))) return { path: candidate, data }; } catch (_) {}
+    try { const data = JSON.parse(fs.readFileSync(candidate, 'utf8')); const identity = data.name ?? data.id; if (typeof identity === 'string' && /^token[_-]optimizer$/.test(identity)) return { path: candidate, data }; } catch (_) {}
   }
   return null;
 }
