@@ -18,6 +18,8 @@ export interface PolicyInput {
   profile: ExecutionProfile;
   allowedCommandPrefixes?: string[];
   autoDetectedCommands?: string[];
+  /** Overridable for tests only; production callers rely on the process.platform default. */
+  platform?: NodeJS.Platform;
 }
 
 const sensitivePathPattern = /(^|[\s"'])~\/(?:\.ssh|\.aws|\.config|\.gnupg)|(^|[\s"'])\/(?:etc|proc|sys|dev|root)(?:\/|\s|$)|(?:^|[\/_.-])(credentials?|secrets?|private[_-]?key|id_rsa)(?:[./_\s-]|$)|\.env(?:\.|$)/i;
@@ -60,7 +62,15 @@ function matchesPrefix(command: string, prefixes: string[] = []): boolean {
   });
 }
 
-function scanShellSyntax(command: string): { composition: boolean; unmatchedQuote: boolean } {
+/* runner.ts always spawns with shell:true, which resolves to cmd.exe on win32, not a POSIX
+ * shell. cmd.exe does not treat backslash as an escape character and does not treat single
+ * quotes as a grouping mechanism at all -- so on POSIX this scanner correctly treats
+ * `\|` as an inert escaped pipe and `'...'` as an inert literal blob, but the same input
+ * reaches a real live pipe/separator once cmd.exe parses it. Disabling both POSIX-only
+ * allowances on win32 makes the scanner fail closed (more restrictive) there instead of
+ * being silently wrong about what the actual command-line interpreter will do. */
+function scanShellSyntax(command: string, platform: NodeJS.Platform = process.platform): { composition: boolean; unmatchedQuote: boolean } {
+  const posix = platform !== 'win32';
   let quote: 'single' | 'double' | undefined;
   for (let index = 0; index < command.length; index += 1) {
     const char = command[index];
@@ -70,12 +80,12 @@ function scanShellSyntax(command: string): { composition: boolean; unmatchedQuot
     }
     if (quote === 'double') {
       if (char === '"') quote = undefined;
-      else if (char === '\\' && /[$`"\\\n]/.test(command[index + 1] || '')) index += 1;
+      else if (posix && char === '\\' && /[$`"\\\n]/.test(command[index + 1] || '')) index += 1;
       else if (char === '`' || (char === '$' && command[index + 1] === '(')) return { composition: true, unmatchedQuote: false };
       continue;
     }
-    if (char === '\\') { index += 1; continue; }
-    if (char === "'") { quote = 'single'; continue; }
+    if (posix && char === '\\') { index += 1; continue; }
+    if (posix && char === "'") { quote = 'single'; continue; }
     if (char === '"') { quote = 'double'; continue; }
     if (char === '$' && command[index + 1] === '(') return { composition: true, unmatchedQuote: false };
     if (/[;|&`<>\r\n]/.test(char)) return { composition: true, unmatchedQuote: false };
@@ -133,7 +143,7 @@ export async function evaluateCommand(input: PolicyInput): Promise<PolicyDecisio
   if (nestedShellPattern.test(command)) return deny(input.profile, 'NESTED_SHELL', 'Nested shell execution is not permitted.');
   if (destructivePattern.test(command) || hasDestructiveRm(command)) return deny(input.profile, 'DESTRUCTIVE_PATTERN', 'Destructive command pattern is not permitted.');
   if (networkPattern.test(command) || /(?:^|\s)(?:>|>>).*https?:\/\//i.test(command)) return deny(input.profile, 'NETWORK_EXFILTRATION', 'Network access or exfiltration is not permitted.');
-  const syntax = scanShellSyntax(command);
+  const syntax = scanShellSyntax(command, input.platform ?? process.platform);
   if (syntax.composition || syntax.unmatchedQuote) return deny(input.profile, 'SHELL_METACHARACTER', syntax.unmatchedQuote ? 'Unmatched shell quote is not permitted.' : 'Command chaining, substitution, and redirection are not permitted.');
   if (input.profile === 'unrestricted') return { allowed: true, profile: input.profile, reasonCode: 'PROFILE_UNRESTRICTED' };
   if (matchesPrefix(command, input.allowedCommandPrefixes)) return { allowed: true, profile: input.profile, reasonCode: 'ALLOWLIST_MATCH' };

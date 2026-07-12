@@ -181,7 +181,8 @@ test('CLI emits one machine-readable stderr object and exits exactly one on poli
 
 test('actual npm pack dry-run JSON inventories satisfy release policy', () => {
   for (const [kind, packagePath, packageRoot] of [['root', '.', root], ['installer', './packages/installer', path.join(root, 'packages/installer')]]) {
-    const result = spawnSync('npm', ['pack', packagePath, '--dry-run', '--json'], { cwd: root, encoding: 'utf8' });
+    /* npm is a .cmd shim on Windows; spawning it directly without shell:true fails to launch. */
+    const result = spawnSync('npm', ['pack', packagePath, '--dry-run', '--json'], { cwd: root, encoding: 'utf8', shell: process.platform === 'win32' });
     assert.equal(result.status, 0, result.stderr);
     inspectInventory(JSON.parse(result.stdout)[0], packageRoot, kind);
   }

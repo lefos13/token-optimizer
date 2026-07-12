@@ -51,6 +51,22 @@ test('scanner follows POSIX quote and escape rules and fails closed on unmatched
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+/* runner.ts spawns with shell:true, which resolves to cmd.exe on win32 -- unlike POSIX sh,
+ * cmd.exe has no backslash escape and does not group text with single quotes at all, so
+ * POSIX-only allowances that are genuinely inert on POSIX must be denied on win32 instead,
+ * since the metacharacters they "hide" are still live once cmd.exe parses the command line. */
+test('win32 scanning denies POSIX-only escapes and single-quote grouping that cmd.exe would not honor', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'to-security-win32-quotes-'));
+  for (const command of [`printf x \\| tee marker`, `printf 'x & del marker'`, `printf 'x; del marker'`]) {
+    const posix = await evaluateCommand({ command, workspacePath: root, profile: 'unrestricted' });
+    assert.equal(posix.allowed, true, `expected POSIX to allow: ${command}`);
+    const win32 = await evaluateCommand({ command, workspacePath: root, profile: 'unrestricted', platform: 'win32' });
+    assert.equal(win32.allowed, false, `expected win32 to deny: ${command}`);
+    assert.equal(win32.allowed === false ? win32.reasonCode : undefined, 'SHELL_METACHARACTER');
+  }
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test('double quotes block active command substitution but allow escaped literals', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'to-security-double-substitution-'));
   const execution = { profile: 'unrestricted' as const, allowedCommandPrefixes: [] };

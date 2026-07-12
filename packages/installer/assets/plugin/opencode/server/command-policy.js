@@ -44,7 +44,15 @@ function matchesPrefix(command, prefixes = []) {
         return candidate.length > 0 && (normalized === candidate || normalized.startsWith(`${candidate} `));
     });
 }
-function scanShellSyntax(command) {
+/* runner.ts always spawns with shell:true, which resolves to cmd.exe on win32, not a POSIX
+ * shell. cmd.exe does not treat backslash as an escape character and does not treat single
+ * quotes as a grouping mechanism at all -- so on POSIX this scanner correctly treats
+ * `\|` as an inert escaped pipe and `'...'` as an inert literal blob, but the same input
+ * reaches a real live pipe/separator once cmd.exe parses it. Disabling both POSIX-only
+ * allowances on win32 makes the scanner fail closed (more restrictive) there instead of
+ * being silently wrong about what the actual command-line interpreter will do. */
+function scanShellSyntax(command, platform = process.platform) {
+    const posix = platform !== 'win32';
     let quote;
     for (let index = 0; index < command.length; index += 1) {
         const char = command[index];
@@ -56,17 +64,17 @@ function scanShellSyntax(command) {
         if (quote === 'double') {
             if (char === '"')
                 quote = undefined;
-            else if (char === '\\' && /[$`"\\\n]/.test(command[index + 1] || ''))
+            else if (posix && char === '\\' && /[$`"\\\n]/.test(command[index + 1] || ''))
                 index += 1;
             else if (char === '`' || (char === '$' && command[index + 1] === '('))
                 return { composition: true, unmatchedQuote: false };
             continue;
         }
-        if (char === '\\') {
+        if (posix && char === '\\') {
             index += 1;
             continue;
         }
-        if (char === "'") {
+        if (posix && char === "'") {
             quote = 'single';
             continue;
         }
@@ -138,7 +146,7 @@ async function evaluateCommand(input) {
         return deny(input.profile, 'DESTRUCTIVE_PATTERN', 'Destructive command pattern is not permitted.');
     if (networkPattern.test(command) || /(?:^|\s)(?:>|>>).*https?:\/\//i.test(command))
         return deny(input.profile, 'NETWORK_EXFILTRATION', 'Network access or exfiltration is not permitted.');
-    const syntax = scanShellSyntax(command);
+    const syntax = scanShellSyntax(command, input.platform ?? process.platform);
     if (syntax.composition || syntax.unmatchedQuote)
         return deny(input.profile, 'SHELL_METACHARACTER', syntax.unmatchedQuote ? 'Unmatched shell quote is not permitted.' : 'Command chaining, substitution, and redirection are not permitted.');
     if (input.profile === 'unrestricted')

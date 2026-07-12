@@ -24,9 +24,12 @@ function readJson<T>(filePath: string): T {
 }
 
 function dryRunInventory(packagePath: string): string[] {
+  /* npm is a .cmd shim on Windows; spawning it directly without shell:true fails to launch
+   * at all (result.status comes back null), matching this repo's other npm/git spawns. */
   const result = spawnSync('npm', ['pack', packagePath, '--dry-run', '--json'], {
     cwd: root,
     encoding: 'utf8',
+    shell: process.platform === 'win32',
   });
   assert.equal(result.status, 0, result.stderr);
   const [pack] = JSON.parse(result.stdout) as PackResult[];
