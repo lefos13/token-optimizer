@@ -45,6 +45,24 @@ test('retained audit evidence participates in status, retention, quota, and purg
   assert.ok(purged.removed.some((entry) => entry.path.endsWith('.audit.tmp')));
 });
 
+test('prune and purge exclude active logs until final close', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'task5-active-life-'));
+  const first = await createRunLog(root, { runId: 'active-prune' }); await first.write('still writing');
+  const [status, pruned] = await Promise.all([getLogStatus(root), pruneLogs(root, { retentionDays: 0, maxDiskMb: 0 })]);
+  assert.equal(status.quota.bytes, 0);
+  assert.equal(pruned.removed.length, 0);
+  assert.equal(await fs.access(first.temporaryPath).then(() => true, () => false), true);
+  await first.close();
+  assert.equal(await fs.readFile(first.absolutePath, 'utf8'), 'still writing');
+
+  const second = await createRunLog(root, { runId: 'active-purge' }); await second.write('survives purge');
+  const purged = await purgeLogs(root);
+  assert.ok(purged.removed.some((entry) => entry.path.endsWith('active-prune.log')));
+  assert.equal(await fs.access(second.temporaryPath).then(() => true, () => false), true);
+  await second.close();
+  assert.equal(await fs.readFile(second.absolutePath, 'utf8'), 'survives purge');
+});
+
 test('registry rejects log symlink escapes', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'task5-')); const dir = path.join(root, '.codex-local-test-runs'); await fs.mkdir(dir);
   const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'outside-')); await fs.writeFile(path.join(outside, 'secret.log'), 'x'); await fs.symlink(path.join(outside, 'secret.log'), path.join(dir, 'link.log'));

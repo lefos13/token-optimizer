@@ -68,6 +68,24 @@ test('rename failure returns explicit audit failure and retains temporary eviden
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('failed retained-state transition deletes active evidence and skips registry', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'task4-mark-fail-'));
+  const renameFailure = Object.assign(new Error('injected final rename'), { code: 'EACCES' });
+  const result = await runSuite([`node -e "process.stdout.write('executed')"`], root, { logFs: {
+    rename: async () => { throw renameFailure; },
+    markRetained: async () => { throw Object.assign(new Error('injected retained rename'), { code: 'EACCES' }); },
+  } });
+  assert.equal(result.results[0].exitCode, 0);
+  assert.equal(result.auditFailure?.stage, 'rename');
+  assert.equal(result.auditFailure?.evidencePath, undefined);
+  assert.equal(result.auditFailure?.tempCleanup, 'removed');
+  assert.equal(result.rawLogPath, '');
+  const names = fs.readdirSync(path.join(root, '.codex-local-test-runs'));
+  assert.equal(names.some((name) => name.endsWith('.active.tmp') || name.endsWith('.retained.audit.tmp')), false);
+  assert.ok(result.warnings.some((warning) => /no persisted audit evidence/.test(warning)));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 for (const stage of ['fsync', 'close'] as const) {
   test(`${stage} failure removes incomplete audit evidence and skips registry`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), `task4-${stage}-`));

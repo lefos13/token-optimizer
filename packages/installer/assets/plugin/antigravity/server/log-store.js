@@ -53,6 +53,7 @@ exports.DEFAULT_LOG_POLICY = { retentionDays: 7, maxDiskMb: 500, storageMode: 'r
 const defaultRunLogFs = {
     createWriteStream: fs.createWriteStream,
     rename: fs.promises.rename,
+    markRetained: fs.promises.rename,
     unlink: fs.promises.unlink,
     fsync: (fd) => new Promise((resolve, reject) => fs.fsync(fd, (error) => error ? reject(error) : resolve())),
     close: (fd) => new Promise((resolve, reject) => fs.close(fd, (error) => error ? reject(error) : resolve())),
@@ -111,7 +112,8 @@ async function createRunLog(workspacePath, options = {}) {
     const dir = await ensureSafeRoot(workspacePath);
     const id = options.runId || `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`;
     const absolutePath = path.join(dir, `${id}.log`);
-    const temporaryPath = path.join(dir, `.${id}.${process.pid}.${Date.now()}.audit.tmp`);
+    const temporaryPath = path.join(dir, `.${id}.${process.pid}.${Date.now()}.active.tmp`);
+    const retainedPath = path.join(dir, `.${id}.${process.pid}.${Date.now()}.retained.audit.tmp`);
     const io = { ...defaultRunLogFs, ...options.fs };
     const stream = io.createWriteStream(temporaryPath, { flags: 'wx', mode: 0o600, autoClose: false });
     const mode = options.storageMode || exports.DEFAULT_LOG_POLICY.storageMode;
@@ -169,7 +171,15 @@ async function createRunLog(workspacePath, options = {}) {
                 await io.rename(temporaryPath, absolutePath);
             }
             catch (error) {
-                await fail('rename', error, false);
+                try {
+                    await io.markRetained(temporaryPath, retainedPath);
+                }
+                catch {
+                    await io.unlink(temporaryPath).catch(() => undefined);
+                    reject(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: 'rename', retentionFailed: true }));
+                    return;
+                }
+                reject(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: 'rename', retainedPath }));
                 return;
             }
             stream.removeListener('error', onError);
@@ -179,9 +189,9 @@ async function createRunLog(workspacePath, options = {}) {
     });
     const abort = async () => { if (!stream.destroyed)
         stream.destroy(); await io.unlink(temporaryPath).catch(() => undefined); };
-    return { absolutePath, temporaryPath, relativePath: path.relative(workspacePath, absolutePath), write, close, abort };
+    return { absolutePath, temporaryPath, retainedPath, relativePath: path.relative(workspacePath, absolutePath), write, close, abort };
 }
-function isRunEvidence(name) { return name.endsWith('.log') || name.endsWith('.audit.tmp'); }
+function isRunEvidence(name) { return name.endsWith('.log') || name.endsWith('.retained.audit.tmp'); }
 async function entries(workspacePath) {
     const dir = await ensureSafeRoot(workspacePath);
     let names;

@@ -10,10 +10,11 @@ export const DEFAULT_LOG_POLICY: LogPolicy = { retentionDays: 7, maxDiskMb: 500,
 export interface LogPolicy { retentionDays?: number; maxDiskMb?: number; storageMode?: 'raw-local' | 'redacted-local' }
 export interface RemovedLog { path: string; bytes: number; reason: 'expired' | 'quota' | 'purged' }
 export interface LogLifecycleResult { removed: RemovedLog[]; freedBytes: number; warnings: string[]; quota: { bytes: number; maxBytes: number; overQuota: boolean } }
-export interface RunLog { absolutePath: string; temporaryPath: string; relativePath: string; write(chunk: string | Buffer): Promise<void>; close(): Promise<void>; abort(): Promise<void> }
+export interface RunLog { absolutePath: string; temporaryPath: string; retainedPath: string; relativePath: string; write(chunk: string | Buffer): Promise<void>; close(): Promise<void>; abort(): Promise<void> }
 export interface RunLogFs {
   createWriteStream: typeof fs.createWriteStream;
   rename(from: string, to: string): Promise<void>;
+  markRetained(from: string, to: string): Promise<void>;
   unlink(file: string): Promise<void>;
   fsync(fd: number): Promise<void>;
   close(fd: number): Promise<void>;
@@ -23,6 +24,7 @@ export type AuditFinalizeStage = 'fsync' | 'close' | 'rename';
 const defaultRunLogFs: RunLogFs = {
   createWriteStream: fs.createWriteStream,
   rename: fs.promises.rename,
+  markRetained: fs.promises.rename,
   unlink: fs.promises.unlink,
   fsync: (fd) => new Promise<void>((resolve, reject) => fs.fsync(fd, (error) => error ? reject(error) : resolve())),
   close: (fd) => new Promise<void>((resolve, reject) => fs.close(fd, (error) => error ? reject(error) : resolve())),
@@ -63,7 +65,8 @@ export async function createRunLog(workspacePath: string, options: { storageMode
   const dir = await ensureSafeRoot(workspacePath);
   const id = options.runId || `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`;
   const absolutePath = path.join(dir, `${id}.log`);
-  const temporaryPath = path.join(dir, `.${id}.${process.pid}.${Date.now()}.audit.tmp`);
+  const temporaryPath = path.join(dir, `.${id}.${process.pid}.${Date.now()}.active.tmp`);
+  const retainedPath = path.join(dir, `.${id}.${process.pid}.${Date.now()}.retained.audit.tmp`);
   const io = { ...defaultRunLogFs, ...options.fs };
   const stream = io.createWriteStream(temporaryPath, { flags: 'wx', mode: 0o600, autoClose: false });
   const mode = options.storageMode || DEFAULT_LOG_POLICY.storageMode; let carry = '';
@@ -90,17 +93,27 @@ export async function createRunLog(workspacePath: string, options: { storageMode
       if (typeof fd !== 'number') { await fail('fsync', new Error('audit log file descriptor unavailable'), true); return; }
       try { await io.fsync(fd); } catch (error) { await fail('fsync', error, true); return; }
       try { await io.close(fd); } catch (error) { await fail('close', error, true); return; }
-      try { await io.rename(temporaryPath, absolutePath); } catch (error) { await fail('rename', error, false); return; }
+      try { await io.rename(temporaryPath, absolutePath); }
+      catch (error) {
+        try { await io.markRetained(temporaryPath, retainedPath); }
+        catch {
+          await io.unlink(temporaryPath).catch(() => undefined);
+          reject(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: 'rename', retentionFailed: true }));
+          return;
+        }
+        reject(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: 'rename', retainedPath }));
+        return;
+      }
       stream.removeListener('error', onError);
       resolve();
     });
     stream.end();
   });
   const abort = async () => { if (!stream.destroyed) stream.destroy(); await io.unlink(temporaryPath).catch(() => undefined); };
-  return { absolutePath, temporaryPath, relativePath: path.relative(workspacePath, absolutePath), write, close, abort };
+  return { absolutePath, temporaryPath, retainedPath, relativePath: path.relative(workspacePath, absolutePath), write, close, abort };
 }
 interface Entry { file: string; bytes: number; mtimeMs: number }
-function isRunEvidence(name: string): boolean { return name.endsWith('.log') || name.endsWith('.audit.tmp'); }
+function isRunEvidence(name: string): boolean { return name.endsWith('.log') || name.endsWith('.retained.audit.tmp'); }
 async function entries(workspacePath: string): Promise<Entry[]> {
   const dir = await ensureSafeRoot(workspacePath); let names: string[]; try { names = await fs.promises.readdir(dir); } catch { return []; }
   const out: Entry[] = []; for (const name of names) { if (!isRunEvidence(name)) continue; const file = path.join(dir, name); const st = await fs.promises.lstat(file); if (st.isSymbolicLink()) continue; out.push({ file, bytes: st.size, mtimeMs: st.mtimeMs }); }
