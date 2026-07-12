@@ -60,19 +60,26 @@ function matchesPrefix(command: string, prefixes: string[] = []): boolean {
   });
 }
 
-function unquotedShellSyntax(command: string): string {
-  let quote = ''; let output = '';
+function scanShellSyntax(command: string): { composition: boolean; unmatchedQuote: boolean } {
+  let quote: 'single' | 'double' | undefined;
   for (let index = 0; index < command.length; index += 1) {
     const char = command[index];
-    if (quote) {
-      if (char === '\\') index += 1;
-      else if (char === quote) quote = '';
+    if (quote === 'single') {
+      if (char === "'") quote = undefined;
       continue;
     }
-    if (char === '"' || char === "'") quote = char;
-    else output += char;
+    if (quote === 'double') {
+      if (char === '"') quote = undefined;
+      else if (char === '\\' && /[$`"\\\n]/.test(command[index + 1] || '')) index += 1;
+      continue;
+    }
+    if (char === '\\') { index += 1; continue; }
+    if (char === "'") { quote = 'single'; continue; }
+    if (char === '"') { quote = 'double'; continue; }
+    if (char === '$' && command[index + 1] === '(') return { composition: true, unmatchedQuote: false };
+    if (/[;|&`<>\r\n]/.test(char)) return { composition: true, unmatchedQuote: false };
   }
-  return output;
+  return { composition: false, unmatchedQuote: quote !== undefined };
 }
 
 async function canonicalPath(candidate: string): Promise<string> {
@@ -120,16 +127,13 @@ function deny(profile: ExecutionProfile, reasonCode: PolicyReasonCode, message: 
 
 export async function evaluateCommand(input: PolicyInput): Promise<PolicyDecision> {
   const command = input.command.trim();
-  /* Decode common transport escaping before policy evaluation so an MCP client
-     cannot disguise paths or shell operators while the shell sees their meaning. */
-  let inspected = command;
-  try { inspected = decodeURIComponent(command); } catch { /* malformed escapes remain literal */ }
-  const deniedPath = await pathDenial(inspected, input.workspacePath);
+  const deniedPath = await pathDenial(command, input.workspacePath);
   if (deniedPath) return deny(input.profile, deniedPath, deniedPath === 'SENSITIVE_PATH' ? 'Command references a sensitive path.' : 'Command references a path outside the workspace.');
-  if (nestedShellPattern.test(inspected)) return deny(input.profile, 'NESTED_SHELL', 'Nested shell execution is not permitted.');
-  if (destructivePattern.test(inspected) || hasDestructiveRm(inspected)) return deny(input.profile, 'DESTRUCTIVE_PATTERN', 'Destructive command pattern is not permitted.');
-  if (networkPattern.test(inspected) || /(?:^|\s)(?:>|>>).*https?:\/\//i.test(inspected)) return deny(input.profile, 'NETWORK_EXFILTRATION', 'Network access or exfiltration is not permitted.');
-  if (/(?:;|&&|\||`|\$\(|\r|\n)/.test(unquotedShellSyntax(inspected))) return deny(input.profile, 'SHELL_METACHARACTER', 'Command chaining and substitution are not permitted.');
+  if (nestedShellPattern.test(command)) return deny(input.profile, 'NESTED_SHELL', 'Nested shell execution is not permitted.');
+  if (destructivePattern.test(command) || hasDestructiveRm(command)) return deny(input.profile, 'DESTRUCTIVE_PATTERN', 'Destructive command pattern is not permitted.');
+  if (networkPattern.test(command) || /(?:^|\s)(?:>|>>).*https?:\/\//i.test(command)) return deny(input.profile, 'NETWORK_EXFILTRATION', 'Network access or exfiltration is not permitted.');
+  const syntax = scanShellSyntax(command);
+  if (syntax.composition || syntax.unmatchedQuote) return deny(input.profile, 'SHELL_METACHARACTER', syntax.unmatchedQuote ? 'Unmatched shell quote is not permitted.' : 'Command chaining, substitution, and redirection are not permitted.');
   if (input.profile === 'unrestricted') return { allowed: true, profile: input.profile, reasonCode: 'PROFILE_UNRESTRICTED' };
   if (matchesPrefix(command, input.allowedCommandPrefixes)) return { allowed: true, profile: input.profile, reasonCode: 'ALLOWLIST_MATCH' };
   if (input.profile === 'standard' && matchesPrefix(command, input.autoDetectedCommands)) return { allowed: true, profile: input.profile, reasonCode: 'AUTO_DETECTED' };
