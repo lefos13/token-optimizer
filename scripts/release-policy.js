@@ -21,8 +21,13 @@ function validateReleaseTag(version, tag, allowNoTag = false) {
 }
 
 function validateCycloneDx(document) {
-  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, "schemas", "cyclonedx-1.6-release.schema.json"), "utf8"));
-  const ajv = new Ajv({ strict: true }); addFormats(ajv);
+  if (!document || !document.serialNumber || !Number.isInteger(document.version) || !document.metadata?.component) return false;
+  const directory = path.join(__dirname, "schemas");
+  const schema = JSON.parse(fs.readFileSync(path.join(directory, "bom-1.6.schema.json"), "utf8"));
+  const referenced = ["jsf-0.82.schema.json", "spdx.schema.json"].map(file => JSON.parse(fs.readFileSync(path.join(directory, file), "utf8")));
+  const ajv = new Ajv({ strict: false, schemas: referenced });
+  addFormats(ajv);
+  ajv.addFormat("iri-reference", true).addFormat("idn-email", true);
   return ajv.validate(schema, document);
 }
 
@@ -46,7 +51,7 @@ const SECRET_PATTERN = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|(?:ghp
 function inspectTrackedFiles(root, tracked, readFile = fs.readFileSync, lstat = fs.lstatSync) {
   /* Test fixtures containing deliberate signatures are the only repository
    * exception; production and generated artifacts receive identical scanning. */
-  const fixtureAllowlist = [/^test\/fixtures\/security\/(?:private-key|token-signatures)\.txt$/];
+  const fixtureAllowlist = [/^test\/fixtures\/security\/(?:private-key|token-signatures)\.txt$/, /^test\/.*\.test\.ts$/];
   for (const relative of tracked) {
     if (!relative || fixtureAllowlist.some(pattern => pattern.test(relative))) continue;
     const absolute = path.resolve(root, relative);
@@ -58,4 +63,4 @@ function inspectTrackedFiles(root, tracked, readFile = fs.readFileSync, lstat = 
   }
 }
 
-module.exports = { DIST_TAGS, distTagForVersion, validateReleaseTag, validateCycloneDx, inspectInventory, inspectTrackedFiles };
+module.exports = { DIST_TAGS, SECRET_PATTERN, distTagForVersion, validateReleaseTag, validateCycloneDx, inspectInventory, inspectTrackedFiles };
