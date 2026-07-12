@@ -114,8 +114,17 @@ async function createRunLog(workspacePath, options = {}) {
     const absolutePath = path.join(dir, `${id}.log`);
     const temporaryPath = path.join(dir, `.${id}.${process.pid}.${Date.now()}.active.tmp`);
     const retainedPath = path.join(dir, `.${id}.${process.pid}.${Date.now()}.retained.audit.tmp`);
+    const leasePath = temporaryPath.replace(/\.active\.tmp$/, '.active.lease.json');
     const io = { ...defaultRunLogFs, ...options.fs };
     const stream = io.createWriteStream(temporaryPath, { flags: 'wx', mode: 0o600, autoClose: false });
+    try {
+        await fs.promises.writeFile(leasePath, JSON.stringify({ pid: options.ownerPid ?? process.pid, runId: id }), { mode: 0o600 });
+    }
+    catch (error) {
+        stream.destroy();
+        await defaultRunLogFs.unlink(temporaryPath).catch(() => undefined);
+        throw error;
+    }
     const mode = options.storageMode || exports.DEFAULT_LOG_POLICY.storageMode;
     let carry = '';
     const write = (chunk) => new Promise((resolve, reject) => {
@@ -132,15 +141,18 @@ async function createRunLog(workspacePath, options = {}) {
      * failed rename deliberately retains that temp file so the caller can report it. */
     let closePromise;
     const cleanupActive = async () => {
+        let activeError;
         try {
             await io.unlink(temporaryPath);
-            return { status: 'removed' };
         }
         catch (error) {
-            if (error?.code === 'ENOENT')
-                return { status: 'removed' };
-            return { status: 'failed', orphanPath: temporaryPath, error: error instanceof Error ? error.message : String(error) };
+            if (error?.code !== 'ENOENT')
+                activeError = error;
         }
+        await io.unlink(leasePath).catch(() => defaultRunLogFs.unlink(leasePath).catch(() => undefined));
+        if (!activeError)
+            return { status: 'removed' };
+        return { status: 'failed', orphanPath: temporaryPath, error: activeError instanceof Error ? activeError.message : String(activeError) };
     };
     const close = () => closePromise ||= new Promise((resolve, reject) => {
         let settled = false;
@@ -198,10 +210,12 @@ async function createRunLog(workspacePath, options = {}) {
                     rejectOnce(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: 'rename', retentionFailed: true, cleanupOutcome: cleanup.status, ...(cleanup.orphanPath ? { orphanPath: cleanup.orphanPath } : {}) }));
                     return;
                 }
+                await io.unlink(leasePath).catch(() => undefined);
                 rejectOnce(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: 'rename', retainedPath }));
                 return;
             }
             stream.removeListener('error', onError);
+            await io.unlink(leasePath).catch(() => undefined);
             settled = true;
             resolve();
         });
@@ -209,10 +223,21 @@ async function createRunLog(workspacePath, options = {}) {
     });
     const abort = async () => { if (!stream.destroyed)
         stream.destroy(); return cleanupActive(); };
-    return { absolutePath, temporaryPath, retainedPath, relativePath: path.relative(workspacePath, absolutePath), write, close, abort };
+    return { absolutePath, temporaryPath, retainedPath, leasePath, relativePath: path.relative(workspacePath, absolutePath), write, close, abort };
 }
 const STALE_ACTIVE_MS = 60 * 60 * 1000;
-function isRunEvidence(name, mtimeMs, now = Date.now()) { return name.endsWith('.log') || name.endsWith('.retained.audit.tmp') || (name.endsWith('.active.tmp') && now - mtimeMs >= STALE_ACTIVE_MS); }
+function ownerAlive(leasePath) {
+    try {
+        const pid = JSON.parse(fs.readFileSync(leasePath, 'utf8')).pid;
+        if (!Number.isInteger(pid) || pid <= 0)
+            return false;
+        process.kill(pid, 0);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
 async function entries(workspacePath) {
     const dir = await ensureSafeRoot(workspacePath);
     let names;
@@ -226,9 +251,15 @@ async function entries(workspacePath) {
     for (const name of names) {
         const file = path.join(dir, name);
         const st = await fs.promises.lstat(file);
-        if (!isRunEvidence(name, st.mtimeMs) || st.isSymbolicLink())
+        if (st.isSymbolicLink())
             continue;
-        out.push({ file, bytes: st.size, mtimeMs: st.mtimeMs });
+        if (name.endsWith('.log') || name.endsWith('.retained.audit.tmp'))
+            out.push({ file, bytes: st.size, mtimeMs: st.mtimeMs });
+        else if (name.endsWith('.active.tmp') && Date.now() - st.mtimeMs >= STALE_ACTIVE_MS) {
+            const leasePath = file.replace(/\.active\.tmp$/, '.active.lease.json');
+            if (!ownerAlive(leasePath))
+                out.push({ file, bytes: st.size, mtimeMs: st.mtimeMs, leasePath });
+        }
     }
     return out.sort((a, b) => a.mtimeMs - b.mtimeMs);
 }
@@ -240,6 +271,8 @@ async function pruneLogs(workspacePath, policy = exports.DEFAULT_LOG_POLICY) {
     for (const e of all) {
         if ((now - e.mtimeMs) > retention * 86400000) {
             await fs.promises.unlink(e.file);
+            if (e.leasePath)
+                await fs.promises.unlink(e.leasePath).catch(() => undefined);
             removed.push({ path: relativeToWorkspace(workspacePath, e.file), bytes: e.bytes, reason: 'expired' });
         }
         else
@@ -250,6 +283,8 @@ async function pruneLogs(workspacePath, policy = exports.DEFAULT_LOG_POLICY) {
         if (total <= maxBytes)
             break;
         await fs.promises.unlink(e.file);
+        if (e.leasePath)
+            await fs.promises.unlink(e.leasePath).catch(() => undefined);
         total -= e.bytes;
         removed.push({ path: relativeToWorkspace(workspacePath, e.file), bytes: e.bytes, reason: 'quota' });
     }
@@ -261,6 +296,8 @@ async function purgeLogs(workspacePath, options = {}) {
     const removed = [];
     for (const e of all) {
         await fs.promises.unlink(e.file);
+        if (e.leasePath)
+            await fs.promises.unlink(e.leasePath).catch(() => undefined);
         removed.push({ path: relativeToWorkspace(workspacePath, e.file), bytes: e.bytes, reason: 'purged' });
     }
     for (const name of [...(options.includeBaseline ? ['baseline.json'] : []), ...(options.includeAnalytics ? ['analytics.json', 'analytics-summary.json'] : [])]) {

@@ -49,12 +49,14 @@ test('retained audit evidence participates in status, retention, quota, and purg
 test('prune and purge exclude active logs until final close', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'task5-active-life-'));
   const first = await createRunLog(root, { runId: 'active-prune' }); await first.write('still writing');
+  const aged = new Date(Date.now() - 2 * 60 * 60 * 1000); await fs.utimes(first.temporaryPath, aged, aged);
   const [status, pruned] = await Promise.all([getLogStatus(root), pruneLogs(root, { retentionDays: 0, maxDiskMb: 0 })]);
   assert.equal(status.quota.bytes, 0);
   assert.equal(pruned.removed.length, 0);
   assert.equal(await fs.access(first.temporaryPath).then(() => true, () => false), true);
   await first.close();
   assert.equal(await fs.readFile(first.absolutePath, 'utf8'), 'still writing');
+  assert.equal(await fs.access(first.leasePath).then(() => true, () => false), false);
 
   const second = await createRunLog(root, { runId: 'active-purge' }); await second.write('survives purge');
   const purged = await purgeLogs(root);
@@ -62,6 +64,18 @@ test('prune and purge exclude active logs until final close', async () => {
   assert.equal(await fs.access(second.temporaryPath).then(() => true, () => false), true);
   await second.close();
   assert.equal(await fs.readFile(second.absolutePath, 'utf8'), 'survives purge');
+  assert.equal(await fs.access(second.leasePath).then(() => true, () => false), false);
+});
+
+test('aged active evidence is recovered only when injected owner pid is dead', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'task5-dead-lease-'));
+  const dir = path.join(root, '.codex-local-test-runs'); await fs.mkdir(dir);
+  const active = path.join(dir, '.dead-owner.active.tmp'); const lease = path.join(dir, '.dead-owner.active.lease.json');
+  await fs.writeFile(active, 'orphan'); await fs.writeFile(lease, JSON.stringify({ pid: 99999999, runId: 'dead-owner' }));
+  const aged = new Date(Date.now() - 2 * 60 * 60 * 1000); await fs.utimes(active, aged, aged);
+  const result = await pruneLogs(root, { retentionDays: 0, maxDiskMb: 500 });
+  assert.ok(result.removed.some((entry) => entry.path.endsWith('.active.tmp')));
+  assert.equal(await fs.access(lease).then(() => true, () => false), false);
 });
 
 test('close-time stream error settles as close failure and cleans active state', async () => {
@@ -84,6 +98,7 @@ test('abort returns failed cleanup with contained orphan path when unlink fails'
   const cleanup = await log.abort();
   assert.equal(cleanup.status, 'failed');
   assert.equal(cleanup.orphanPath, log.temporaryPath);
+  assert.equal(await fs.access(log.leasePath).then(() => true, () => false), false);
 });
 
 test('registry rejects log symlink escapes', async () => {
