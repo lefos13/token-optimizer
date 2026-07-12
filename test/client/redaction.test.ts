@@ -37,7 +37,7 @@ test('redacts signed URL secrets but keeps the URL route and safe parameters', (
 test('supports bounded custom rules and typed replacement callbacks', () => {
   const result = redactText('ticket SECRET-123 and SECRET-456', {
     customRules: [{
-      pattern: /SECRET-\d+/g,
+      pattern: /SECRET-\d{3}/g,
       category: 'ticket',
       replace: (match) => `[${match.length} chars]`,
     }],
@@ -48,7 +48,7 @@ test('supports bounded custom rules and typed replacement callbacks', () => {
 });
 
 test('rejects invalid or oversized custom rules', () => {
-  assert.throws(() => redactText('x', { customRules: [{ pattern: '(', category: 'bad' }] }), /invalid regular expression/i);
+  assert.throws(() => redactText('x', { customRules: [{ pattern: '(', category: 'bad' }] }), /unsafe|invalid regular expression/i);
   assert.throws(() => redactText('x', { customRules: new Array(21).fill({ pattern: /x/g, category: 'too-many' }) }), /too many/i);
   assert.throws(() => redactText('x', { customRules: [{ pattern: new RegExp('x'.repeat(501), 'g'), category: 'too-long' }] }), /too long/i);
 });
@@ -67,7 +67,7 @@ test('rejects unsafe flags, replacements, and catastrophic nested quantifiers', 
 });
 
 test('rejects ambiguous or stateful regex constructs and bounds input', () => {
-  for (const pattern of ['a|aa', '(a){1,3}{2}', '(a+){2}', '(?=secret)secret', '(a)\\1', '[a-z]+(?:x)?']) {
+  for (const pattern of ['a|aa', '(a){1,3}{2}', '(a+){2}', '(?=secret)secret', '(a)\\1', '[a-z]+(?:x)?', 'a+a+$', '[a-z]+[a-z]+$', 'a{1,500}a{1,500}$']) {
     assert.throws(() => redactText('secret', { customRules: [{ pattern, category: 'unsafe' }] }), /unsafe/i, pattern);
   }
   assert.throws(() => redactText('x'.repeat(1_048_577)), /input is too large/i);

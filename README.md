@@ -206,10 +206,13 @@ layers, but provider destination, model routing, and runtime credential use are
 user-authoritative. Project and tool provider objects are ignored with a stable
 warning, so repository content cannot redirect an inherited credential. Legacy
 provider environment variables are consulted only when user provider policy is
-absent. User config must be a private, owned regular file on POSIX; all config
-reads are no-follow, open-once, and limited to 64 KiB. Lower layers may only
-tighten command/log policy. Their bounded redaction rules are added to mandatory
-user and built-in rules at every final remote inference hop.
+absent. User config must be a private, owned regular file on POSIX; config reads
+are open-once and limited to 64 KiB. POSIX uses `O_NOFOLLOW`; Node exposes no
+equivalent Windows open flag, so Windows relies on canonical containment and
+post-open regular-file validation. Lower layers may only tighten command/log
+policy. Their redaction rules use a linear-safe grammar—concatenated literals,
+classes, safe escapes, edge anchors, and small exact repetitions—and are added
+to mandatory user and built-in rules at every final remote inference hop.
 
 - Restart your client after installing or changing provider settings.
 - Run `check_local_llm_health` to verify the selected LLM provider (local, gateway, or direct OpenRouter).

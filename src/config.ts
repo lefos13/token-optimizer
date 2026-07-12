@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
+import { redactText } from './redaction';
 import type {
   ConfigLayers,
   EffectiveConfig,
@@ -42,6 +43,10 @@ const providerModes: ProviderMode[] = ['local', 'gateway-token', 'gateway-byok',
 function parseConfig(value: unknown, source: string): TokenOptimizerConfig {
   const parsed = configSchema.safeParse(value);
   if (!parsed.success) throw new Error(`Invalid ${source} configuration: ${parsed.error.message}`);
+  if (parsed.data.redaction?.rules) {
+    try { redactText('', { customRules: parsed.data.redaction.rules }); }
+    catch (error) { throw new Error(`Invalid ${source} redaction configuration: ${error instanceof Error ? error.message : String(error)}`); }
+  }
   return parsed.data as TokenOptimizerConfig;
 }
 

@@ -6,6 +6,54 @@ const MAX_PATTERN_LENGTH = 500;
 const MAX_REPLACEMENT_LENGTH = 256;
 const MAX_REDACTION_INPUT_LENGTH = 1024 * 1024;
 const SAFE_FLAGS = /^[dgimsuv]*$/;
+/* User patterns intentionally support only concatenated literals, classes,
+ * safe character escapes, edge anchors, and small exact repetitions. This
+ * grammar has no branching or variable repetition and therefore executes in
+ * time linear in the bounded input size. */
+function assertLinearPattern(source) {
+    let index = 0;
+    while (index < source.length) {
+        const char = source[index];
+        if ((char === '^' && index === 0) || (char === '$' && index === source.length - 1)) {
+            index += 1;
+            continue;
+        }
+        if ('().|+*?'.includes(char))
+            throw new TypeError('unsafe redaction rule pattern');
+        if (char === '\\') {
+            index += 1;
+            if (index >= source.length || /[1-9]/.test(source[index]))
+                throw new TypeError('unsafe redaction rule pattern');
+            index += 1;
+        }
+        else if (char === '[') {
+            index += 1;
+            if (source[index] === '^')
+                index += 1;
+            let members = 0;
+            while (index < source.length && source[index] !== ']') {
+                if (source[index] === '\\')
+                    index += 1;
+                index += 1;
+                members += 1;
+            }
+            if (index >= source.length || members === 0)
+                throw new TypeError('unsafe redaction rule pattern');
+            index += 1;
+        }
+        else {
+            if (char === '{' || char === '}' || char === '.')
+                throw new TypeError('unsafe redaction rule pattern');
+            index += 1;
+        }
+        if (source[index] === '{') {
+            const exact = source.slice(index).match(/^\{(\d{1,3})\}/);
+            if (!exact || Number(exact[1]) > 100)
+                throw new TypeError('unsafe redaction rule pattern');
+            index += exact[0].length;
+        }
+    }
+}
 /* These rules target credential-shaped values while retaining labels, routes, and
  * surrounding diagnostics. They intentionally avoid matching prose placeholders. */
 const DEFAULT_REDACTION_RULES = [
@@ -52,19 +100,14 @@ function normalizeRule(rule) {
     if (rule.pattern instanceof RegExp) {
         if (rule.pattern.source.length > MAX_PATTERN_LENGTH)
             throw new RangeError('redaction rule pattern is too long');
+        assertLinearPattern(rule.pattern.source);
         pattern = new RegExp(rule.pattern.source, rule.pattern.flags.includes('g') ? rule.pattern.flags : `${rule.pattern.flags}g`);
     }
     else if (typeof rule.pattern === 'string') {
         if (rule.pattern.length > MAX_PATTERN_LENGTH)
             throw new RangeError('redaction rule pattern is too long');
         try {
-            /* Nested unbounded quantifiers are rejected before compilation because they
-             * are the common catastrophic-backtracking shape in user configuration. */
-            /* Custom expressions use a deliberately small safe subset. Ambiguous
-             * branching, backreferences, lookarounds, and quantified groups are
-             * excluded because JavaScript has no dependable regex execution budget. */
-            if (/\||\\[1-9]|\(\?|\)[+*?{]|(?:[+*?]|\{\d+(?:,\d*)?\})(?:[+*?]|\{)/.test(rule.pattern))
-                throw new TypeError('unsafe redaction rule pattern');
+            assertLinearPattern(rule.pattern);
             const flags = rule.flags || '';
             pattern = new RegExp(rule.pattern, flags.includes('g') ? flags : `${flags}g`);
         }

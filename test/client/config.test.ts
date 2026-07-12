@@ -82,9 +82,9 @@ test('user provider policy binds credential-bearing destination against lower-tr
 
 test('provider task routing remains user-authoritative and redaction rules accumulate', () => {
   const config = resolveEffectiveConfig({
-    user: { provider: { mode: 'local', taskRouting: { verdict: 'model/verdict' } }, redaction: { rules: [{ pattern: 'USER-[0-9]+', category: 'user' }] } },
-    project: { provider: { taskRouting: { verdict: 'evil/model' } }, redaction: { rules: [{ pattern: 'PROJECT-[0-9]+', category: 'project' }] } },
-    tool: { redaction: { rules: [{ pattern: 'TOOL-[0-9]+', category: 'tool' }] } },
+    user: { provider: { mode: 'local', taskRouting: { verdict: 'model/verdict' } }, redaction: { rules: [{ pattern: 'USER-[0-9]{3}', category: 'user' }] } },
+    project: { provider: { taskRouting: { verdict: 'evil/model' } }, redaction: { rules: [{ pattern: 'PROJECT-[0-9]{3}', category: 'project' }] } },
+    tool: { redaction: { rules: [{ pattern: 'TOOL-[0-9]{3}', category: 'tool' }] } },
   });
   assert.equal(config.provider.taskRouting?.verdict, 'model/verdict');
   assert.deepEqual(config.redaction.rules.map((rule) => rule.category), ['user', 'project', 'tool']);

@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { queryLocalLLM } from '../../src/llm';
 import { buildAnalyticsRecord, buildSharedAnalyticsRecord } from '../../src/analytics';
 
 const valid = JSON.stringify({ verdict: 'pass', confidence: 0.9, summary: 'ok', likelyRelevantToRecentChanges: false, failures: [], needsRawLogs: false });
-const providerKeys = ['TOKEN_OPTIMIZER_PROVIDER_MODE', 'LLM_GATEWAY_URL', 'LLM_GATEWAY_TOKEN', 'OPENROUTER_BYOK_KEY', 'OPENROUTER_API_KEY', 'LOCAL_LLM_API_URL'];
+const providerKeys = ['TOKEN_OPTIMIZER_PROVIDER_MODE', 'TOKEN_OPTIMIZER_CONFIG_HOME', 'LLM_GATEWAY_URL', 'LLM_GATEWAY_TOKEN', 'OPENROUTER_BYOK_KEY', 'OPENROUTER_API_KEY', 'LOCAL_LLM_API_URL'];
 
 async function withProvider(env: Record<string, string>, response: string, run: (bodies: string[]) => Promise<void>): Promise<void> {
   const saved = Object.fromEntries(providerKeys.map((key) => [key, process.env[key]]));
@@ -27,6 +30,27 @@ test('resolved gateway, gateway-BYOK, and direct providers redact the final HTTP
     assert.equal(result.verdict, 'pass'); assert.equal(bodies.length, 1);
     assert.doesNotMatch(bodies[0], /sk-output-secret/); assert.match(bodies[0], /\*\*\*/);
   });
+});
+
+test('user and project redaction rules accumulate at the final remote request', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'token-optimizer-inference-'));
+  const configHome = path.join(root, 'config');
+  const workspace = path.join(root, 'workspace');
+  fs.mkdirSync(configHome); fs.mkdirSync(workspace);
+  fs.writeFileSync(path.join(configHome, 'config.json'), JSON.stringify({
+    provider: { mode: 'gateway-token', apiUrl: 'https://gateway.invalid/v1' },
+    redaction: { rules: [{ pattern: 'USER-\\d{3}', category: 'user-rule' }] },
+  }), { mode: 0o600 });
+  fs.writeFileSync(path.join(workspace, '.token-optimizer.json'), JSON.stringify({
+    redaction: { rules: [{ pattern: 'PROJECT-\\d{3}', category: 'project-rule' }] },
+  }));
+  await withProvider({ TOKEN_OPTIMIZER_CONFIG_HOME: configHome, LLM_GATEWAY_TOKEN: 'fixture-token' }, valid, async (bodies) => {
+    const result = await queryLocalLLM('task', [], {}, [], 'USER-123 PROJECT-456', 'verdict', workspace);
+    assert.equal(result.verdict, 'pass'); assert.equal(bodies.length, 1);
+    assert.doesNotMatch(bodies[0], /USER-123|PROJECT-456/);
+    assert.deepEqual(result.redactionSummary?.categories, ['project-rule', 'user-rule']);
+  });
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 test('real inference handler conservatively rejects malformed, oversized, and contradictory responses', async () => {

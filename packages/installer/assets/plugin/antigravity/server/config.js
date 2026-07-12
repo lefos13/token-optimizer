@@ -12,6 +12,7 @@ const node_fs_1 = __importDefault(require("node:fs"));
 const node_os_1 = __importDefault(require("node:os"));
 const node_path_1 = __importDefault(require("node:path"));
 const zod_1 = require("zod");
+const redaction_1 = require("./redaction");
 /* Configuration is intentionally layered and conservative: lower-trust project and
  * tool inputs may narrow behavior, but cannot widen a user-selected safety ceiling. */
 const configSchema = zod_1.z.object({
@@ -44,6 +45,14 @@ function parseConfig(value, source) {
     const parsed = configSchema.safeParse(value);
     if (!parsed.success)
         throw new Error(`Invalid ${source} configuration: ${parsed.error.message}`);
+    if (parsed.data.redaction?.rules) {
+        try {
+            (0, redaction_1.redactText)('', { customRules: parsed.data.redaction.rules });
+        }
+        catch (error) {
+            throw new Error(`Invalid ${source} redaction configuration: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
     return parsed.data;
 }
 const MAX_CONFIG_BYTES = 64 * 1024;
