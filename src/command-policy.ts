@@ -5,7 +5,8 @@ import type { ExecutionProfile } from './types';
 export type PolicyReasonCode =
   | 'ALLOWLIST_MATCH' | 'AUTO_DETECTED' | 'PROFILE_UNRESTRICTED'
   | 'COMMAND_NOT_ALLOWED' | 'SENSITIVE_PATH' | 'WORKSPACE_ESCAPE'
-  | 'DESTRUCTIVE_PATTERN' | 'NETWORK_EXFILTRATION' | 'NESTED_SHELL';
+  | 'DESTRUCTIVE_PATTERN' | 'NETWORK_EXFILTRATION' | 'NESTED_SHELL'
+  | 'SHELL_METACHARACTER';
 
 export type PolicyDecision =
   | { allowed: true; profile: ExecutionProfile; reasonCode: PolicyReasonCode }
@@ -59,6 +60,21 @@ function matchesPrefix(command: string, prefixes: string[] = []): boolean {
   });
 }
 
+function unquotedShellSyntax(command: string): string {
+  let quote = ''; let output = '';
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    if (quote) {
+      if (char === '\\') index += 1;
+      else if (char === quote) quote = '';
+      continue;
+    }
+    if (char === '"' || char === "'") quote = char;
+    else output += char;
+  }
+  return output;
+}
+
 async function canonicalPath(candidate: string): Promise<string> {
   let current = path.resolve(candidate);
   const suffix: string[] = [];
@@ -104,11 +120,16 @@ function deny(profile: ExecutionProfile, reasonCode: PolicyReasonCode, message: 
 
 export async function evaluateCommand(input: PolicyInput): Promise<PolicyDecision> {
   const command = input.command.trim();
-  const deniedPath = await pathDenial(command, input.workspacePath);
+  /* Decode common transport escaping before policy evaluation so an MCP client
+     cannot disguise paths or shell operators while the shell sees their meaning. */
+  let inspected = command;
+  try { inspected = decodeURIComponent(command); } catch { /* malformed escapes remain literal */ }
+  const deniedPath = await pathDenial(inspected, input.workspacePath);
   if (deniedPath) return deny(input.profile, deniedPath, deniedPath === 'SENSITIVE_PATH' ? 'Command references a sensitive path.' : 'Command references a path outside the workspace.');
-  if (nestedShellPattern.test(command)) return deny(input.profile, 'NESTED_SHELL', 'Nested shell execution is not permitted.');
-  if (destructivePattern.test(command) || hasDestructiveRm(command)) return deny(input.profile, 'DESTRUCTIVE_PATTERN', 'Destructive command pattern is not permitted.');
-  if (networkPattern.test(command) || /(?:^|\s)(?:>|>>).*https?:\/\//i.test(command)) return deny(input.profile, 'NETWORK_EXFILTRATION', 'Network access or exfiltration is not permitted.');
+  if (nestedShellPattern.test(inspected)) return deny(input.profile, 'NESTED_SHELL', 'Nested shell execution is not permitted.');
+  if (destructivePattern.test(inspected) || hasDestructiveRm(inspected)) return deny(input.profile, 'DESTRUCTIVE_PATTERN', 'Destructive command pattern is not permitted.');
+  if (networkPattern.test(inspected) || /(?:^|\s)(?:>|>>).*https?:\/\//i.test(inspected)) return deny(input.profile, 'NETWORK_EXFILTRATION', 'Network access or exfiltration is not permitted.');
+  if (/(?:;|&&|\|\||`|\$\()/.test(unquotedShellSyntax(inspected))) return deny(input.profile, 'SHELL_METACHARACTER', 'Command chaining and substitution are not permitted.');
   if (input.profile === 'unrestricted') return { allowed: true, profile: input.profile, reasonCode: 'PROFILE_UNRESTRICTED' };
   if (matchesPrefix(command, input.allowedCommandPrefixes)) return { allowed: true, profile: input.profile, reasonCode: 'ALLOWLIST_MATCH' };
   if (input.profile === 'standard' && matchesPrefix(command, input.autoDetectedCommands)) return { allowed: true, profile: input.profile, reasonCode: 'AUTO_DETECTED' };

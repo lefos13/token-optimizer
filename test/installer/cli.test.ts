@@ -70,7 +70,7 @@ test('status --installed-version reports mismatch without a discovered registrat
   const output = execFileSync(process.execPath, [
     path.join(repository, 'packages/installer/bin/token-optimizer.js'), 'status', '--json',
     '--home', home, '--provider', 'local', '--installed-version', '1.9.0',
-    '--expected-version', '2.0.0-beta.8'
+    '--expected-version', '2.0.0-beta.9'
   ], { cwd: repository, encoding: 'utf8' });
   const report = JSON.parse(output);
   assert.equal(report.installedVersionSource, 'option-installed-version');
@@ -130,7 +130,7 @@ test('spawned CLI completes install, doctor, repair, uninstall, and repeated uni
     assert.equal(repair.status, 0, `${client} repair: ${repair.stderr}`);
     const postRepair = spawnSync(process.execPath, [bin, 'status', '--home', home, '--provider', 'local', '--json'], base);
     assert.ok([0, 1].includes(postRepair.status), `${client} post-repair status: ${postRepair.stderr}`);
-    const post = JSON.parse(postRepair.stdout); assert.ok(post.clients.configured.includes(client), `${client} not configured after repair: ${postRepair.stdout}`); assert.equal(post.expectedVersion, '2.0.0-beta.8'); assert.ok(!post.findings.some((item: any) => ['STALE_REGISTRATION', 'MISSING_LAUNCHER', 'MANIFEST_ENTRY_MISSING', 'DUPLICATE_REGISTRATION'].includes(item.code))); assert.equal(post.healthy, true, `${client} post-repair not healthy: ${postRepair.stdout}`);
+    const post = JSON.parse(postRepair.stdout); assert.ok(post.clients.configured.includes(client), `${client} not configured after repair: ${postRepair.stdout}`); assert.equal(post.expectedVersion, '2.0.0-beta.9'); assert.ok(!post.findings.some((item: any) => ['STALE_REGISTRATION', 'MISSING_LAUNCHER', 'MANIFEST_ENTRY_MISSING', 'DUPLICATE_REGISTRATION'].includes(item.code))); assert.equal(post.healthy, true, `${client} post-repair not healthy: ${postRepair.stdout}`);
     const uninstall = spawnSync(process.execPath, [bin, 'uninstall', '--home', home, '--skip-launchctl'], base);
     assert.equal(uninstall.status, 0, `${client} uninstall: ${uninstall.stderr}`);
     const repeated = spawnSync(process.execPath, [bin, 'uninstall', '--home', home, '--json'], base);
