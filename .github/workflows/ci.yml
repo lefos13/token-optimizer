@@ -19,9 +19,9 @@ jobs:
       - run: npm ci
       - run: npm run build && npm run build:gateway
       - run: npm run test:security
+      - run: npm run verify:generated
       - if: matrix.full
         run: npm test
-      - run: npm run verify:generated
       - if: matrix.full
         run: npm pack --dry-run && npm pack ./packages/installer --dry-run
       - if: matrix.full
