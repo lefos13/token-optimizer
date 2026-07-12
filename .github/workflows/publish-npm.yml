@@ -29,8 +29,8 @@ jobs:
       - run: npm run build
       - run: npm run build:gateway
       - run: npm run test:security
-      - run: npm test
       - run: npm run verify:generated
+      - run: npm test
       - run: npm pack . --dry-run --json
       - run: npm pack ./packages/installer --dry-run --json
       - run: npm run release:preflight
