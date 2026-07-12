@@ -59,3 +59,9 @@ test('does not redact ordinary prose that merely mentions API keys', () => {
   assert.equal(result.text, input);
   assert.equal(result.count, 0);
 });
+
+test('rejects unsafe flags, replacements, and catastrophic nested quantifiers', () => {
+  assert.throws(() => redactText('x', { customRules: [{ pattern: 'x', flags: 'y', category: 'bad' }] as any }), /flags/i);
+  assert.throws(() => redactText('a'.repeat(100), { customRules: [{ pattern: '(a+)+$', category: 'bad' }] }), /unsafe/i);
+  assert.throws(() => redactText('x', { customRules: [{ pattern: 'x', category: 'bad', replacement: 'z'.repeat(257) }] as any }), /replacement/i);
+});

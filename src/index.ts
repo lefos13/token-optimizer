@@ -19,7 +19,7 @@ import { ensureSafeRoot, atomicWriteJson } from './log-store';
 const server = new Server(
   {
     name: 'token-optimizer-mcp',
-    version: '2.0.0-rc.1',
+    version: '2.0.0-rc.2',
   },
   {
     capabilities: {

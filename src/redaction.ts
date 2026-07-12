@@ -2,8 +2,10 @@ export type RedactionReplacement = (substring: string, ...args: unknown[]) => st
 
 export interface RedactionRule {
   pattern: RegExp | string;
+  flags?: string;
   category: string;
   replace?: RedactionReplacement;
+  replacement?: string;
 }
 
 export interface RedactionOptions {
@@ -18,6 +20,8 @@ export interface RedactionResult {
 
 const MAX_CUSTOM_RULES = 20;
 const MAX_PATTERN_LENGTH = 500;
+const MAX_REPLACEMENT_LENGTH = 256;
+const SAFE_FLAGS = /^[dgimsuv]*$/;
 
 /* These rules target credential-shaped values while retaining labels, routes, and
  * surrounding diagnostics. They intentionally avoid matching prose placeholders. */
@@ -58,6 +62,8 @@ function normalizeRule(rule: RedactionRule): RedactionRule & { pattern: RegExp }
   if (!rule || typeof rule.category !== 'string' || rule.category.trim().length === 0) {
     throw new TypeError('redaction rule category must be a non-empty string');
   }
+  if (rule.flags && !SAFE_FLAGS.test(rule.flags)) throw new TypeError('redaction rule contains invalid or duplicate flags');
+  if (rule.replacement && rule.replacement.length > MAX_REPLACEMENT_LENGTH) throw new RangeError('redaction rule replacement is too long');
   let pattern: RegExp;
   if (rule.pattern instanceof RegExp) {
     if (rule.pattern.source.length > MAX_PATTERN_LENGTH) throw new RangeError('redaction rule pattern is too long');
@@ -65,7 +71,11 @@ function normalizeRule(rule: RedactionRule): RedactionRule & { pattern: RegExp }
   } else if (typeof rule.pattern === 'string') {
     if (rule.pattern.length > MAX_PATTERN_LENGTH) throw new RangeError('redaction rule pattern is too long');
     try {
-      pattern = new RegExp(rule.pattern, 'g');
+      /* Nested unbounded quantifiers are rejected before compilation because they
+       * are the common catastrophic-backtracking shape in user configuration. */
+      if (/\([^)]*[+*][^)]*\)[+*{]/.test(rule.pattern)) throw new TypeError('unsafe redaction rule pattern');
+      const flags = rule.flags || '';
+      pattern = new RegExp(rule.pattern, flags.includes('g') ? flags : `${flags}g`);
     } catch (error) {
       throw new TypeError(`invalid regular expression in redaction rule: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -82,7 +92,7 @@ export function redactText(text: string, options: RedactionOptions = {}): Redact
   let count = 0;
   const categories = new Set<string>();
   for (const rule of [...DEFAULT_REDACTION_RULES, ...customRules.map(normalizeRule)]) {
-    const replacement = rule.replace ?? (() => '***');
+    const replacement = rule.replace ?? (rule.replacement !== undefined ? (() => rule.replacement as string) : (() => '***'));
     output = output.replace(rule.pattern, (...args) => {
       count += 1;
       categories.add(rule.category);

@@ -19,6 +19,8 @@ const configSchema = zod_1.z.object({
         mode: zod_1.z.enum(['local', 'gateway-token', 'gateway-byok', 'openrouter-direct']).optional(),
         apiUrl: zod_1.z.string().min(1).optional(),
         model: zod_1.z.string().min(1).optional(),
+        credentialRef: zod_1.z.string().min(1).max(256).optional(),
+        taskRouting: zod_1.z.partialRecord(zod_1.z.enum(['verdict', 'triage', 'review', 'digest', 'scout', 'query']), zod_1.z.string().min(1).max(256)).optional(),
     }).partial().optional(),
     execution: zod_1.z.object({
         profile: zod_1.z.enum(['safe', 'standard', 'unrestricted']).optional(),
@@ -30,6 +32,7 @@ const configSchema = zod_1.z.object({
         maxDiskMb: zod_1.z.number().positive().optional(),
         storageMode: zod_1.z.enum(['raw-local', 'redacted-local']).optional(),
     }).partial().optional(),
+    redaction: zod_1.z.object({ rules: zod_1.z.array(zod_1.z.object({ pattern: zod_1.z.string().min(1).max(500), flags: zod_1.z.string().max(10).optional(), category: zod_1.z.string().min(1).max(64), replacement: zod_1.z.string().max(256).optional() }).strict()).max(20) }).strict().optional(),
 }).strict();
 exports.configSchema = configSchema;
 const profiles = ['safe', 'standard', 'unrestricted'];
@@ -44,9 +47,18 @@ function parseConfig(value, source) {
         throw new Error(`Invalid ${source} configuration: ${parsed.error.message}`);
     return parsed.data;
 }
-function loadConfigFile(filePath) {
+function loadConfigFile(filePath, rootPath = node_path_1.default.dirname(filePath)) {
     if (!node_fs_1.default.existsSync(filePath))
         return undefined;
+    const root = node_fs_1.default.realpathSync(rootPath);
+    const stat = node_fs_1.default.lstatSync(filePath);
+    if (stat.isSymbolicLink())
+        throw new Error(`Configuration file must not be a symbolic link: ${filePath}`);
+    if (!stat.isFile())
+        throw new Error(`Configuration path is not a regular file: ${filePath}`);
+    const canonical = node_fs_1.default.realpathSync(filePath);
+    if (canonical !== root && !canonical.startsWith(`${root}${node_path_1.default.sep}`))
+        throw new Error(`Configuration path escapes its trusted root: ${filePath}`);
     let value;
     try {
         value = JSON.parse(node_fs_1.default.readFileSync(filePath, 'utf8'));
@@ -58,17 +70,20 @@ function loadConfigFile(filePath) {
 }
 function loadUserConfig(env = process.env) {
     const home = env.TOKEN_OPTIMIZER_CONFIG_HOME || node_path_1.default.join(node_os_1.default.homedir(), '.config', 'token-optimizer');
-    return loadConfigFile(node_path_1.default.join(home.replace(/^~(?=$|\/)/, node_os_1.default.homedir()), 'config.json'));
+    const root = node_path_1.default.resolve(home.replace(/^~(?=$|\/)/, node_os_1.default.homedir()));
+    return loadConfigFile(node_path_1.default.join(root, 'config.json'), root);
 }
 function loadProjectConfig(workspacePath) {
-    return loadConfigFile(node_path_1.default.join(workspacePath, '.token-optimizer.json'));
+    const root = node_fs_1.default.realpathSync(workspacePath);
+    return loadConfigFile(node_path_1.default.join(root, '.token-optimizer.json'), root);
 }
 function narrowerProfile(ceiling, requested) {
     return profiles[Math.min(profiles.indexOf(ceiling), profiles.indexOf(requested))];
 }
 function resolveProviderConfig(input, warnings) {
     const env = input.env || process.env;
-    const configuredMode = env.TOKEN_OPTIMIZER_PROVIDER_MODE || input.tool?.provider?.mode || input.project?.provider?.mode || input.user?.provider?.mode;
+    const explicitMode = input.tool?.provider?.mode || input.project?.provider?.mode || input.user?.provider?.mode;
+    const configuredMode = explicitMode || env.TOKEN_OPTIMIZER_PROVIDER_MODE;
     let explicit;
     let invalidExplicit = false;
     if (configuredMode) {
@@ -102,11 +117,12 @@ function resolveProviderConfig(input, warnings) {
         warnings.push('gateway environment variables are a legacy compatibility configuration');
     if (mode === 'gateway-byok' && !explicit)
         warnings.push('OPENROUTER_BYOK_KEY is a legacy gateway-byok credential');
+    const metadata = { credentialRef: input.tool?.provider?.credentialRef || input.project?.provider?.credentialRef || input.user?.provider?.credentialRef, taskRouting: input.tool?.provider?.taskRouting || input.project?.provider?.taskRouting || input.user?.provider?.taskRouting };
     if (mode === 'local')
-        return { mode, apiUrl: configuredUrl || env.LOCAL_LLM_API_URL || DEFAULT_LOCAL_URL, model: model || env.LOCAL_LLM_MODEL || DEFAULT_LOCAL_MODEL };
+        return { mode, apiUrl: configuredUrl || env.LOCAL_LLM_API_URL || DEFAULT_LOCAL_URL, model: model || env.LOCAL_LLM_MODEL || DEFAULT_LOCAL_MODEL, ...metadata };
     if (mode === 'openrouter-direct')
-        return { mode, apiUrl: configuredUrl || DEFAULT_OPENROUTER_URL, model: model || env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL, credentialEnv: 'OPENROUTER_API_KEY', credential: directKey };
-    return { mode, apiUrl: url, model: model || DEFAULT_LOCAL_MODEL, credentialEnv: mode === 'gateway-token' ? 'LLM_GATEWAY_TOKEN' : 'OPENROUTER_BYOK_KEY', credential: mode === 'gateway-token' ? gatewayToken : byok, byokCredential: mode === 'gateway-token' ? byok : undefined, byokModel: env.OPENROUTER_BYOK_MODEL?.trim() || undefined };
+        return { mode, apiUrl: configuredUrl || DEFAULT_OPENROUTER_URL, model: model || env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL, ...metadata, credentialEnv: 'OPENROUTER_API_KEY', credential: directKey };
+    return { mode, apiUrl: url, model: model || DEFAULT_LOCAL_MODEL, ...metadata, credentialEnv: mode === 'gateway-token' ? 'LLM_GATEWAY_TOKEN' : 'OPENROUTER_BYOK_KEY', credential: mode === 'gateway-token' ? gatewayToken : byok, byokCredential: mode === 'gateway-token' ? byok : undefined, byokModel: env.OPENROUTER_BYOK_MODEL?.trim() || undefined };
 }
 function resolveAllowlist(input) {
     const user = input.user?.execution?.allowedCommandPrefixes;
@@ -134,11 +150,18 @@ function resolveEffectiveConfig(input = {}) {
             allowedCommandPrefixes: resolveAllowlist(layers),
             autoDetectedCommands: layers.tool?.execution?.autoDetectedCommands || layers.project?.execution?.autoDetectedCommands || [],
         },
-        logs: {
-            retentionDays: layers.tool?.logs?.retentionDays ?? layers.project?.logs?.retentionDays ?? layers.user?.logs?.retentionDays ?? 7,
-            maxDiskMb: layers.tool?.logs?.maxDiskMb ?? layers.project?.logs?.maxDiskMb ?? layers.user?.logs?.maxDiskMb ?? 500,
-            storageMode: layers.tool?.logs?.storageMode ?? layers.project?.logs?.storageMode ?? layers.user?.logs?.storageMode ?? 'raw-local',
-        },
+        /* Lower-trust layers may reduce retention/quota or request redaction, but may
+         * never restore raw logs or enlarge limits fixed by the user policy. */
+        logs: (() => {
+            const base = layers.user?.logs;
+            const requested = layers.tool?.logs || layers.project?.logs;
+            return {
+                retentionDays: Math.min(base?.retentionDays ?? 7, requested?.retentionDays ?? Infinity),
+                maxDiskMb: Math.min(base?.maxDiskMb ?? 500, requested?.maxDiskMb ?? Infinity),
+                storageMode: base?.storageMode === 'redacted-local' || requested?.storageMode === 'redacted-local' ? 'redacted-local' : 'raw-local',
+            };
+        })(),
+        redaction: { rules: layers.tool?.redaction?.rules || layers.project?.redaction?.rules || layers.user?.redaction?.rules || [] },
         warnings,
     };
 }

@@ -109,6 +109,8 @@ export interface TokenOptimizerConfig {
     mode: ProviderMode;
     apiUrl: string;
     model: string;
+    credentialRef: string;
+    taskRouting: Partial<Record<LLMResponseTask, string>>;
   }>;
   execution?: Partial<{
     profile: ExecutionProfile;
@@ -120,6 +122,7 @@ export interface TokenOptimizerConfig {
     maxDiskMb: number;
     storageMode: 'raw-local' | 'redacted-local';
   }>;
+  redaction?: { rules: Array<{ pattern: string; flags?: string; category: string; replacement?: string }> };
 }
 
 export interface ConfigLayers {
@@ -131,8 +134,9 @@ export interface ConfigLayers {
 }
 
 export interface EffectiveConfig {
-  provider: { mode: ProviderMode; apiUrl: string; model: string; credentialEnv?: string; credential?: string; byokCredential?: string; byokModel?: string };
+  provider: { mode: ProviderMode; apiUrl: string; model: string; credentialRef?: string; taskRouting?: Partial<Record<LLMResponseTask, string>>; credentialEnv?: string; credential?: string; byokCredential?: string; byokModel?: string };
   execution: { profile: ExecutionProfile; allowedCommandPrefixes: string[]; autoDetectedCommands?: string[] };
   logs: { retentionDays: number; maxDiskMb: number; storageMode: 'raw-local' | 'redacted-local' };
+  redaction: { rules: Array<{ pattern: string; flags?: string; category: string; replacement?: string }> };
   warnings: string[];
 }

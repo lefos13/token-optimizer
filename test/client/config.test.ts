@@ -63,3 +63,34 @@ test('effective provider configuration selects each documented destination', () 
     assert.equal(config.provider.apiUrl, apiUrl);
   }
 });
+
+test('explicit layers outrank legacy environment while security policy only narrows', () => {
+  const config = resolveEffectiveConfig({
+    env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'local', LOCAL_LLM_API_URL: 'http://legacy/v1', OPENROUTER_API_KEY: 'runtime-secret' },
+    user: { execution: { profile: 'standard' }, logs: { retentionDays: 3, maxDiskMb: 100, storageMode: 'redacted-local' } },
+    project: { provider: { mode: 'gateway-token', apiUrl: 'https://project/v1', credentialRef: 'project-token' }, execution: { profile: 'unrestricted' }, logs: { retentionDays: 30, maxDiskMb: 1000, storageMode: 'raw-local' } },
+    tool: { provider: { mode: 'openrouter-direct', apiUrl: 'https://tool/v1', model: 'tool-model', credentialRef: 'tool-key' }, execution: { profile: 'safe' } },
+  });
+  assert.equal(config.provider.mode, 'openrouter-direct');
+  assert.equal(config.provider.apiUrl, 'https://tool/v1');
+  assert.equal(config.provider.credentialRef, 'tool-key');
+  assert.equal(config.execution.profile, 'safe');
+  assert.deepEqual(config.logs, { retentionDays: 3, maxDiskMb: 100, storageMode: 'redacted-local' });
+});
+
+test('provider task routing and custom redaction are retained without secret material', () => {
+  const config = resolveEffectiveConfig({ user: { provider: { mode: 'local', credentialRef: 'keychain:token', taskRouting: { verdict: 'model/verdict' } }, redaction: { rules: [{ pattern: 'PRIVATE-[0-9]+', flags: 'g', category: 'private' }] } } });
+  assert.equal(config.provider.credentialRef, 'keychain:token');
+  assert.equal(config.provider.taskRouting?.verdict, 'model/verdict');
+  assert.equal(config.redaction.rules.length, 1);
+});
+
+test('project config rejects symlink escape', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'token-optimizer-project-'));
+  const outside = path.join(os.tmpdir(), `token-optimizer-outside-${process.pid}.json`);
+  fs.writeFileSync(outside, '{}');
+  fs.symlinkSync(outside, path.join(workspace, '.token-optimizer.json'));
+  assert.throws(() => resolveEffectiveConfig({ workspacePath: workspace, env: { TOKEN_OPTIMIZER_CONFIG_HOME: path.join(workspace, 'missing') } }), /symbolic link/i);
+  fs.rmSync(workspace, { recursive: true, force: true });
+  fs.rmSync(outside, { force: true });
+});

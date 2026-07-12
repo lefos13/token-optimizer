@@ -252,6 +252,14 @@ with `start.js` rather than Bash. Restart the affected client after installing.
 
 ## Guardrails
 
+Configuration precedence is tool call, project, user, defaults, then legacy
+environment compatibility. Provider destination/model routing follows that
+precedence separately from credential material: `credentialRef` is metadata and
+the launcher supplies the referenced secret through the runtime environment.
+Project/tool command, log, and privacy settings may narrow but never weaken the
+user ceiling. Custom redaction rules are bounded and join mandatory built-ins at
+the final remote boundary; invalid rules fail conservatively.
+
 **LLM provider:** Configure one of four explicit modes: `local` keeps inference on your endpoint; `openrouter-direct` sends the redacted excerpt and credential directly to OpenRouter; `gateway-token` sends redacted excerpts through the Softaware gateway using its access token; and `gateway-byok` sends both the redacted excerpt and BYOK key through that gateway. The v1 `LLM_GATEWAY_URL` + `OPENROUTER_BYOK_KEY` environment pairing maps to `gateway-byok` with a compatibility warning, preserving its destination. Remote responses include `redactionSummary` (counts/categories only) and may include `providerWarnings`; neither field contains secret values. Raw-local logs may contain secrets printed by commands. If a provider is unavailable or structured output fails schema validation, command exit codes remain authoritative and the tool returns `uncertain` with conservative metadata. `OPENROUTER_BYOK_MODEL` is optional for BYOK routing. Generated plugins intentionally omit blank gateway placeholders so inherited host values keep working after reinstalls. `check_local_llm_health` verifies the selected provider.
 
 Installer credentials default to the native OS credential store for

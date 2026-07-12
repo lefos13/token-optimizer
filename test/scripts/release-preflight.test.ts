@@ -98,7 +98,7 @@ function adapters(overrides: Record<string, unknown> = {}) {
     ? ['LICENSE', 'NOTICE', 'README.md', 'package.json', 'dist/index.js']
     : ['LICENSE', 'NOTICE', 'README.md', 'package.json', 'bin/token-optimizer.js'];
   return {
-    env: { RELEASE_TAG: 'v2.0.0-rc.1', RELEASE_ARTIFACT_DIR: `release-artifacts/test-${process.pid}-${Math.random()}`, PREFLIGHT_ALLOW_DIRTY: '1' },
+    env: { RELEASE_TAG: 'v2.0.0-rc.2', RELEASE_ARTIFACT_DIR: `release-artifacts/test-${process.pid}-${Math.random()}`, PREFLIGHT_ALLOW_DIRTY: '1' },
     argv: [],
     run: (command: string, args: string[]) => ({ status: 0, stdout: command === 'git' && args[0] === 'ls-files' ? '' : '', stderr: '' }),
     commands: {
@@ -111,7 +111,7 @@ function adapters(overrides: Record<string, unknown> = {}) {
 }
 
 test('runPreflight returns stable success JSON and derives prerelease dist tag', () => {
-  assert.deepEqual(runPreflight(root, adapters()), { ok: true, code: 'RELEASE_PREFLIGHT_PASSED', version: '2.0.0-rc.1', distTag: 'rc', warnings: [], artifacts: ['root.cdx.json', 'installer.cdx.json'] });
+  assert.deepEqual(runPreflight(root, adapters()), { ok: true, code: 'RELEASE_PREFLIGHT_PASSED', version: '2.0.0-rc.2', distTag: 'rc', warnings: [], artifacts: ['root.cdx.json', 'installer.cdx.json'] });
 });
 
 test('runPreflight reports deterministic command and SBOM failure codes', () => {
@@ -128,10 +128,10 @@ test('runPreflight reports deterministic command and SBOM failure codes', () => 
 
 test('runPreflight reports dirty, tag, staged-secret, and installer-pack failures', () => {
   const scenarios: Array<[string, Record<string, unknown>]> = [
-    ['DIRTY_TREE', { env: { RELEASE_TAG: 'v2.0.0-rc.1' }, run: (command: string, args: string[]) => ({ status: 0, stdout: command === 'git' && args[0] === 'status' ? ' M tracked.ts\n' : '', stderr: '' }) }],
+    ['DIRTY_TREE', { env: { RELEASE_TAG: 'v2.0.0-rc.2' }, run: (command: string, args: string[]) => ({ status: 0, stdout: command === 'git' && args[0] === 'status' ? ' M tracked.ts\n' : '', stderr: '' }) }],
     ['TAG_REQUIRED', { env: {}, argv: [] }],
     ['TAG_VERSION_MISMATCH', { env: { RELEASE_TAG: 'v2.0.0-beta.10' } }],
-    ['TAG_POLICY_REJECTED', { env: { RELEASE_TAG: '2.0.0-rc.1' } }],
+    ['TAG_POLICY_REJECTED', { env: { RELEASE_TAG: '2.0.0-rc.2' } }],
     ['REPOSITORY_SECRET_REJECTED', { run: (command: string, args: string[]) => ({ status: 0, stdout: command === 'git' && args[0] === 'diff' ? '+auth_' + 'token="abcdefgh' + 'ijklmnopqrstuvwxyz"' : '', stderr: '' }) }],
     ['INSTALLER_PACK_FAILED', { commands: { ...adapters().commands, pack: (kind: string) => ({ status: kind === 'installer' ? 1 : 0, stdout: JSON.stringify([{ files: ['LICENSE', 'NOTICE', 'README.md', 'package.json', 'dist/index.js'].map(file => ({ path: file })) }]), stderr: 'installer pack failed' }) } }],
   ];
@@ -141,7 +141,7 @@ test('runPreflight reports dirty, tag, staged-secret, and installer-pack failure
 test('every git command failure is authoritative and machine-coded', () => {
   for (const operation of ['status', 'diff', 'ls-files']) {
     const base = adapters();
-    const env = operation === 'status' ? { RELEASE_TAG: 'v2.0.0-rc.1' } : base.env;
+    const env = operation === 'status' ? { RELEASE_TAG: 'v2.0.0-rc.2' } : base.env;
     const run = (command: string, args: string[]) => command === 'git' && args[0] === operation
       ? { status: 128, stdout: '', stderr: 'not a git repository', error: undefined }
       : { status: 0, stdout: '', stderr: '' };
@@ -169,7 +169,7 @@ test('CLI emits one machine-readable stderr object and exits exactly one on poli
   const result = spawnSync(process.execPath, ['scripts/release-preflight.js'], { cwd: root, encoding: 'utf8', env: { ...process.env, RELEASE_TAG: '' } });
   assert.equal(result.status, 1);
   assert.equal(result.stdout, '');
-  assert.deepEqual(JSON.parse(result.stderr), { ok: false, code: 'TAG_REQUIRED', details: { version: '2.0.0-rc.1' } });
+  assert.deepEqual(JSON.parse(result.stderr), { ok: false, code: 'TAG_REQUIRED', details: { version: '2.0.0-rc.2' } });
 });
 
 test('actual npm pack dry-run JSON inventories satisfy release policy', () => {
