@@ -1,7 +1,5 @@
 # Token Optimizer
 
-Release benchmark methodology and environment-specific evidence are documented in [benchmarks/README.md](benchmarks/README.md). Performance claims are limited to the committed measurements there.
-
 ## Security boundary
 
 Token Optimizer applies a deny-first command policy before spawning commands, canonicalizes workspace paths, redacts recognized secrets at every remote inference hop, validates model output conservatively, and uses secret-free transactional installer plans. The `safe`, `standard`, and `unrestricted` profiles express policy ceilings; none is an operating-system sandbox. Run hostile repositories only inside an OS sandbox or container. See [the threat model](docs/security/threat-model.md) for actors, trust boundaries, exact controls, deterministic security tests, and residual risks. Release candidates must pass `npm run test:security` without a live home directory, external network, provider, or keychain.
