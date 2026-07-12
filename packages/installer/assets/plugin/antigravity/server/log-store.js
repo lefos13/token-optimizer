@@ -58,6 +58,7 @@ const defaultRunLogFs = {
     close: (fd) => new Promise((resolve, reject) => fs.close(fd, (error) => error ? reject(error) : resolve())),
 };
 function canonicalDir(workspacePath) { return path.resolve(workspacePath, exports.LOG_DIR); }
+function relativeToWorkspace(workspacePath, file) { return path.relative(fs.realpathSync(workspacePath), file); }
 async function ensureSafeRoot(workspacePath) {
     const root = canonicalDir(workspacePath);
     await fs.promises.mkdir(root, { recursive: true });
@@ -136,22 +137,43 @@ async function createRunLog(workspacePath, options = {}) {
             carry = '';
         }
         stream.once('finish', async () => {
+            const fd = stream.fd;
+            const fail = async (stage, error, remove) => {
+                if (typeof fd === 'number' && stage === 'fsync')
+                    await io.close(fd).catch(() => defaultRunLogFs.close(fd).catch(() => undefined));
+                if (typeof fd === 'number' && stage === 'close')
+                    await defaultRunLogFs.close(fd).catch(() => undefined);
+                if (remove)
+                    await io.unlink(temporaryPath).catch(() => undefined);
+                reject(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: stage }));
+            };
+            if (typeof fd !== 'number') {
+                await fail('fsync', new Error('audit log file descriptor unavailable'), true);
+                return;
+            }
             try {
-                const fd = stream.fd;
-                if (typeof fd !== 'number')
-                    throw new Error('audit log file descriptor unavailable');
                 await io.fsync(fd);
-                await io.close(fd);
-                await io.rename(temporaryPath, absolutePath);
-                stream.removeListener('error', onError);
-                resolve();
             }
             catch (error) {
-                const fd = stream.fd;
-                if (typeof fd === 'number')
-                    await io.close(fd).catch(() => undefined);
-                reject(error);
+                await fail('fsync', error, true);
+                return;
             }
+            try {
+                await io.close(fd);
+            }
+            catch (error) {
+                await fail('close', error, true);
+                return;
+            }
+            try {
+                await io.rename(temporaryPath, absolutePath);
+            }
+            catch (error) {
+                await fail('rename', error, false);
+                return;
+            }
+            stream.removeListener('error', onError);
+            resolve();
         });
         stream.end();
     });
@@ -159,6 +181,7 @@ async function createRunLog(workspacePath, options = {}) {
         stream.destroy(); await io.unlink(temporaryPath).catch(() => undefined); };
     return { absolutePath, temporaryPath, relativePath: path.relative(workspacePath, absolutePath), write, close, abort };
 }
+function isRunEvidence(name) { return name.endsWith('.log') || name.endsWith('.audit.tmp'); }
 async function entries(workspacePath) {
     const dir = await ensureSafeRoot(workspacePath);
     let names;
@@ -170,7 +193,7 @@ async function entries(workspacePath) {
     }
     const out = [];
     for (const name of names) {
-        if (!name.endsWith('.log'))
+        if (!isRunEvidence(name))
             continue;
         const file = path.join(dir, name);
         const st = await fs.promises.lstat(file);
@@ -188,7 +211,7 @@ async function pruneLogs(workspacePath, policy = exports.DEFAULT_LOG_POLICY) {
     for (const e of all) {
         if ((now - e.mtimeMs) > retention * 86400000) {
             await fs.promises.unlink(e.file);
-            removed.push({ path: path.relative(workspacePath, e.file), bytes: e.bytes, reason: 'expired' });
+            removed.push({ path: relativeToWorkspace(workspacePath, e.file), bytes: e.bytes, reason: 'expired' });
         }
         else
             keep.push(e);
@@ -199,7 +222,7 @@ async function pruneLogs(workspacePath, policy = exports.DEFAULT_LOG_POLICY) {
             break;
         await fs.promises.unlink(e.file);
         total -= e.bytes;
-        removed.push({ path: path.relative(workspacePath, e.file), bytes: e.bytes, reason: 'quota' });
+        removed.push({ path: relativeToWorkspace(workspacePath, e.file), bytes: e.bytes, reason: 'quota' });
     }
     return { removed, freedBytes: removed.reduce((n, e) => n + e.bytes, 0), warnings: [], quota: { bytes: total, maxBytes, overQuota: total > maxBytes } };
 }
@@ -209,7 +232,7 @@ async function purgeLogs(workspacePath, options = {}) {
     const removed = [];
     for (const e of all) {
         await fs.promises.unlink(e.file);
-        removed.push({ path: path.relative(workspacePath, e.file), bytes: e.bytes, reason: 'purged' });
+        removed.push({ path: relativeToWorkspace(workspacePath, e.file), bytes: e.bytes, reason: 'purged' });
     }
     for (const name of [...(options.includeBaseline ? ['baseline.json'] : []), ...(options.includeAnalytics ? ['analytics.json', 'analytics-summary.json'] : [])]) {
         const file = path.join(dir, name);

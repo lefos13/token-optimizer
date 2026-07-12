@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Writable } from 'node:stream';
 import { createHash } from 'node:crypto';
-import { runSuite } from '../../src/runner';
+import { appendFileStream, runSuite } from '../../src/runner';
 import { buildAnalyticsRecord, recordAnalytics } from '../../src/analytics';
 import { loadRun, resolveLogPath } from '../../src/registry';
 
@@ -58,12 +58,43 @@ test('rename failure returns explicit audit failure and retains temporary eviden
   assert.equal(result.results[0].executionStatus, 'completed');
   assert.equal(result.auditStatus, 'failed');
   assert.equal(result.auditFailure?.code, 'EACCES');
+  assert.equal(result.auditFailure?.stage, 'rename');
   assert.equal(result.auditFailure?.tempCleanup, 'retained');
   assert.ok(result.auditFailure?.evidencePath);
   assert.equal(fs.existsSync(path.join(root, result.auditFailure!.evidencePath!)), true);
   const runId = path.basename(result.auditFailure!.evidencePath!).split('.')[1];
   assert.equal(loadRun(root, runId)?.rawLogPath, result.auditFailure!.evidencePath);
   assert.equal(resolveLogPath(root, { runId }), path.join(root, result.auditFailure!.evidencePath!));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+for (const stage of ['fsync', 'close'] as const) {
+  test(`${stage} failure removes incomplete audit evidence and skips registry`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `task4-${stage}-`));
+    const failure = Object.assign(new Error(`injected ${stage}`), { code: stage === 'fsync' ? 'ENOSPC' : 'EIO' });
+    const result = await runSuite([`node -e "process.stdout.write('executed')"`], root, { logFs: { [stage]: async () => { throw failure; } } });
+    assert.equal(result.results[0].exitCode, 0);
+    assert.equal(result.auditStatus, 'failed');
+    assert.equal(result.auditFailure?.stage, stage);
+    assert.equal(result.auditFailure?.tempCleanup, 'removed');
+    assert.equal(result.auditFailure?.evidencePath, undefined);
+    assert.equal(result.rawLogPath, '');
+    assert.equal(fs.readdirSync(path.join(root, '.codex-local-test-runs')).some((name) => name.endsWith('.audit.tmp')), false);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+}
+
+test('append stream write rejection closes the source and settles once', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'task4-append-fail-'));
+  const source = path.join(root, 'source.bin'); fs.writeFileSync(source, Buffer.alloc(1024 * 1024, 7));
+  for (let i = 0; i < 20; i++) {
+    let stream: fs.ReadStream | undefined; let calls = 0;
+    await assert.rejects(appendFileStream(async () => { calls++; throw new Error('destination failed'); }, source, ((file, options) => (stream = fs.createReadStream(file, options))) as typeof fs.createReadStream), /destination failed/);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(stream?.destroyed, true);
+    assert.equal(stream?.closed, true);
+    assert.equal(calls, 1);
+  }
   fs.rmSync(root, { recursive: true, force: true });
 });
 

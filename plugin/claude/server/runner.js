@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.runCommand = runCommand;
 exports.trimLog = trimLog;
 exports.estimateTokens = estimateTokens;
+exports.appendFileStream = appendFileStream;
 exports.runSuite = runSuite;
 exports.numberLines = numberLines;
 exports.getGitDiff = getGitDiff;
@@ -248,15 +249,34 @@ function formatCommandLog(res) {
     block += `\n--- EXIT CODE: ${res.exitCode} (Duration: ${res.durationMs}ms) ---\n\n`;
     return block;
 }
-async function appendFileStream(write, sourcePath) {
+async function appendFileStream(write, sourcePath, createReadStream = fs.createReadStream) {
     await new Promise((resolve, reject) => {
-        const source = fs.createReadStream(sourcePath);
-        source.on('error', reject);
-        source.on('data', (chunk) => {
+        const source = createReadStream(sourcePath);
+        let settled = false;
+        const cleanup = () => { source.removeListener('error', fail); source.removeListener('end', done); source.removeListener('data', onData); };
+        const done = () => { if (settled)
+            return; settled = true; cleanup(); resolve(); };
+        const fail = (error) => {
+            if (settled)
+                return;
+            settled = true;
+            cleanup();
+            const rejectClosed = () => reject(error);
+            if (source.closed)
+                rejectClosed();
+            else {
+                source.once('close', rejectClosed);
+                source.destroy();
+            }
+        };
+        const onData = (chunk) => {
             source.pause();
-            write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)).then(() => source.resume(), reject);
-        });
-        source.on('end', resolve);
+            write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)).then(() => { if (!settled)
+                source.resume(); }, fail);
+        };
+        source.on('error', fail);
+        source.on('data', onData);
+        source.on('end', done);
     });
 }
 /**
@@ -315,21 +335,24 @@ async function runSuite(commands, workspacePath, options = {}) {
                 await appendFileStream((chunk) => managedLog.write(chunk), commandOutputPath);
             await managedLog.write(`\n--- EXIT CODE: ${results[i].exitCode} (Duration: ${results[i].durationMs}ms) ---\n\n`);
         }
-        auditStage = 'fsync_or_rename';
+        auditStage = 'fsync';
         await managedLog.close();
     }
     catch (error) {
         auditStatus = 'failed';
+        const failureStage = typeof error === 'object' && error && 'auditStage' in error ? error.auditStage : auditStage;
         const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : undefined;
         let evidenceExists = Boolean(managedLog?.temporaryPath && fs.existsSync(managedLog.temporaryPath));
         let tempCleanup = evidenceExists ? 'retained' : 'none';
-        if (auditStage === 'write' && managedLog) {
+        if (failureStage === 'write' && managedLog) {
             await managedLog.abort();
             evidenceExists = fs.existsSync(managedLog.temporaryPath);
             tempCleanup = evidenceExists ? 'retained' : 'removed';
         }
+        if ((failureStage === 'fsync' || failureStage === 'close') && !evidenceExists)
+            tempCleanup = 'removed';
         auditFailure = {
-            stage: auditStage,
+            stage: failureStage,
             ...(code ? { code } : {}), message: error instanceof Error ? error.message : String(error),
             ...(evidenceExists ? { evidencePath: path.relative(workspacePath, managedLog.temporaryPath) } : {}),
             tempCleanup,

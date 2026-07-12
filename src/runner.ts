@@ -36,9 +36,10 @@ export interface ExecutedSuiteResult {
   rawSourceBytes: number;
   rawSourceTokens: number;
   auditStatus: 'persisted' | 'failed';
-  auditFailure?: { stage: 'create' | 'write' | 'fsync_or_rename'; code?: string; message: string; evidencePath?: string; tempCleanup: 'removed' | 'retained' | 'none' };
+  auditFailure?: { stage: 'create' | 'write' | 'fsync' | 'close' | 'rename'; code?: string; message: string; evidencePath?: string; tempCleanup: 'removed' | 'retained' | 'none' };
   warnings: string[];
 }
+type AuditFailureStage = NonNullable<ExecutedSuiteResult['auditFailure']>['stage'];
 
 /**
  * Runs a single shell command inside the workspacePath, capturing all stdout and stderr.
@@ -228,15 +229,27 @@ function formatCommandLog(res: RunCommandResult): string {
   return block;
 }
 
-async function appendFileStream(write: (chunk: Buffer) => Promise<void>, sourcePath: string): Promise<void> {
+export async function appendFileStream(write: (chunk: Buffer) => Promise<void>, sourcePath: string, createReadStream: typeof fs.createReadStream = fs.createReadStream): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const source = fs.createReadStream(sourcePath);
-    source.on('error', reject);
-    source.on('data', (chunk: string | Buffer) => {
+    const source = createReadStream(sourcePath);
+    let settled = false;
+    const cleanup = () => { source.removeListener('error', fail); source.removeListener('end', done); source.removeListener('data', onData); };
+    const done = () => { if (settled) return; settled = true; cleanup(); resolve(); };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      const rejectClosed = () => reject(error);
+      if (source.closed) rejectClosed();
+      else { source.once('close', rejectClosed); source.destroy(); }
+    };
+    const onData = (chunk: string | Buffer) => {
       source.pause();
-      write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)).then(() => source.resume(), reject);
-    });
-    source.on('end', resolve);
+      write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)).then(() => { if (!settled) source.resume(); }, fail);
+    };
+    source.on('error', fail);
+    source.on('data', onData);
+    source.on('end', done);
   });
 }
 
@@ -283,7 +296,7 @@ export async function runSuite(commands: string[], workspacePath: string, option
   let managedLog: Awaited<ReturnType<typeof createRunLog>> | undefined;
   let auditStatus: 'persisted' | 'failed' = 'persisted';
   let auditFailure: ExecutedSuiteResult['auditFailure'];
-  let auditStage: 'create' | 'write' | 'fsync_or_rename' = 'create';
+  let auditStage: AuditFailureStage = 'create';
   try {
     const commandLogFailure = results.find((result) => result.commandLogFailure)?.commandLogFailure;
     if (commandLogFailure) {
@@ -299,20 +312,22 @@ export async function runSuite(commands: string[], workspacePath: string, option
       if (fs.existsSync(commandOutputPath)) await appendFileStream((chunk) => managedLog!.write(chunk), commandOutputPath);
       await managedLog.write(`\n--- EXIT CODE: ${results[i].exitCode} (Duration: ${results[i].durationMs}ms) ---\n\n`);
     }
-    auditStage = 'fsync_or_rename';
+    auditStage = 'fsync';
     await managedLog.close();
   } catch (error) {
     auditStatus = 'failed';
+    const failureStage: AuditFailureStage = typeof error === 'object' && error && 'auditStage' in error ? (error as { auditStage: AuditFailureStage }).auditStage : auditStage;
     const code = typeof error === 'object' && error && 'code' in error ? String((error as NodeJS.ErrnoException).code) : undefined;
     let evidenceExists = Boolean(managedLog?.temporaryPath && fs.existsSync(managedLog.temporaryPath));
     let tempCleanup: 'removed' | 'retained' | 'none' = evidenceExists ? 'retained' : 'none';
-    if (auditStage === 'write' && managedLog) {
+    if (failureStage === 'write' && managedLog) {
       await managedLog.abort();
       evidenceExists = fs.existsSync(managedLog.temporaryPath);
       tempCleanup = evidenceExists ? 'retained' : 'removed';
     }
+    if ((failureStage === 'fsync' || failureStage === 'close') && !evidenceExists) tempCleanup = 'removed';
     auditFailure = {
-      stage: auditStage,
+      stage: failureStage,
       ...(code ? { code } : {}), message: error instanceof Error ? error.message : String(error),
       ...(evidenceExists ? { evidencePath: path.relative(workspacePath, managedLog!.temporaryPath) } : {}),
       tempCleanup,

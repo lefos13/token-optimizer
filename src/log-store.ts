@@ -18,6 +18,7 @@ export interface RunLogFs {
   fsync(fd: number): Promise<void>;
   close(fd: number): Promise<void>;
 }
+export type AuditFinalizeStage = 'fsync' | 'close' | 'rename';
 
 const defaultRunLogFs: RunLogFs = {
   createWriteStream: fs.createWriteStream,
@@ -28,6 +29,7 @@ const defaultRunLogFs: RunLogFs = {
 };
 
 function canonicalDir(workspacePath: string): string { return path.resolve(workspacePath, LOG_DIR); }
+function relativeToWorkspace(workspacePath: string, file: string): string { return path.relative(fs.realpathSync(workspacePath), file); }
 export async function ensureSafeRoot(workspacePath: string): Promise<string> {
   const root = canonicalDir(workspacePath);
   await fs.promises.mkdir(root, { recursive: true });
@@ -78,19 +80,19 @@ export async function createRunLog(workspacePath: string, options: { storageMode
     stream.once('error', onError);
     if (mode === 'redacted-local' && carry) { stream.write(redactText(carry).text); carry = ''; }
     stream.once('finish', async () => {
-      try {
-        const fd = (stream as fs.WriteStream & { fd?: number }).fd;
-        if (typeof fd !== 'number') throw new Error('audit log file descriptor unavailable');
-        await io.fsync(fd);
-        await io.close(fd);
-        await io.rename(temporaryPath, absolutePath);
-        stream.removeListener('error', onError);
-        resolve();
-      } catch (error) {
-        const fd = (stream as fs.WriteStream & { fd?: number }).fd;
-        if (typeof fd === 'number') await io.close(fd).catch(() => undefined);
-        reject(error);
-      }
+      const fd = (stream as fs.WriteStream & { fd?: number }).fd;
+      const fail = async (stage: AuditFinalizeStage, error: unknown, remove: boolean) => {
+        if (typeof fd === 'number' && stage === 'fsync') await io.close(fd).catch(() => defaultRunLogFs.close(fd).catch(() => undefined));
+        if (typeof fd === 'number' && stage === 'close') await defaultRunLogFs.close(fd).catch(() => undefined);
+        if (remove) await io.unlink(temporaryPath).catch(() => undefined);
+        reject(Object.assign(error instanceof Error ? error : new Error(String(error)), { auditStage: stage }));
+      };
+      if (typeof fd !== 'number') { await fail('fsync', new Error('audit log file descriptor unavailable'), true); return; }
+      try { await io.fsync(fd); } catch (error) { await fail('fsync', error, true); return; }
+      try { await io.close(fd); } catch (error) { await fail('close', error, true); return; }
+      try { await io.rename(temporaryPath, absolutePath); } catch (error) { await fail('rename', error, false); return; }
+      stream.removeListener('error', onError);
+      resolve();
     });
     stream.end();
   });
@@ -98,21 +100,22 @@ export async function createRunLog(workspacePath: string, options: { storageMode
   return { absolutePath, temporaryPath, relativePath: path.relative(workspacePath, absolutePath), write, close, abort };
 }
 interface Entry { file: string; bytes: number; mtimeMs: number }
+function isRunEvidence(name: string): boolean { return name.endsWith('.log') || name.endsWith('.audit.tmp'); }
 async function entries(workspacePath: string): Promise<Entry[]> {
   const dir = await ensureSafeRoot(workspacePath); let names: string[]; try { names = await fs.promises.readdir(dir); } catch { return []; }
-  const out: Entry[] = []; for (const name of names) { if (!name.endsWith('.log')) continue; const file = path.join(dir, name); const st = await fs.promises.lstat(file); if (st.isSymbolicLink()) continue; out.push({ file, bytes: st.size, mtimeMs: st.mtimeMs }); }
+  const out: Entry[] = []; for (const name of names) { if (!isRunEvidence(name)) continue; const file = path.join(dir, name); const st = await fs.promises.lstat(file); if (st.isSymbolicLink()) continue; out.push({ file, bytes: st.size, mtimeMs: st.mtimeMs }); }
   return out.sort((a, b) => a.mtimeMs - b.mtimeMs);
 }
 export async function pruneLogs(workspacePath: string, policy: LogPolicy = DEFAULT_LOG_POLICY): Promise<LogLifecycleResult> {
   const retention = policy.retentionDays ?? 7, maxBytes = (policy.maxDiskMb ?? 500) * 1024 * 1024, now = Date.now();
   const all = await entries(workspacePath); const removed: RemovedLog[] = []; const keep: Entry[] = [];
-  for (const e of all) { if ((now - e.mtimeMs) > retention * 86400000) { await fs.promises.unlink(e.file); removed.push({ path: path.relative(workspacePath, e.file), bytes: e.bytes, reason: 'expired' }); } else keep.push(e); }
-  let total = keep.reduce((n, e) => n + e.bytes, 0); for (const e of keep) { if (total <= maxBytes) break; await fs.promises.unlink(e.file); total -= e.bytes; removed.push({ path: path.relative(workspacePath, e.file), bytes: e.bytes, reason: 'quota' }); }
+  for (const e of all) { if ((now - e.mtimeMs) > retention * 86400000) { await fs.promises.unlink(e.file); removed.push({ path: relativeToWorkspace(workspacePath, e.file), bytes: e.bytes, reason: 'expired' }); } else keep.push(e); }
+  let total = keep.reduce((n, e) => n + e.bytes, 0); for (const e of keep) { if (total <= maxBytes) break; await fs.promises.unlink(e.file); total -= e.bytes; removed.push({ path: relativeToWorkspace(workspacePath, e.file), bytes: e.bytes, reason: 'quota' }); }
   return { removed, freedBytes: removed.reduce((n, e) => n + e.bytes, 0), warnings: [], quota: { bytes: total, maxBytes, overQuota: total > maxBytes } };
 }
 export async function purgeLogs(workspacePath: string, options: { includeBaseline?: boolean; includeAnalytics?: boolean } = {}): Promise<LogLifecycleResult> {
   const dir = await ensureSafeRoot(workspacePath); const all = await entries(workspacePath); const removed: RemovedLog[] = [];
-  for (const e of all) { await fs.promises.unlink(e.file); removed.push({ path: path.relative(workspacePath, e.file), bytes: e.bytes, reason: 'purged' }); }
+  for (const e of all) { await fs.promises.unlink(e.file); removed.push({ path: relativeToWorkspace(workspacePath, e.file), bytes: e.bytes, reason: 'purged' }); }
   for (const name of [...(options.includeBaseline ? ['baseline.json'] : []), ...(options.includeAnalytics ? ['analytics.json', 'analytics-summary.json'] : [])]) { const file = path.join(dir, name); try { const st = await fs.promises.lstat(file); if (st.isSymbolicLink()) continue; await fs.promises.unlink(file); removed.push({ path: path.relative(workspacePath, file), bytes: st.size, reason: 'purged' }); } catch { /* absent */ } }
   const maxBytes = (DEFAULT_LOG_POLICY.maxDiskMb || 500) * 1024 * 1024; return { removed, freedBytes: removed.reduce((n, e) => n + e.bytes, 0), warnings: [], quota: { bytes: 0, maxBytes, overQuota: false } };
 }

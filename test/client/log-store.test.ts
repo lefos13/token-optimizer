@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createRunLog, ensureLogGitignore, purgeLogs, pruneLogs } from '../../src/log-store';
+import { createRunLog, ensureLogGitignore, getLogStatus, purgeLogs, pruneLogs } from '../../src/log-store';
 import { appendRun, loadRun } from '../../src/registry';
 import { resolveLogPath } from '../../src/registry';
 import { runCommand } from '../../src/runner';
@@ -28,6 +28,21 @@ test('prune expires logs before quota victims', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'task5-')); const dir = path.join(root, '.codex-local-test-runs'); await fs.mkdir(dir);
   await fs.writeFile(path.join(dir, 'old.log'), 'x'); const old = new Date(Date.now() - 10 * 86400000); await fs.utimes(path.join(dir, 'old.log'), old, old);
   const result = await pruneLogs(root, { retentionDays: 7, maxDiskMb: 500 }); assert.equal(result.removed[0]?.reason, 'expired');
+});
+
+test('retained audit evidence participates in status, retention, quota, and purge', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'task5-audit-life-')); const dir = path.join(root, '.codex-local-test-runs'); await fs.mkdir(dir);
+  const retained = path.join(dir, '.retained.audit.tmp'); await fs.writeFile(retained, Buffer.alloc(2048));
+  assert.equal((await getLogStatus(root)).quota.bytes, 2048);
+  const old = new Date(Date.now() - 10 * 86400000); await fs.utimes(retained, old, old);
+  const expired = await pruneLogs(root, { retentionDays: 7, maxDiskMb: 500 });
+  assert.equal(expired.removed[0]?.path, '.codex-local-test-runs/.retained.audit.tmp');
+  await fs.writeFile(retained, Buffer.alloc(2048));
+  const quota = await pruneLogs(root, { retentionDays: 7, maxDiskMb: 0.000001 });
+  assert.equal(quota.removed[0]?.reason, 'quota');
+  await fs.writeFile(retained, 'x');
+  const purged = await purgeLogs(root);
+  assert.ok(purged.removed.some((entry) => entry.path.endsWith('.audit.tmp')));
 });
 
 test('registry rejects log symlink escapes', async () => {

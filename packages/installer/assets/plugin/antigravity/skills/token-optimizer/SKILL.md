@@ -10,7 +10,7 @@ Execution profiles are `safe`, `standard`, and `unrestricted`; tool/project requ
 
 Execution metadata uses `signal: null` when no OS signal was observed; a value appears only for signal-terminated processes. `executionStatus: terminated` distinguishes those exits from `timed_out`. Command outcomes remain authoritative when audit-log persistence fails: inspect additive `auditStatus` and `auditFailure`, including any retained temporary evidence path.
 
-Command temp-stream and final audit failures never override exit/signal truth. Incomplete temp output is removed; fully fsynced evidence is retained and registered when rename alone fails. Treat registry, log-lifecycle, and analytics persistence entries in `warnings` as operational advisories.
+Command temp-stream and final audit failures never override exit/signal truth. Open/write/end, fsync, and close failures remove incomplete temp output. Fully fsynced and closed evidence is retained and registered only when rename fails, and log lifecycle accounting includes that `.audit.tmp` evidence. Treat registry, log-lifecycle, and analytics persistence entries in `warnings` as operational advisories.
 
 ## Overview
 
