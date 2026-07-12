@@ -97,9 +97,9 @@ function metadataFromProvider(provider: LLMProvider, latencyMs: number, fallback
   };
 }
 
-function summarizeRedaction(systemPrompt: string, userPrompt: string): { systemPrompt: string; userPrompt: string; summary: RedactionResult } {
-  const system = redactText(systemPrompt);
-  const user = redactText(userPrompt);
+function summarizeRedaction(systemPrompt: string, userPrompt: string, rules: EffectiveConfig['redaction']['rules'] = []): { systemPrompt: string; userPrompt: string; summary: RedactionResult } {
+  const system = redactText(systemPrompt, { customRules: rules });
+  const user = redactText(userPrompt, { customRules: rules });
   return {
     systemPrompt: system.text,
     userPrompt: user.text,
@@ -139,7 +139,8 @@ type LLMContext = { workspacePath?: string; effectiveConfig?: EffectiveConfig };
 
 function resolveContextProvider(taskType: LLMTaskType, context: LLMContext = {}): LLMProvider {
   const effective = context.effectiveConfig || resolveEffectiveConfig({ workspacePath: context.workspacePath });
-  return resolveProvider(effective.provider, taskType);
+  const routedModel = taskType === 'health' ? undefined : effective.provider.taskRouting?.[taskType];
+  return resolveProvider({ ...effective.provider, model: routedModel || effective.provider.model }, taskType);
 }
 
 function resolveLocalProvider(taskType: LLMTaskType, context: LLMContext = {}): LLMProvider {
@@ -240,13 +241,13 @@ function normalizeUsage(data: any, systemPrompt: string, userPrompt: string, raw
 }
 
 /* Shared transport for every LLM call: accepts an already-resolved provider, builds the OpenAI-compatible request, and returns raw message content plus token/provider accounting. */
-async function callChatCompletion(provider: LLMProvider, systemPrompt: string, userPrompt: string, inheritedRedaction?: RedactionResult): Promise<ChatCompletionResult> {
+async function callChatCompletion(provider: LLMProvider, systemPrompt: string, userPrompt: string, inheritedRedaction?: RedactionResult, customRules: EffectiveConfig['redaction']['rules'] = []): Promise<ChatCompletionResult> {
   const start = Date.now();
   /* Redact only at the final remote boundary. Local providers retain the full
      diagnostic payload so offline development and local models are unchanged. */
   const outbound = provider.mode === 'local'
     ? { systemPrompt, userPrompt, redaction: inheritedRedaction }
-    : (() => { const result = summarizeRedaction(systemPrompt, userPrompt); return { ...result, redaction: result.summary }; })();
+    : (() => { const result = summarizeRedaction(systemPrompt, userPrompt, customRules); return { ...result, redaction: result.summary }; })();
 
   const response = await fetch(`${provider.apiUrl}/chat/completions`, {
     method: 'POST',
@@ -292,10 +293,11 @@ async function callChatCompletion(provider: LLMProvider, systemPrompt: string, u
 /* Resolve provider, attempt the call. If the primary provider is the gateway and the call
    fails, retry once with the local provider and surface the fallback reason in metadata. */
 async function callWithFallback(taskType: LLMTaskType, systemPrompt: string, userPrompt: string, context: LLMContext = {}): Promise<ChatCompletionResult> {
+  const effective = context.effectiveConfig || resolveEffectiveConfig({ workspacePath: context.workspacePath });
   const provider = resolveContextProvider(taskType, context);
   const isRemote = provider.mode !== 'local';
   try {
-    return await callChatCompletion(provider, systemPrompt, userPrompt);
+    return await callChatCompletion(provider, systemPrompt, userPrompt, undefined, effective.redaction.rules);
   } catch (error) {
     if (!isRemote) {
       throw error;

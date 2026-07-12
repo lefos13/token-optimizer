@@ -12,7 +12,10 @@ const RELEASE_VERSION = JSON.parse(
 /* Every installable artifact needs the same release version so marketplace and
    npm users receive the server build that was tested for that release. */
 test('all distributable package and plugin version sources are aligned', () => {
-  assert.equal(RELEASE_VERSION, '2.0.0-beta.2');
+  assert.equal(RELEASE_VERSION, '2.0.0-rc.6');
+  const rootLock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
+  assert.equal(rootLock.version, RELEASE_VERSION);
+  assert.equal(rootLock.packages[''].version, RELEASE_VERSION);
   const installerPackage = JSON.parse(fs.readFileSync(path.join(root, 'packages', 'installer', 'package.json'), 'utf8'));
   assert.equal(installerPackage.version, RELEASE_VERSION);
   const serverSource = fs.readFileSync(path.join(root, 'src', 'index.ts'), 'utf8');

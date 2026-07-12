@@ -17,6 +17,7 @@ export interface ServerDeps {
   statsStore?: StatsStore;
   emailSender?: (config: GatewayConfig, to: string, token: string) => Promise<EmailResult>;
   tokenRequestNotificationSender?: (config: GatewayConfig, requesterEmail: string, requestedAt: Date) => Promise<EmailResult>;
+  providerHealthMaxConcurrency?: number;
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -64,12 +65,12 @@ async function readJsonBody(req: IncomingMessage, res: ServerResponse, maxBytes:
   }
 }
 
-/* Caddy fronts the gateway, so the first X-Forwarded-For entry is the real
-   client; fall back to the socket address for direct/loopback access. */
-function clientIp(req: IncomingMessage): string {
+/* Forwarded addresses are attacker-controlled unless an operator explicitly
+   declares that a trusted reverse proxy owns the connection boundary. */
+function clientIp(req: IncomingMessage, trustProxy = false): string {
   const forwarded = req.headers['x-forwarded-for'];
   const first = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-  if (first) {
+  if (trustProxy && first) {
     return first.split(',')[0].trim();
   }
   return req.socket.remoteAddress || 'unknown';
@@ -242,6 +243,32 @@ function handleHealth(
   return sendJson(res, 200, { ok: true });
 }
 
+/* BYOK diagnostics validate the supplied key against OpenRouter's metadata
+   endpoint. This authenticates the real upstream credential without creating
+   a completion, selecting a model, or consuming inference quota. */
+async function handleProviderHealth(
+  req: IncomingMessage,
+  res: ServerResponse,
+  config: GatewayConfig,
+  doFetch: typeof fetch,
+  limiter: RateLimiter,
+  concurrency: { active: number; max: number }
+): Promise<void> {
+  const key = extractByokKey(req, config);
+  if (!key) return sendJson(res, 401, { error: 'invalid BYOK credential' });
+  const fingerprint = byokRateLimitKey(key);
+  if (!limiter.allow(`provider-health:ip:${clientIp(req, config.trustProxy)}`)) return sendJson(res, 429, { error: 'rate limited' });
+  if (!limiter.allow(`provider-health:${fingerprint}`)) return sendJson(res, 429, { error: 'rate limited' });
+  if (concurrency.active >= concurrency.max) return sendJson(res, 429, { error: 'provider health busy' });
+  concurrency.active++;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), config.upstreamTimeoutMs);
+  try {
+    const upstream = await doFetch(`${config.openRouterUrl.replace(/\/+$/, '')}/auth/key`, { method: 'GET', headers: { Authorization: `Bearer ${key}` }, signal: controller.signal });
+    return sendJson(res, upstream.ok ? 200 : upstream.status, upstream.ok ? { ok: true } : { error: 'provider authentication failed' });
+  } finally { clearTimeout(timer); concurrency.active--; }
+}
+
 /* Global analytics ingest: authenticated clients push a sanitized aggregate
    record after each local tool call. Ingest never consumes a daily use (it is
    telemetry, not an LLM call) and the stats store re-sanitizes everything. */
@@ -285,7 +312,7 @@ async function handleTokenRequest(
   config: GatewayConfig,
   notificationSender: NonNullable<ServerDeps['tokenRequestNotificationSender']>
 ): Promise<void> {
-  if (!requestLimiter.allow(`ip:${clientIp(req)}`)) {
+  if (!requestLimiter.allow(`ip:${clientIp(req, config.trustProxy)}`)) {
     return sendJson(res, 429, { error: 'rate limited' });
   }
   const body = await readJsonBody(req, res, 4 * 1024);
@@ -408,6 +435,7 @@ export function createGatewayServer(config: GatewayConfig, deps: ServerDeps = {}
   const doFetch = deps.fetchImpl || fetch;
   const limiter = deps.rateLimiter || createRateLimiter(config.rateLimitPerMin);
   const requestLimiter = createRateLimiter(config.tokenRequestsPerMin);
+  const providerHealthConcurrency = { active: 0, max: Math.max(1, deps.providerHealthMaxConcurrency || 8) };
   const tokenStore = deps.tokenStore || createTokenStore(config.stateDir, config.defaultDailyLimit);
   const statsStore = deps.statsStore || createStatsStore(config.stateDir);
   const emailSender = deps.emailSender || ((cfg, to, token) => sendTokenEmail(cfg, to, token));
@@ -421,6 +449,9 @@ export function createGatewayServer(config: GatewayConfig, deps: ServerDeps = {}
       }
       if (req.method === 'GET' && req.url === '/health') {
         return handleHealth(req, res, config, tokenStore);
+      }
+      if (req.method === 'GET' && req.url === '/v1/provider-health') {
+        return await handleProviderHealth(req, res, config, doFetch, limiter, providerHealthConcurrency);
       }
       if (req.method === 'POST' && req.url === '/v1/chat/completions') {
         return await handleChat(req, res, config, doFetch, limiter, tokenStore);

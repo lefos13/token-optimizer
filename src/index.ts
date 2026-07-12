@@ -19,7 +19,7 @@ import { ensureSafeRoot, atomicWriteJson } from './log-store';
 const server = new Server(
   {
     name: 'token-optimizer-mcp',
-    version: '2.0.0-beta.2',
+    version: '2.0.0-rc.6',
   },
   {
     capabilities: {
@@ -35,8 +35,7 @@ function jsonText(value: unknown): string {
 /* Normalize execution outcomes into additive metadata while keeping legacy fields stable. */
 const executionMetadata = buildExecutionMetadata;
 
-/* Tool handlers build the exact MCP response text first, then persist separate analytics from that text and the local source material. */
-function recordToolAnalytics(workspacePath: string, input: {
+interface ToolAnalyticsInput {
   toolName: string;
   rawSourceText: string;
   rawSourceBytes?: number;
@@ -51,8 +50,10 @@ function recordToolAnalytics(workspacePath: string, input: {
   logPath?: string;
   commands?: string[];
   exitCodes?: Record<string, number>;
-}): void {
-  recordAnalytics(workspacePath, buildAnalyticsRecord({
+}
+
+function recordToolAnalytics(workspacePath: string, input: ToolAnalyticsInput) {
+  return recordAnalytics(workspacePath, buildAnalyticsRecord({
     toolName: input.toolName,
     rawSourceText: input.rawSourceText,
     rawSourceBytes: input.rawSourceBytes,
@@ -69,6 +70,18 @@ function recordToolAnalytics(workspacePath: string, input: {
     commands: input.commands,
     exitCodes: input.exitCodes
   }));
+}
+
+/* Every successful tool response passes through one serializer so local analytics
+ * failures are consistently additive warnings, including early and non-command paths. */
+function serializeWithAnalytics(workspacePath: string, output: Record<string, any>, input: Omit<ToolAnalyticsInput, 'responseText'>): string {
+  let text = jsonText(output);
+  const result = recordToolAnalytics(workspacePath, { ...input, responseText: text });
+  if (result.warning) {
+    output.warnings = [...(Array.isArray(output.warnings) ? output.warnings : []), result.warning];
+    text = jsonText(output);
+  }
+  return text;
 }
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -319,11 +332,9 @@ export async function handleToolCall(request: any) {
   if (name === 'check_local_llm_health') {
     try {
       const health = await checkLocalLLMHealth(process.cwd());
-      const text = jsonText(health);
-      recordToolAnalytics(process.cwd(), {
+      const text = serializeWithAnalytics(process.cwd(), health as any, {
         toolName: 'check_local_llm_health',
         rawSourceText: '',
-        responseText: text,
         llmResult: health,
         llmMetadata: health,
         avoidedRawOutput: false
@@ -371,11 +382,9 @@ export async function handleToolCall(request: any) {
           failures: [],
           rawLogPath: ''
         };
-        const text = jsonText(output);
-        recordToolAnalytics(workspacePath, {
+        const text = serializeWithAnalytics(workspacePath, output, {
           toolName: 'run_test_verdict',
           rawSourceText: '',
-          responseText: text,
           commands: [],
           avoidedRawOutput: false
         });
@@ -467,7 +476,7 @@ export async function handleToolCall(request: any) {
         needsRawLogs: triage.needsRawLogs,
         likelyRelevantToRecentChanges: triage.likelyRelevantToRecentChanges,
         ...getLLMMetadata(triage),
-        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, effective.warnings),
+        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, [...effective.warnings, ...suiteResult.warnings], suiteResult),
         providerStatus: triage.llmAvailable === false ? 'unavailable' : (triage.fallbackReason ? 'fallback' : 'available')
       };
 
@@ -475,13 +484,11 @@ export async function handleToolCall(request: any) {
         output.triage = triageResult;
       }
 
-      const text = jsonText(output);
-      recordToolAnalytics(workspacePath, {
+      const text = serializeWithAnalytics(workspacePath, output, {
         toolName: 'run_test_verdict',
         rawSourceText: '',
         rawSourceBytes: suiteResult.rawSourceBytes,
         llmInputText: suiteResult.trimmedLogContent,
-        responseText: text,
         llmResult: triage,
         confidence: triage.confidence,
         avoidedRawOutput: true,
@@ -552,12 +559,10 @@ export async function handleToolCall(request: any) {
         needsRawLogs: triage.needsRawLogs,
         ...getLLMMetadata(triage)
       };
-      const text = jsonText(output);
-      recordToolAnalytics(workspaceForAnalytics, {
+      const text = serializeWithAnalytics(workspaceForAnalytics, output, {
         toolName: 'run_failure_triage',
         rawSourceText: logContent,
         llmInputText: trimmed,
-        responseText: text,
         llmResult: triage,
         confidence: triage.confidence,
         avoidedRawOutput: true,
@@ -625,11 +630,9 @@ export async function handleToolCall(request: any) {
           summary: 'No changed files could be read for review.',
           skipped
         };
-        const text = jsonText(output);
-        recordToolAnalytics(workspacePath, {
+        const text = serializeWithAnalytics(workspacePath, output, {
           toolName: 'run_changed_files_review',
           rawSourceText: '',
-          responseText: text,
           avoidedRawOutput: false
         });
         return {
@@ -644,13 +647,11 @@ export async function handleToolCall(request: any) {
 
       const review = await queryCodeReview(filesToReview, workspacePath);
       const rawSourceText = filesToReview.map((f) => f.content).join('\n');
-      const output = { ...review, skipped };
-      const text = jsonText(output);
-      recordToolAnalytics(workspacePath, {
+      const output: any = { ...review, skipped };
+      const text = serializeWithAnalytics(workspacePath, output, {
         toolName: 'run_changed_files_review',
         rawSourceText,
         llmInputText: rawSourceText,
-        responseText: text,
         llmResult: review,
         avoidedRawOutput: true
       });
@@ -684,11 +685,9 @@ export async function handleToolCall(request: any) {
           status: 'uncertain',
           message: 'No test commands detected.'
         };
-        const text = jsonText(output);
-        recordToolAnalytics(workspacePath, {
+        const text = serializeWithAnalytics(workspacePath, output, {
           toolName: 'run_regression_check',
           rawSourceText: '',
-          responseText: text,
           commands: [],
           avoidedRawOutput: false
         });
@@ -744,15 +743,13 @@ export async function handleToolCall(request: any) {
         comparison,
         currentRun: currentRunData,
         rawLogPath: suiteResult.rawLogPath,
-        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, effective.warnings),
+        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, [...effective.warnings, ...suiteResult.warnings], suiteResult),
         providerStatus: 'unknown'
       };
-      const text = jsonText(output);
-      recordToolAnalytics(workspacePath, {
+      const text = serializeWithAnalytics(workspacePath, output, {
         toolName: 'run_regression_check',
         rawSourceText: '',
         rawSourceBytes: suiteResult.rawSourceBytes,
-        responseText: text,
         runId,
         rawLogPath: suiteResult.rawLogPath,
         commands: commandsToRun,
@@ -824,16 +821,14 @@ export async function handleToolCall(request: any) {
         rawLogPath: suiteResult.rawLogPath,
         needsRawLogs: digest.needsRawLogs,
         ...getLLMMetadata(digest),
-        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, effective.warnings),
+        ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, [...effective.warnings, ...suiteResult.warnings], suiteResult),
         providerStatus: digest.llmAvailable === false ? 'unavailable' : (digest.fallbackReason ? 'fallback' : 'available')
       };
-      const text = jsonText(output);
-      recordToolAnalytics(workspacePath, {
+      const text = serializeWithAnalytics(workspacePath, output, {
         toolName: 'run_command_digest',
         rawSourceText: '',
         rawSourceBytes: suiteResult.rawSourceBytes,
         llmInputText: suiteResult.trimmedLogContent,
-        responseText: text,
         llmResult: digest,
         avoidedRawOutput: true,
         runId,
@@ -884,12 +879,10 @@ export async function handleToolCall(request: any) {
 
       const res = await queryLogQuestion(question, bounded, workspacePath);
       const output = { ...res, rawLogPath: path.relative(workspacePath, absLog) };
-      const text = jsonText(output);
-      recordToolAnalytics(workspacePath, {
+      const text = serializeWithAnalytics(workspacePath, output, {
         toolName: 'query_log',
         rawSourceText: fs.readFileSync(absLog, 'utf8'),
         llmInputText: bounded,
-        responseText: text,
         llmResult: res,
         avoidedRawOutput: true,
         runId,
@@ -934,11 +927,9 @@ export async function handleToolCall(request: any) {
       const logContent = fs.readFileSync(absLog, 'utf8');
       const result = grepLog(absLog, pattern, context, maxMatches);
       const output = { ...result, rawLogPath: path.relative(workspacePath, absLog) };
-      const text = jsonText(output);
-      recordToolAnalytics(workspacePath, {
+      const text = serializeWithAnalytics(workspacePath, output, {
         toolName: 'grep_log',
         rawSourceText: logContent,
-        responseText: text,
         avoidedRawOutput: true,
         runId,
         rawLogPath: path.relative(workspacePath, absLog)
@@ -972,8 +963,7 @@ export async function handleToolCall(request: any) {
           needsDeeperLook: true,
           scoutAvailable: false
         };
-        const text = jsonText(output);
-        recordToolAnalytics(workspacePath, { toolName: 'scout_codebase', rawSourceText: '', responseText: text, avoidedRawOutput: false });
+        const text = serializeWithAnalytics(workspacePath, output, { toolName: 'scout_codebase', rawSourceText: '', avoidedRawOutput: false });
         return { content: [{ type: 'text', text }] };
       }
 
@@ -993,8 +983,7 @@ export async function handleToolCall(request: any) {
           needsDeeperLook: true,
           scoutAvailable: false
         };
-        const text = jsonText(output);
-        recordToolAnalytics(workspacePath, { toolName: 'scout_codebase', rawSourceText: '', responseText: text, avoidedRawOutput: false });
+        const text = serializeWithAnalytics(workspacePath, output, { toolName: 'scout_codebase', rawSourceText: '', avoidedRawOutput: false });
         return { content: [{ type: 'text', text }] };
       }
 
@@ -1017,12 +1006,10 @@ export async function handleToolCall(request: any) {
         ...getLLMMetadata(scout),
         ...(scout.note ? { note: scout.note } : {})
       };
-      const text = jsonText(output);
-      recordToolAnalytics(workspacePath, {
+      const text = serializeWithAnalytics(workspacePath, output, {
         toolName: 'scout_codebase',
         rawSourceText,
         llmInputText: rawSourceText,
-        responseText: text,
         llmResult: scout,
         avoidedRawOutput: true
       });

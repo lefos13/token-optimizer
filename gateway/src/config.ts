@@ -36,6 +36,8 @@ export interface GatewayConfig {
      unlimited usage, no daily-limit consumption). Default on; operators can
      disable per-caller upstream billing entirely with ALLOW_BYOK=false. */
   allowByok: boolean;
+  /* Honor X-Forwarded-For only when the gateway is behind an operator-managed proxy. */
+  trustProxy: boolean;
 }
 
 const TASK_MODEL_ENV: Record<GatewayTaskType, string> = {
@@ -106,6 +108,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GatewayConfig 
     smtpPass: env.SMTP_PASS || undefined,
     emailFrom: env.EMAIL_FROM || undefined,
     emailReplyTo: env.EMAIL_REPLY_TO || undefined,
-    allowByok: (env.ALLOW_BYOK || '').trim().toLowerCase() !== 'false'
+    allowByok: (env.ALLOW_BYOK || '').trim().toLowerCase() !== 'false',
+    trustProxy: bool(env.TRUST_PROXY, false)
   };
 }

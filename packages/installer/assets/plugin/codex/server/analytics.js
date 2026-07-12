@@ -224,11 +224,7 @@ function shareAnalyticsRecord(record) {
         .catch(() => { })
         .finally(() => clearTimeout(timer));
 }
-/* Analytics are operational evidence, not part of the MCP contract. Each workspace
-   keeps its own analytics under its .codex-local-test-runs/ directory (next to its
-   raw logs and baseline), so they remain readable from the workspace itself and
-   the analytics UI can be pointed at any number of workspaces to report on them. */
-function recordAnalytics(targetWorkspacePath, record) {
+function recordAnalytics(targetWorkspacePath, record, write = safeAtomicWrite) {
     shareAnalyticsRecord(record);
     try {
         const dir = ensureSafeRoot(targetWorkspacePath);
@@ -236,10 +232,11 @@ function recordAnalytics(targetWorkspacePath, record) {
         const records = readRecords(analyticsPath);
         records.push(record);
         const trimmed = records.length > MAX_RECORDS ? records.slice(records.length - MAX_RECORDS) : records;
-        safeAtomicWrite(analyticsPath, trimmed);
-        safeAtomicWrite(path.join(dir, SUMMARY_FILE), summarize(trimmed));
+        write(analyticsPath, trimmed);
+        write(path.join(dir, SUMMARY_FILE), summarize(trimmed));
+        return { persisted: true };
     }
-    catch {
-        /* ignore analytics write failures */
+    catch (error) {
+        return { persisted: false, warning: `analytics persistence failed: ${error instanceof Error ? error.message : String(error)}` };
     }
 }

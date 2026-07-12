@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { buildExecutionMetadata } from '../../src/execution-metadata';
 process.env.TOKEN_OPTIMIZER_NO_AUTOSTART = '1';
 import { handleToolCall } from '../../src/index';
 
 test('command response compatibility preserves legacy fields and additive metadata', () => {
-  for (const [status, reason] of [['completed', undefined], ['blocked', 'COMMAND_NOT_ALLOWED'], ['timed_out', undefined], ['spawn_failed', 'SPAWN_FAILED']] as const) {
+  for (const [status, reason] of [['completed', undefined], ['terminated', undefined], ['blocked', 'COMMAND_NOT_ALLOWED'], ['timed_out', undefined], ['spawn_failed', 'SPAWN_FAILED']] as const) {
     const legacy = { verdict: status === 'completed' ? 'pass' : 'fail', exitCode: status === 'completed' ? 0 : -1, rawLogPath: '.codex-local-test-runs/run.log', failures: [] };
     const additive = buildExecutionMetadata([{ executionStatus: status, policyReasonCode: reason, autoDetected: status === 'completed' }], 'short', 100, ['config warning']);
     assert.equal(typeof legacy.verdict, 'string');
@@ -18,6 +21,13 @@ test('command response compatibility preserves legacy fields and additive metada
     assert.equal(typeof additive.autoDetected, 'boolean');
     assert.deepEqual(additive.warnings, ['config warning']);
   }
+});
+
+test('signal termination is distinct from timeout and retains the signal', async () => {
+  const result = await import('../../src/runner').then(({ runCommand }) => runCommand(`node -e "process.kill(process.pid, 'SIGTERM')"`, process.cwd(), 5000));
+  assert.equal(result.executionStatus, 'terminated');
+  assert.equal(result.signal, 'SIGTERM');
+  assert.equal(result.exitCode, -1);
 });
 
 test('MCP CallTool handler returns blocked compatibility shape', async () => {
@@ -62,4 +72,54 @@ test('MCP CallTool handler preserves spawn-failure compatibility shape', async (
   assert.equal(payload.exitCode, -1);
   assert.equal(typeof payload.rawLogPath, 'string');
   assert.equal(Array.isArray(payload.warnings), true);
+});
+
+test('MCP command response includes local analytics persistence warning', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'analytics-warning-'));
+  const dir = path.join(root, '.codex-local-test-runs'); fs.mkdirSync(dir);
+  const outside = path.join(root, 'outside.json'); fs.writeFileSync(outside, '[]');
+  fs.symlinkSync(outside, path.join(dir, 'analytics.json'));
+  const result: any = await handleToolCall({ params: { name: 'run_command_digest', arguments: {
+    workspacePath: root, command: 'printf ok', intent: 'contract', executionProfile: 'safe', allowedCommandPrefixes: ['printf']
+  } } });
+  const payload = JSON.parse(result.content[0].text);
+  assert.equal(payload.exitCode, 0);
+  assert.ok(payload.warnings.some((warning: string) => /analytics persistence failed/.test(warning)));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+function analyticsFailureWorkspace(): { root: string; log: string } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'analytics-all-tools-'));
+  const dir = path.join(root, '.codex-local-test-runs'); fs.mkdirSync(dir);
+  const log = path.join(dir, 'run.log'); fs.writeFileSync(log, 'alpha\nbeta\n');
+  const outside = path.join(root, 'outside.json'); fs.writeFileSync(outside, '[]');
+  fs.symlinkSync(outside, path.join(dir, 'analytics.json'));
+  return { root, log };
+}
+
+test('early changed-file review response includes analytics persistence warning', async () => {
+  const { root } = analyticsFailureWorkspace();
+  const result: any = await handleToolCall({ params: { name: 'run_changed_files_review', arguments: { workspacePath: root, changedFiles: ['missing.ts'] } } });
+  const payload = JSON.parse(result.content[0].text);
+  assert.equal(payload.summary, 'No changed files could be read for review.');
+  assert.ok(payload.warnings.some((warning: string) => /analytics persistence failed/.test(warning)));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('grep log response includes analytics persistence warning', async () => {
+  const { root, log } = analyticsFailureWorkspace();
+  const result: any = await handleToolCall({ params: { name: 'grep_log', arguments: { workspacePath: root, logPath: log, pattern: 'beta' } } });
+  const payload = JSON.parse(result.content[0].text);
+  assert.equal(payload.totalMatches, 1);
+  assert.ok(payload.warnings.some((warning: string) => /analytics persistence failed/.test(warning)));
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('early scout response includes analytics persistence warning', async () => {
+  const { root } = analyticsFailureWorkspace();
+  const result: any = await handleToolCall({ params: { name: 'scout_codebase', arguments: { workspacePath: root, goal: 'the and for' } } });
+  const payload = JSON.parse(result.content[0].text);
+  assert.equal(payload.scoutAvailable, false);
+  assert.ok(payload.warnings.some((warning: string) => /analytics persistence failed/.test(warning)));
+  fs.rmSync(root, { recursive: true, force: true });
 });

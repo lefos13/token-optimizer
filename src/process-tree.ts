@@ -77,18 +77,32 @@ function runTaskkill(args: string[]): Promise<{ code: number | null; error?: Err
   });
 }
 
-async function terminateWindowsTree(pid: number, graceMs: number): Promise<TerminationResult> {
-  const soft = await runTaskkill(['/PID', String(pid), '/T']);
-  if (!soft.error || !isAlive(pid)) {
-    if (await waitForExit(pid, graceMs, 'win32')) return { terminated: true, method: 'taskkill-tree' };
+export interface WindowsTerminationAdapter {
+  taskkill(args: string[]): Promise<{ code: number | null; error?: Error }>;
+  waitForExit(pid: number, graceMs: number): Promise<boolean>;
+  isAlive(pid: number): boolean;
+}
+
+const windowsAdapter: WindowsTerminationAdapter = {
+  taskkill: runTaskkill,
+  waitForExit: (pid, graceMs) => waitForExit(pid, graceMs, 'win32'),
+  isAlive,
+};
+
+/* Injected Windows operations make taskkill escalation verifiable on every CI host
+ * without pretending that Unix process signaling has Windows tree semantics. */
+export async function terminateWindowsTree(pid: number, graceMs: number, adapter: WindowsTerminationAdapter = windowsAdapter): Promise<TerminationResult> {
+  const soft = await adapter.taskkill(['/PID', String(pid), '/T']);
+  if (!soft.error || !adapter.isAlive(pid)) {
+    if (await adapter.waitForExit(pid, graceMs)) return { terminated: true, method: 'taskkill-tree' };
   }
-  const forced = await runTaskkill(['/PID', String(pid), '/T', '/F']);
-  if (await waitForExit(pid, graceMs, 'win32')) return { terminated: true, method: 'taskkill-force' };
+  const forced = await adapter.taskkill(['/PID', String(pid), '/T', '/F']);
+  if (await adapter.waitForExit(pid, graceMs)) return { terminated: true, method: 'taskkill-force' };
   return { terminated: false, method: 'error', error: forced.error?.message ?? soft.error?.message ?? 'taskkill did not terminate process' };
 }
 
-export async function terminateProcessTree(child: ChildProcess, platform = process.platform, graceMs = 1000): Promise<TerminationResult> {
+export async function terminateProcessTree(child: ChildProcess, platform = process.platform, graceMs = 1000, adapter?: WindowsTerminationAdapter): Promise<TerminationResult> {
   if (!child.pid) return { terminated: true, method: 'already-exited' };
-  if (platform === 'win32') return terminateWindowsTree(child.pid, graceMs);
+  if (platform === 'win32') return terminateWindowsTree(child.pid, graceMs, adapter);
   return terminateUnixGroup(child, graceMs, platform);
 }

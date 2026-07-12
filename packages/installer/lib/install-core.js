@@ -4,8 +4,9 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const { createChangePlan, formatChangePlan } = require("./change-plan");
 const { registerPlan, applyChangePlan, defaultAdapters } = require("./apply-plan");
-const { writeManifest } = require("./manifest");
+const { writeManifest, readManifest } = require("./manifest");
 const crypto = require("crypto");
+const { createCredentialStore } = require("./credential-store");
 
 const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
 const DEFAULT_LOCAL_LLM_URL = "http://localhost:8080/v1";
@@ -98,6 +99,26 @@ function inferProvider(options) {
   return "skip";
 }
 
+/* Converts provider plaintext into a durable credential reference before any
+   client config is written. Native storage is fail-closed; env and config are
+   available only when the caller explicitly selects those plaintext stores. */
+function prepareCredentialOptions(options = {}) {
+  const provider = normalizeProviderChoice(options.provider) || inferProvider(options);
+  if (!["gateway-token", "gateway-byok", "openrouter-direct"].includes(provider) || options.credentialRef) return { ...options };
+  const kind = options.credentialStore || "native";
+  if (!["native", "env", "config"].includes(kind)) throw new Error(`Unsupported credential store: ${kind}. Choose native, env, or config.`);
+  if (kind !== "env") return { ...options, provider, credentialStore: kind };
+  const variable = provider === "gateway-token" ? "LLM_GATEWAY_TOKEN" : provider === "openrouter-direct" ? "OPENROUTER_API_KEY" : "OPENROUTER_BYOK_KEY";
+  const store = createCredentialStore(kind, { home: options.home, service: "token-optimizer", account: provider, envVar: variable, ...(options.credentialStoreOptions || {}) });
+  const credentialRef = store.set();
+  const prepared = { ...options, provider, credentialStore: kind, credentialRef };
+  delete prepared.gatewayToken;
+  delete prepared.byokKey;
+  delete prepared.openrouterKey;
+  delete prepared.credentialStoreOptions;
+  return prepared;
+}
+
 /* Translate legacy v1 environment state into an explicit provider without
    changing its inference destination. Secrets remain represented by a
    credential reference in the returned plan. */
@@ -157,20 +178,75 @@ function installerPaths(options = {}) {
   };
 }
 
+/* Installation and provider-only configuration share one credential state
+   machine so replacement, superseded cleanup, and rollback cannot diverge. */
+function createCredentialTransaction(options, paths) {
+  const provider = normalizeProviderChoice(options.provider) || inferProvider(options);
+  const runtime = { options: prepareCredentialOptions(options), credentialRef: options.credentialRef, credentialOwned: false };
+  const priorOwned = (readManifest(paths.home)?.credentials || []).find((item) => item.ownership === "installer")?.reference;
+  const priorStoreKind = priorOwned && (priorOwned.store === "config" || priorOwned.store === "protected-config" ? "config" : "native");
+  const requestedStoreKind = options.credentialStore || "native";
+  runtime.superseded = priorOwned && (priorOwned.account !== provider || priorStoreKind !== requestedStoreKind) ? priorOwned : null;
+  runtime.provider = provider;
+  runtime.needsCredential = ["gateway-token", "gateway-byok", "openrouter-direct"].includes(provider) && !options.credentialRef;
+  runtime.optionsSource = options;
+  runtime.paths = paths;
+  return runtime;
+}
+
+function executeCredentialOperation(runtime, operation) {
+  if (operation.phase === "cleanup") {
+    runtime.supersededStore.delete(runtime.superseded);
+    runtime.credentialOwnershipCleared = !runtime.credentialRef;
+    return;
+  }
+  if (runtime.options.credentialRef) return;
+  const source = runtime.optionsSource;
+  const secret = runtime.provider === "gateway-token" ? source.gatewayToken : (source.openrouterKey || source.byokKey);
+  runtime.credentialRef = runtime.store.set(secret);
+  runtime.credentialOwned = !runtime.priorCredential;
+  runtime.options = { ...runtime.options, credentialRef: runtime.credentialRef };
+  delete runtime.options.gatewayToken; delete runtime.options.byokKey; delete runtime.options.openrouterKey;
+}
+
+function prepareCredentialOperation(runtime, operation) {
+  const options = runtime.optionsSource;
+  if (operation.phase === "cleanup") {
+    const ref = runtime.superseded;
+    const kind = ref.store === "config" || ref.store === "protected-config" ? "config" : "native";
+    runtime.supersededStore = createCredentialStore(kind, { home: runtime.paths.home, service: ref.service, account: ref.account, path: ref.path, ...(options.credentialStoreOptions || {}) });
+    runtime.supersededSecret = runtime.supersededStore.get(ref);
+    return { inverse: () => { if (runtime.supersededSecret) runtime.supersededStore.set(runtime.supersededSecret); } };
+  }
+  const kind = options.credentialStore || "native";
+  const variable = runtime.provider === "gateway-token" ? "LLM_GATEWAY_TOKEN" : runtime.provider === "openrouter-direct" ? "OPENROUTER_API_KEY" : "OPENROUTER_BYOK_KEY";
+  runtime.store = createCredentialStore(kind, { home: runtime.paths.home, service: "token-optimizer", account: runtime.provider, envVar: variable, ...(options.credentialStoreOptions || {}) });
+  runtime.priorCredential = runtime.store.get({ service: "token-optimizer", account: runtime.provider });
+  return { inverse: () => runtime.priorCredential ? runtime.store.set(runtime.priorCredential) : runtime.store.delete({ service: "token-optimizer", account: runtime.provider }) };
+}
+
 function planInstallation(options = {}) {
+  options.lifecycleRegistrations ||= [];
   const paths = installerPaths(options);
   const clients = normalizeClients(options.clients, paths.home);
-  const operations = clients.flatMap((client) => [
+  const runtime = createCredentialTransaction(options, paths);
+  const operations = [
+    ...(runtime.needsCredential ? [{ id: "install:provider:credential", kind: "credential", phase: "credentials", provider: runtime.provider, reference: `${options.credentialStore || "native"}:${runtime.provider}` }] : []),
+    ...clients.flatMap((client) => [
     { id: `install:${client}:copy`, kind: "copy-tree", phase: "copy", client, path: paths.home, targets: clientTargets(client, paths, options) },
     { id: `install:${client}:config`, kind: "managed-block", phase: "config", client, path: paths.home },
-    { id: `install:${client}:credentials`, kind: "credential", phase: "credentials", client, reference: `${client}/provider-env` },
     { id: `install:${client}:service`, kind: "platform-service", phase: "service", client, platform: process.platform },
     { id: `install:${client}:command`, kind: "client-command", phase: "command", client, command: "register" },
-  ]);
+  ]),
+    ...(runtime.superseded ? [{ id: "install:provider:cleanup", kind: "credential", phase: "cleanup", provider: runtime.provider, reference: runtime.superseded }] : []),
+  ];
   const plan = createChangePlan({ action: "install", version: options.version || require("../package.json").version, clients }, operations);
   registerPlan(plan, (operation) => {
+    if (operation.kind === "credential") {
+      return executeCredentialOperation(runtime, operation);
+    }
     if (operation.phase !== "copy") return;
-    const installOptions = { ...options, ...paths };
+    const installOptions = { ...runtime.options, ...paths };
     if (operation.client === "opencode") installOpenCode(installOptions);
     else if (operation.client === "cursor") installCursor(installOptions);
     else if (operation.client === "antigravity") installAntigravity(installOptions);
@@ -178,18 +254,67 @@ function planInstallation(options = {}) {
     else if (operation.client === "codex") installCodex(installOptions);
     else throw new Error(`Unsupported client: ${operation.client}`);
   }, (operation) => {
+    if (operation.kind === "credential") {
+      return prepareCredentialOperation(runtime, operation);
+    }
     const boundaries = [paths.home, ...(options.cursorProjects || []).map((project) => path.resolve(project))];
     const before = snapshotTargets(operation.targets || [], boundaries);
     return { inverse: () => restoreTargets(before), commit: () => discardSnapshot(before) };
-  });
+  }, runtime);
   return plan;
 }
 
 function installSelectedClients(options) {
   const result = applyChangePlan(planInstallation(options), defaultAdapters());
   if (result.error) throw result.error;
-  persistInstallManifest(options, result.installedClients);
+  persistInstallManifest({ ...options, credentialRef: result.credentialRef, credentialOwned: result.credentialOwned, credentialOwnershipCleared: result.credentialOwnershipCleared }, result.installedClients);
   return result.installedClients;
+}
+
+/* Provider-only reconfiguration uses the same credential-first transaction as
+   installation. Config snapshots and the prior credential are both restored
+   if any client write fails after credential mutation. */
+function planProviderConfiguration(options = {}) {
+  const paths = installerPaths(options);
+  const runtime = createCredentialTransaction(options, paths);
+  const operations = createChangePlan({ action: "config" }, [
+    ...(runtime.needsCredential ? [{ id: "config:provider:credential", kind: "credential", phase: "credentials", provider: runtime.provider, reference: `${options.credentialStore || "native"}:${runtime.provider}` }] : []),
+    { id: "config:clients", kind: "managed-block", phase: "config", path: paths.home },
+    ...(runtime.superseded ? [{ id: "config:provider:cleanup", kind: "credential", phase: "cleanup", provider: runtime.provider, reference: runtime.superseded }] : []),
+  ]);
+  registerPlan(operations, (operation) => {
+    if (operation.kind === "credential") {
+      executeCredentialOperation(runtime, operation);
+    } else applyGatewayConfig(runtime.options);
+  }, (operation) => {
+    if (operation.kind === "credential") {
+      return prepareCredentialOperation(runtime, operation);
+    }
+    const targets = getGatewayTargets(paths.home).filter((target) => target.matches(options.clients)).map((target) => target.filePath);
+    targets.push(path.join(paths.home, "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`));
+    const before = snapshotTargets(targets, [paths.home]);
+    return { inverse: () => restoreTargets(before), commit: () => discardSnapshot(before) };
+  }, runtime);
+  return operations;
+}
+
+function applyProviderConfiguration(options = {}) {
+  const result = applyChangePlan(planProviderConfiguration(options));
+  if (result.error) throw result.error;
+  return result;
+}
+
+function persistProviderCredentialOwnership(options = {}, result = {}) {
+  const paths = installerPaths(options);
+  const existing = readManifest(paths.home);
+  if (result.credentialOwnershipCleared) {
+    if (existing) writeManifest(paths.home, { ...existing, credentials: [] });
+    return;
+  }
+  if (!result.credentialRef || !result.credentialOwned || result.credentialRef.store === "env") return;
+  writeManifest(paths.home, existing
+    ? { ...existing, credentials: [{ reference: result.credentialRef, ownership: "installer" }] }
+    : { schemaVersion: 2, roots: [paths.installRoot], assetRoots: [], managedBlocks: [], credentials: [{ reference: result.credentialRef, ownership: "installer" }], files: [] });
 }
 
 /* Capture only installer-owned plugin trees after a successful install. The
@@ -210,17 +335,42 @@ function persistInstallManifest(options = {}, clients = []) {
     let entries; try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch (_) { return; }
     for (const entry of entries) {
       const file = path.join(directory, entry.name);
-      if (entry.isDirectory() && !entry.isSymbolicLink()) walk(file, path.join(sourceRoot, entry.name));
-      else if (entry.isFile()) files.push({ path: file, source: path.join(sourceRoot, entry.name), sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"), ownership: "installer" });
+      const source = path.join(sourceRoot, entry.name);
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        if (!["node_modules", ".data", ".cache", "cache", "logs", ".codex-local-test-runs"].includes(entry.name)) walk(file, source);
+      } else if (entry.isFile() && fs.existsSync(source) && !/\.(?:log|tmp|cache)$/i.test(entry.name)) {
+        files.push({ path: file, source, sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"), ownership: "installer" });
+      }
     }
   };
   mappings.forEach(([root, sourceRoot]) => walk(root, sourceRoot));
   const managedBlocks = [
     path.join(paths.home, ".claude", "CLAUDE.md"), path.join(paths.home, ".codex", "AGENTS.md"), path.join(paths.home, ".gemini", "GEMINI.md"),
     path.join(paths.home, ".config", "opencode", "AGENTS.md"),
-  ].filter((file) => fs.existsSync(file)).map((file) => ({ path: file, marker: "TOKEN_OPTIMIZER_START", sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") }));
-  writeManifest(paths.home, { schemaVersion: 2, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [paths.assetsRoot], managedBlocks, files });
+  ].filter((file) => fs.existsSync(file)).map((file) => {
+    const content = fs.readFileSync(file, "utf8");
+    const block = content.match(/<!-- TOKEN_OPTIMIZER_START -->[\s\S]*?<!-- TOKEN_OPTIMIZER_END -->/)?.[0] || "";
+    return { path: file, marker: "TOKEN_OPTIMIZER_START", blockSha256: crypto.createHash("sha256").update(block).digest("hex") };
+  });
+  const existingManifest = readManifest(paths.home);
+  const credentials = options.credentialOwnershipCleared ? [] : options.credentialRef && options.credentialOwned !== false && options.credentialRef.store !== "env"
+    ? [{ reference: options.credentialRef, ownership: "installer" }]
+    : (existingManifest?.credentials || []);
+  const registrationPaths = {
+    claude: [path.join(paths.home, ".claude", "settings.json")], codex: [path.join(paths.home, ".codex", "config.toml")],
+    antigravity: [path.join(paths.home, ".gemini", "config", "mcp_config.json")], opencode: [path.join(paths.home, ".config", "opencode", "opencode.jsonc")],
+    cursor: [path.join(paths.home, ".cursor", "mcp.json")],
+  };
+  const registrations = clients.map((client) => { const paths = (registrationPaths[client] || []).filter((file) => fs.existsSync(file)); return { client, paths, canonicalPath: paths[0], template: paths[0] ? captureRegistrationTemplate(paths[0], client) : null, ownership: "installer" }; })
+    .concat((options.lifecycleRegistrations || []).map((registration) => ({ ...registration, ownership: "installer" })));
+  const launchAgent = path.join(paths.home, "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`);
+  const platformServices = process.platform === "darwin" && fs.existsSync(launchAgent)
+    ? [{ platform: "darwin", service: LAUNCH_AGENT_LABEL, path: launchAgent, content: fs.readFileSync(launchAgent, "utf8"), managedEnv: buildProviderValues(options), ownership: "installer" }]
+    : [];
+  writeManifest(paths.home, { schemaVersion: 2, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [paths.assetsRoot], managedBlocks, credentials, registrations, platformServices, files });
 }
+
+function captureRegistrationTemplate(file, client) { const text = fs.readFileSync(file, "utf8"); if (client === "codex") return text.match(/^\[mcp_servers\.(?:"?token[_-]optimizer"?)\]\s*$[\s\S]*?(?=^\[(?!mcp_servers\.token_optimizer\.env)|(?![\s\S]))/m)?.[0] || null; try { const data = JSON.parse(text.replace(/\/\*[\s\S]*?\*\/|(^|[^:])\/\/.*$/gm, "$1").replace(/,\s*([}\]])/g, "$1")); const container = client === "opencode" ? data.mcp : data.mcpServers; return container?.token_optimizer || container?.["token-optimizer"] || null; } catch (_) { return null; } }
 
 function clientTargets(client, paths, options = {}) {
   const roots = {
@@ -366,6 +516,7 @@ function installClaude(options) {
     tryClientCommand("claude", ["plugin", "update", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`], options)
     || tryClientCommand("claude", ["plugin", "install", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`], options)
   );
+  if (pluginInstalled) (options.lifecycleRegistrations ||= []).push({ client: "claude", kind: "marketplace", remove: ["plugin", "uninstall", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`], restore: ["plugin", "install", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`] });
   if (!pluginInstalled) {
     copyDirectory(path.join(options.assetsRoot, "plugin", "claude"), path.join(options.home, ".claude", "skills", "token-optimizer"));
   }
@@ -392,6 +543,7 @@ function installCodex(options) {
        harmless on first install and forces a fresh cache before adding. */
     tryClientCommand("codex", ["plugin", "remove", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options);
     tryClientCommand("codex", ["plugin", "add", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options);
+    (options.lifecycleRegistrations ||= []).push({ client: "codex", kind: "marketplace", remove: ["plugin", "remove", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], restore: ["plugin", "add", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME] });
   }
   const startJs = path.join(pluginDest, "server", "start.js");
   const configPath = path.join(options.home, ".codex", "config.toml");
@@ -413,7 +565,7 @@ function installCodex(options) {
 
 function applyGatewayConfig(options) {
   const paths = installerPaths(options);
-  const values = buildProviderValues(options);
+  const values = options.providerValues || buildProviderValues(options);
   for (const target of getGatewayTargets(paths.home)) {
     if (!target.matches(options.clients)) {
       continue;
@@ -854,6 +1006,47 @@ function tryClientCommand(command, args, options) {
   }
 }
 
+/* Migration phases are exposed separately so one registered change plan can
+   keep rollback state alive through credential validation and legacy cleanup. */
+function copyClientAssets(client, options) {
+  if (client === "opencode") {
+    copyDirectory(path.join(options.assetsRoot, "plugin", "opencode", "server"), path.join(options.home, ".config", "opencode", "token-optimizer-server"));
+    copyDirectory(path.join(options.assetsRoot, "plugin", "opencode", "skills", "token-optimizer"), path.join(options.home, ".config", "opencode", "skills", "token-optimizer"));
+  } else if (client === "cursor") {
+    copyDirectory(path.join(options.assetsRoot, "plugin", "cursor", "server"), path.join(options.home, ".cursor", "token-optimizer-server"));
+    for (const project of options.cursorProjects || []) copyFile(path.join(options.assetsRoot, "plugin", "cursor", "rules", "token-optimizer.mdc"), path.join(path.resolve(project), ".cursor", "rules", "token-optimizer.mdc"));
+  } else if (client === "antigravity") copyDirectory(path.join(options.assetsRoot, "plugin", "antigravity"), path.join(options.home, ".gemini", "config", "plugins", "token-optimizer"));
+  else if (client === "claude" || client === "codex") copyDirectory(path.join(options.assetsRoot, "plugin", client), path.join(options.installRoot, "plugin", client));
+  else throw new Error(`Unsupported client: ${client}`);
+}
+
+function configureMigratedClient(client, options) {
+  if (client === "codex") {
+    const file = path.join(options.home, ".codex", "config.toml");
+    ensureDirectory(path.dirname(file));
+    const existing = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+    fs.writeFileSync(file, upsertCodexTomlServer(existing, path.join(options.installRoot, "plugin", "codex", "server", "start.js"), options.providerValues));
+    const skill = path.join(options.assetsRoot, "plugin", "codex", "skills", "token-optimizer");
+    if (fs.existsSync(skill)) copyDirectory(skill, path.join(options.home, ".codex", "skills", "token-optimizer"));
+  } else applyGatewayConfig({ ...options, clients: client === "antigravity" ? ["gemini", "antigravity"] : [client], skipLaunchctl: true });
+  if (options.defaults !== false && client !== "cursor") applyDefaultDirectives({ ...options, clients: client === "antigravity" ? ["gemini"] : [client] });
+}
+
+function registerMigratedClient(client, options) {
+  if (client === "claude") {
+    const added = tryClientCommand("claude", ["plugin", "marketplace", "add", options.installRoot], options);
+    const installed = added && (tryClientCommand("claude", ["plugin", "update", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`], options) || tryClientCommand("claude", ["plugin", "install", `token-optimizer@${CLAUDE_MARKETPLACE_NAME}`], options));
+    if (!installed) copyDirectory(path.join(options.assetsRoot, "plugin", "claude"), path.join(options.home, ".claude", "skills", "token-optimizer"));
+    return installed;
+  }
+  if (client === "codex") {
+    const added = tryClientCommand("codex", ["plugin", "marketplace", "add", options.installRoot], options);
+    if (added) { tryClientCommand("codex", ["plugin", "remove", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options); tryClientCommand("codex", ["plugin", "add", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options); }
+    return added;
+  }
+  return false;
+}
+
 function commandExists(command) {
   const [probe, probeArgs] = process.platform === "win32"
     ? ["where", [command]]
@@ -927,6 +1120,7 @@ module.exports = {
   LAUNCH_AGENT_LABEL,
   emptyManagedValues,
   buildProviderValues,
+  prepareCredentialOptions,
   normalizeProviderChoice,
   planMigration,
   DIRECTIVE_MARKER_START,
@@ -936,6 +1130,9 @@ module.exports = {
   formatChangePlan,
   detectClients,
   installSelectedClients,
+  planProviderConfiguration,
+  applyProviderConfiguration,
+  persistProviderCredentialOwnership,
   persistInstallManifest,
   installOpenCode,
   installCursor,
@@ -947,4 +1144,8 @@ module.exports = {
   applyDirectiveBlock,
   stripJsonCommentsAndTrailingCommas,
   upsertCodexTomlServer,
+  copyClientAssets,
+  configureMigratedClient,
+  registerMigratedClient,
+  applyLaunchctlValues,
 };

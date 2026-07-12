@@ -8,7 +8,9 @@ Execution profiles are `safe`, `standard`, and `unrestricted`; tool/project requ
 
 # Token Optimizer
 
-Execution metadata uses `signal: null` when no OS signal was observed; a value appears only for signal-terminated processes.
+Execution metadata uses `signal: null` when no OS signal was observed; a value appears only for signal-terminated processes. `executionStatus: terminated` distinguishes those exits from `timed_out`. Command outcomes remain authoritative when audit-log persistence fails: inspect additive `auditStatus` and `auditFailure`, including any retained temporary evidence path.
+
+Command temp-stream and final audit failures never override exit/signal truth. Active `.active.tmp` output carries a PID/run-id lease; lifecycle recovery requires both one-hour age and a dead or missing owner, protecting legitimate long-running commands. Open/write/end, fsync, close, and abort cleanup remove the lease and report `removed` or `failed`. After fsync and close, final-rename failure must first atomically mark evidence `.retained.audit.tmp`; only then is it registered and lifecycle-managed. If marking and deletion both fail, inspect the contained unregistered `orphanPath`. Treat registry, log-lifecycle, and analytics persistence entries in `warnings` as operational advisories.
 
 ## Overview
 
@@ -201,13 +203,45 @@ Generated launchers validate that both the MCP SDK server entry point and `zod/v
 
 The installer lifecycle is reversible. Use `install --dry-run` (or `--json`)
 to inspect all writes, ownership, credential-store operations, and GUI-session
-environment changes. Its manifest stores hashes and references, never secrets;
-repair and uninstall preserve user-modified files. `status` is read-only,
-`doctor --strict` adds provider health checks, and `repair --dry-run` previews
+environment changes. Its manifest stores hashes and references, never secrets
+or runtime caches/logs. Repair consumes doctor paths and operation hints into an
+exact idempotent plan; uninstall preserves user-modified files. Lifecycle
+failure rolls back earlier mutations, while unavailable reversible registration
+or service adapters fail closed with an explicit follow-up. `status` is read-only,
+performs no network/provider request or client CLI execution, and discovers
+actual five-client MCP registrations from config/cache files plus installed
+launcher metadata. `doctor --strict` additionally resolves the credential
+reference and performs a quota-free local `/models`, direct OpenRouter
+`/auth/key`, or gateway BYOK metadata validation. Use `--workspace <absolute-path>`
+to include safe log-directory/quota diagnostics. Reports expose stable finding
+codes and repair hints but never secret values; errors exit `1` and warning-only
+strict reports exit `2`. `repair --dry-run` previews
 targeted fixes. Rollback snapshots cover only selected client roots and never
-scan unrelated protected home folders. `logs status|prune|purge --workspace <absolute-path>` manages
+scan unrelated protected home folders. Provider-health probes are bounded by
+socket IP, key fingerprint, and global concurrency before upstream access;
+forwarded IPs require explicit trusted-proxy configuration. Doctor constrains untrusted manifest roots and hashing
+work to installer-known locations and fixed size/count budgets; an explicit
+`--installed-version` still drives mismatch reporting without a registration.
+`logs status|prune|purge --workspace <absolute-path>` manages
 raw logs while preserving baseline and analytics metadata unless explicitly
 requested for deletion.
+
+For v1, preview `token-optimizer install --migrate --dry-run --json`, then
+remove the preview flags to apply. Migration scans only supported client roots,
+preserves gateway routing for legacy BYOK unless direct OpenRouter is explicit,
+creates a private backup, and cleans plaintext only after authenticated doctor
+validation. The operation is transactional and idempotent.
+The preview itself is registered for execution, so apply does not recompute a
+hidden plan. Its rollback handles remain live through the authenticated probe
+and structured legacy-key cleanup.
+The public CLI omits Claude/Codex registration and real macOS launchctl
+mutation during migration and reports a normal-install follow-up. Library
+callers need reversible adapters for those operations. Detection is restricted
+to known client configuration paths and never scans conversation/history data.
+Cleanup is additionally scoped to Token Optimizer’s managed server/env object
+or TOML section, preserving credentials for every unrelated MCP server.
+Migration failures are sanitized before CLI and JSON output; do not bypass the
+structured result by printing adapter or provider exception objects directly.
 
 Re-running the npm installer refreshes all client assets: Antigravity, OpenCode,
 and Cursor replace their installer-managed local files; Claude uses its plugin
@@ -218,7 +252,28 @@ with `start.js` rather than Bash. Restart the affected client after installing.
 
 ## Guardrails
 
+Provider destination/model routing and runtime credentials are user-authoritative;
+project and MCP tool provider objects are ignored with a warning. Legacy provider
+environment variables apply only when user provider policy is absent. Execution
+and log layers may only narrow the user ceiling. Project/tool redaction rules add
+to mandatory user and built-in rules at the final remote boundary. Config files
+are open-once and byte-bounded; POSIX uses `O_NOFOLLOW`, while Windows relies on
+canonical containment plus post-open regular-file validation because Node exposes
+no equivalent flag there. Authoritative POSIX user config must be privately owned.
+Custom patterns allow only concatenated literals/classes/safe escapes, edge
+anchors, and exact repetitions whose aggregate expanded match width is at most 64
+across all custom rules. User rules consume the budget first; excess lower-trust
+rules fail configuration rather than replacing mandatory rules.
+
 **LLM provider:** Configure one of four explicit modes: `local` keeps inference on your endpoint; `openrouter-direct` sends the redacted excerpt and credential directly to OpenRouter; `gateway-token` sends redacted excerpts through the Softaware gateway using its access token; and `gateway-byok` sends both the redacted excerpt and BYOK key through that gateway. The v1 `LLM_GATEWAY_URL` + `OPENROUTER_BYOK_KEY` environment pairing maps to `gateway-byok` with a compatibility warning, preserving its destination. Remote responses include `redactionSummary` (counts/categories only) and may include `providerWarnings`; neither field contains secret values. Raw-local logs may contain secrets printed by commands. If a provider is unavailable or structured output fails schema validation, command exit codes remain authoritative and the tool returns `uncertain` with conservative metadata. `OPENROUTER_BYOK_MODEL` is optional for BYOK routing. Generated plugins intentionally omit blank gateway placeholders so inherited host values keep working after reinstalls. `check_local_llm_health` verifies the selected provider.
+
+Installer credentials default to the native OS credential store for
+`gateway-token`, `gateway-byok`, and `openrouter-direct`. Client configs retain
+only `TOKEN_OPTIMIZER_CREDENTIAL_REF`; the launcher resolves it for the MCP
+child. Native-store errors fail closed. `--credential-store env` only references
+an already-exported provider credential variable and fails when it is absent;
+the installer never persists a supplied secret into its own environment.
+`--credential-store config` explicitly opts into protected-file plaintext.
 
 - Do not paste raw logs into the conversation when the verdict or triage is actionable.
 - Do not let the LLM override command truth: non-zero exits are failures unless the tool explicitly reports uncertainty.
@@ -228,3 +283,5 @@ with `start.js` rather than Bash. Restart the affected client after installing.
 - Avoid `run_regression_check` when writing or replacing `.codex-local-test-runs/baseline.json` would be undesirable.
 - If an MCP tool returns placeholder text, no analysis, or anything clearly non-authoritative, fall back to reading the smallest useful raw-log slice or running normal local commands.
 - If the MCP tool is unavailable, fall back to local commands and summarize output manually, then tell the user the MCP validation path was unavailable.
+
+Large binary output and single long lines are retained through bounded streaming excerpts. Maintainers validate this production path with the deterministic release benchmark documented in `benchmarks/README.md`.

@@ -38,3 +38,22 @@ test('manifest replacement is private where supported', () => {
   const root = home(); manifests.writeManifest(root, manifestFixture());
   if (process.platform !== 'win32') assert.equal(fs.statSync(manifests.manifestPath(root)).mode & 0o777, 0o600);
 });
+
+test('manifest compaction retains only packaged source-repairable files', () => {
+  const assetRoot = path.join(home(), 'assets');
+  const managedRoot = path.join(home(), 'managed');
+  const fixture = { schemaVersion: 2, roots: [managedRoot], assetRoots: [assetRoot], files: [
+    { path: path.join(managedRoot, 'start.js'), source: path.join(assetRoot, 'start.js'), sha256: 'a', ownership: 'installer' },
+    { path: path.join(managedRoot, 'node_modules', 'sdk.js'), source: path.join(assetRoot, 'node_modules', 'sdk.js'), sha256: 'b', ownership: 'installer' },
+    { path: path.join(managedRoot, '.data', 'run.log'), source: path.join(assetRoot, 'run.log'), sha256: 'c', ownership: 'installer' },
+    { path: path.join(managedRoot, 'foreign'), source: path.join(home(), 'foreign'), sha256: 'd', ownership: 'installer' },
+  ] };
+  const compacted = manifests.compactManifest(fixture);
+  assert.deepEqual(compacted.manifest.files.map((item: any) => path.basename(item.path)), ['start.js']);
+  assert.equal(compacted.removedEntries, 3);
+});
+
+test('manifest rejects repair sources outside declared asset roots', () => {
+  const root = home(); const managed = path.join(root, 'managed'); const assets = path.join(root, 'assets');
+  assert.throws(() => manifests.writeManifest(root, { schemaVersion: 2, roots: [managed], assetRoots: [assets], files: [{ path: path.join(managed, 'file'), source: path.join(root, 'foreign'), sha256: 'x', ownership: 'installer' }] }), /outside assetRoots/);
+});

@@ -3,7 +3,7 @@
     "token_optimizer": {
       "command": "node",
       "args": [
-        "/Users/eevangelinos/.cursor/token-optimizer-server/start.js"
+        "${HOME}/.cursor/token-optimizer-server/start.js"
       ],
       "env": {
         "LLM_GATEWAY_URL": "${env:LLM_GATEWAY_URL}",

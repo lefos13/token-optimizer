@@ -34,9 +34,13 @@ class LogExcerptCollector {
             throw new Error('Cannot push after finish');
         const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         this.totalBytes += bytes.length;
-        const text = this.decoders[stream].write(bytes);
-        this.totalCharacters += text.length;
-        this.consumeText(text);
+        /* Decode large pipe chunks incrementally so a single binary or long-line
+         * write cannot create a full-size UTF-16 string in every collector. */
+        for (let offset = 0; offset < bytes.length; offset += 64 * 1024) {
+            const text = this.decoders[stream].write(bytes.subarray(offset, offset + 64 * 1024));
+            this.totalCharacters += text.length;
+            this.consumeText(text);
+        }
     }
     consumeText(text) {
         this.pending += text;

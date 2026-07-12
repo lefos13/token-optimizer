@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.terminateWindowsTree = terminateWindowsTree;
 exports.terminateProcessTree = terminateProcessTree;
 const node_child_process_1 = require("node:child_process");
 function isAlive(pid) {
@@ -74,21 +75,28 @@ function runTaskkill(args) {
         (0, node_child_process_1.execFile)('taskkill', args, (error) => resolve({ code: error?.code ?? 0, error: error ?? undefined }));
     });
 }
-async function terminateWindowsTree(pid, graceMs) {
-    const soft = await runTaskkill(['/PID', String(pid), '/T']);
-    if (!soft.error || !isAlive(pid)) {
-        if (await waitForExit(pid, graceMs, 'win32'))
+const windowsAdapter = {
+    taskkill: runTaskkill,
+    waitForExit: (pid, graceMs) => waitForExit(pid, graceMs, 'win32'),
+    isAlive,
+};
+/* Injected Windows operations make taskkill escalation verifiable on every CI host
+ * without pretending that Unix process signaling has Windows tree semantics. */
+async function terminateWindowsTree(pid, graceMs, adapter = windowsAdapter) {
+    const soft = await adapter.taskkill(['/PID', String(pid), '/T']);
+    if (!soft.error || !adapter.isAlive(pid)) {
+        if (await adapter.waitForExit(pid, graceMs))
             return { terminated: true, method: 'taskkill-tree' };
     }
-    const forced = await runTaskkill(['/PID', String(pid), '/T', '/F']);
-    if (await waitForExit(pid, graceMs, 'win32'))
+    const forced = await adapter.taskkill(['/PID', String(pid), '/T', '/F']);
+    if (await adapter.waitForExit(pid, graceMs))
         return { terminated: true, method: 'taskkill-force' };
     return { terminated: false, method: 'error', error: forced.error?.message ?? soft.error?.message ?? 'taskkill did not terminate process' };
 }
-async function terminateProcessTree(child, platform = process.platform, graceMs = 1000) {
+async function terminateProcessTree(child, platform = process.platform, graceMs = 1000, adapter) {
     if (!child.pid)
         return { terminated: true, method: 'already-exited' };
     if (platform === 'win32')
-        return terminateWindowsTree(child.pid, graceMs);
+        return terminateWindowsTree(child.pid, graceMs, adapter);
     return terminateUnixGroup(child, graceMs, platform);
 }

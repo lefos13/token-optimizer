@@ -1,13 +1,21 @@
 {
   "name": "token-optimizer-mcp",
-  "version": "2.0.0-beta.2",
+  "version": "2.0.0-rc.6",
   "description": "An MCP server for running workspace tests and triaging failures using Token Optimizer.",
   "main": "dist/index.js",
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "license": "Apache-2.0",
   "scripts": {
     "build": "tsc",
     "build:gateway": "tsc -p tsconfig.gateway.json",
     "start:gateway": "node gateway/dist/index.js",
-    "test": "tsc -p tsconfig.test.json && cd .test-build && node --test",
+    "test": "tsc -p tsconfig.test.json && node scripts/run-tests.js",
+    "test:security": "tsc -p tsconfig.test.json && node scripts/run-tests.js test/security/command-boundary.test.js test/security/inference-boundary.test.js test/security/installer-boundary.test.js test/security/gateway-boundary.test.js test/installer/credential-store.test.js test/installer/repair.test.js test/installer/uninstall.test.js test/scripts/package-hygiene.test.js test/scripts/release-versions.test.js",
     "build:plugin": "npm run build:plugin:antigravity && npm run build:plugin:claude && npm run build:plugin:codex && npm run build:plugin:opencode && npm run build:plugin:cursor",
     "build:plugin:antigravity": "node scripts/generate-plugin-antigravity.js",
     "build:plugin:claude": "node scripts/generate-plugin-claude.js",
@@ -20,14 +28,19 @@
     "start": "node dist/index.js",
     "dev": "tsc -w",
     "analytics:ui": "npm run build && node dist/analytics-ui.js"
+    ,"verify:generated": "node scripts/verify-generated-assets.js"
+    ,"sbom": "node scripts/release-preflight.js --sbom-only"
+    ,"release:preflight": "node scripts/release-preflight.js"
+    ,"benchmark": "npm run build && node scripts/run-benchmarks.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.1",
-    "@softawarest/token-optimizer-installer": "^1.7.1",
     "nodemailer": "^9.0.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "@types/node": "^20.11.0",
     "@types/nodemailer": "^8.0.1",
     "typescript": "^5.3.3"

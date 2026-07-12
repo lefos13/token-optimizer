@@ -1,6 +1,5 @@
 const fs = require("fs");
 const path = require("path");
-const os = require("os");
 const { buildStartJs } = require("./launcher-template");
 
 /* opencode plugin flow.
@@ -55,7 +54,7 @@ const SERVER_FILES = [
 /* Conventional install location the README tells the user to copy the server
    to, so the path baked into mcp-snippet.jsonc matches what actually exists
    on disk once they follow the instructions. */
-const installedServerDir = path.join(os.homedir(), ".config", "opencode", "token-optimizer-server");
+const installedServerDir = "${HOME}/.config/opencode/token-optimizer-server";
 
 console.log("Generating opencode plugin structure...");
 
@@ -64,7 +63,7 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "2.0.0-beta.2";
+  const VERSION = "2.0.0-rc.6";
 
   const sdkVersion = require(
     path.join(rootDir, "node_modules", "@modelcontextprotocol", "sdk", "package.json"),

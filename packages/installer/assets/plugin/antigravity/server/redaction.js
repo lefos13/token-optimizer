@@ -3,6 +3,65 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.redactText = redactText;
 const MAX_CUSTOM_RULES = 20;
 const MAX_PATTERN_LENGTH = 500;
+const MAX_REPLACEMENT_LENGTH = 256;
+const MAX_REDACTION_INPUT_LENGTH = 1024 * 1024;
+const MAX_EXPANDED_PATTERN_WIDTH = 64;
+const SAFE_FLAGS = /^[dgimsuv]*$/;
+/* User patterns intentionally support only concatenated literals, classes,
+ * safe character escapes, edge anchors, and small exact repetitions. This
+ * grammar has no branching or variable repetition and therefore executes in
+ * time linear in the bounded input size. */
+function assertLinearPattern(source) {
+    let index = 0;
+    let expandedWidth = 0;
+    while (index < source.length) {
+        const char = source[index];
+        if ((char === '^' && index === 0) || (char === '$' && index === source.length - 1)) {
+            index += 1;
+            continue;
+        }
+        if ('().|+*?'.includes(char))
+            throw new TypeError('unsafe redaction rule pattern');
+        if (char === '\\') {
+            index += 1;
+            if (index >= source.length || /[1-9]/.test(source[index]))
+                throw new TypeError('unsafe redaction rule pattern');
+            index += 1;
+        }
+        else if (char === '[') {
+            index += 1;
+            if (source[index] === '^')
+                index += 1;
+            let members = 0;
+            while (index < source.length && source[index] !== ']') {
+                if (source[index] === '\\')
+                    index += 1;
+                index += 1;
+                members += 1;
+            }
+            if (index >= source.length || members === 0)
+                throw new TypeError('unsafe redaction rule pattern');
+            index += 1;
+        }
+        else {
+            if (char === '{' || char === '}' || char === '.')
+                throw new TypeError('unsafe redaction rule pattern');
+            index += 1;
+        }
+        let repetitions = 1;
+        if (source[index] === '{') {
+            const exact = source.slice(index).match(/^\{(\d{1,3})\}/);
+            if (!exact || Number(exact[1]) > 100)
+                throw new TypeError('unsafe redaction rule pattern');
+            repetitions = Number(exact[1]);
+            index += exact[0].length;
+        }
+        expandedWidth += repetitions;
+        if (expandedWidth > MAX_EXPANDED_PATTERN_WIDTH)
+            throw new TypeError('unsafe redaction rule pattern exceeds expanded-width limit');
+    }
+    return expandedWidth;
+}
 /* These rules target credential-shaped values while retaining labels, routes, and
  * surrounding diagnostics. They intentionally avoid matching prose placeholders. */
 const DEFAULT_REDACTION_RULES = [
@@ -41,17 +100,25 @@ function normalizeRule(rule) {
     if (!rule || typeof rule.category !== 'string' || rule.category.trim().length === 0) {
         throw new TypeError('redaction rule category must be a non-empty string');
     }
+    if (rule.flags && !SAFE_FLAGS.test(rule.flags))
+        throw new TypeError('redaction rule contains invalid or duplicate flags');
+    if (rule.replacement && rule.replacement.length > MAX_REPLACEMENT_LENGTH)
+        throw new RangeError('redaction rule replacement is too long');
     let pattern;
+    let expandedWidth;
     if (rule.pattern instanceof RegExp) {
         if (rule.pattern.source.length > MAX_PATTERN_LENGTH)
             throw new RangeError('redaction rule pattern is too long');
+        expandedWidth = assertLinearPattern(rule.pattern.source);
         pattern = new RegExp(rule.pattern.source, rule.pattern.flags.includes('g') ? rule.pattern.flags : `${rule.pattern.flags}g`);
     }
     else if (typeof rule.pattern === 'string') {
         if (rule.pattern.length > MAX_PATTERN_LENGTH)
             throw new RangeError('redaction rule pattern is too long');
         try {
-            pattern = new RegExp(rule.pattern, 'g');
+            expandedWidth = assertLinearPattern(rule.pattern);
+            const flags = rule.flags || '';
+            pattern = new RegExp(rule.pattern, flags.includes('g') ? flags : `${flags}g`);
         }
         catch (error) {
             throw new TypeError(`invalid regular expression in redaction rule: ${error instanceof Error ? error.message : String(error)}`);
@@ -60,17 +127,23 @@ function normalizeRule(rule) {
     else {
         throw new TypeError('redaction rule pattern must be a regular expression or string');
     }
-    return { ...rule, pattern };
+    return { ...rule, pattern, expandedWidth };
 }
 function redactText(text, options = {}) {
+    if (text.length > MAX_REDACTION_INPUT_LENGTH)
+        throw new RangeError('redaction input is too large');
     const customRules = options.customRules ?? [];
     if (customRules.length > MAX_CUSTOM_RULES)
         throw new RangeError(`too many custom redaction rules (maximum ${MAX_CUSTOM_RULES})`);
+    const normalizedCustomRules = customRules.map(normalizeRule);
+    const aggregateWidth = normalizedCustomRules.reduce((total, rule) => total + rule.expandedWidth, 0);
+    if (aggregateWidth > MAX_EXPANDED_PATTERN_WIDTH)
+        throw new TypeError('unsafe custom redaction rule set exceeds aggregate expanded-width limit');
     let output = text;
     let count = 0;
     const categories = new Set();
-    for (const rule of [...DEFAULT_REDACTION_RULES, ...customRules.map(normalizeRule)]) {
-        const replacement = rule.replace ?? (() => '***');
+    for (const rule of [...DEFAULT_REDACTION_RULES, ...normalizedCustomRules]) {
+        const replacement = rule.replace ?? (rule.replacement !== undefined ? (() => rule.replacement) : (() => '***'));
         output = output.replace(rule.pattern, (...args) => {
             count += 1;
             categories.add(rule.category);

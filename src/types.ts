@@ -34,7 +34,9 @@ export interface VerdictResult extends LLMResponseMetadata {
   needsRawLogs?: boolean;
   likelyRelevantToRecentChanges?: boolean;
   triage?: LogQueryResponse;
-  executionStatus?: 'completed' | 'timed_out' | 'blocked' | 'spawn_failed';
+  executionStatus?: 'completed' | 'timed_out' | 'terminated' | 'blocked' | 'spawn_failed';
+  auditStatus?: 'persisted' | 'failed';
+  auditFailure?: { stage: string; code?: string; message: string; evidencePath?: string; orphanPath?: string; tempCleanup: 'removed' | 'retained' | 'failed' | 'none' };
   signal?: string | null;
   policyDecision?: string;
   logTruncated?: boolean;
@@ -107,6 +109,7 @@ export interface TokenOptimizerConfig {
     mode: ProviderMode;
     apiUrl: string;
     model: string;
+    taskRouting: Partial<Record<LLMResponseTask, string>>;
   }>;
   execution?: Partial<{
     profile: ExecutionProfile;
@@ -118,6 +121,7 @@ export interface TokenOptimizerConfig {
     maxDiskMb: number;
     storageMode: 'raw-local' | 'redacted-local';
   }>;
+  redaction?: { rules: Array<{ pattern: string; flags?: string; category: string; replacement?: string }> };
 }
 
 export interface ConfigLayers {
@@ -129,8 +133,9 @@ export interface ConfigLayers {
 }
 
 export interface EffectiveConfig {
-  provider: { mode: ProviderMode; apiUrl: string; model: string; credentialEnv?: string; credential?: string; byokCredential?: string; byokModel?: string };
+  provider: { mode: ProviderMode; apiUrl: string; model: string; taskRouting?: Partial<Record<LLMResponseTask, string>>; credentialEnv?: string; credential?: string; byokCredential?: string; byokModel?: string };
   execution: { profile: ExecutionProfile; allowedCommandPrefixes: string[]; autoDetectedCommands?: string[] };
   logs: { retentionDays: number; maxDiskMb: number; storageMode: 'raw-local' | 'redacted-local' };
+  redaction: { rules: Array<{ pattern: string; flags?: string; category: string; replacement?: string }> };
   warnings: string[];
 }

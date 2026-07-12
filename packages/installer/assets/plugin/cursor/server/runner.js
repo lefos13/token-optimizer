@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.runCommand = runCommand;
 exports.trimLog = trimLog;
 exports.estimateTokens = estimateTokens;
+exports.appendFileStream = appendFileStream;
 exports.runSuite = runSuite;
 exports.numberLines = numberLines;
 exports.getGitDiff = getGitDiff;
@@ -52,7 +53,7 @@ const log_excerpt_1 = require("./log-excerpt");
 /**
  * Runs a single shell command inside the workspacePath, capturing all stdout and stderr.
  */
-function runCommand(command, workspacePath, timeoutMs = 300000, execution, logFilePath, storageMode = 'raw-local') {
+function runCommand(command, workspacePath, timeoutMs = 300000, execution, logFilePath, storageMode = 'raw-local', commandLogFs = { createWriteStream: fs.createWriteStream }) {
     const startTime = Date.now();
     return new Promise(async (resolve) => {
         let settled = false;
@@ -90,19 +91,25 @@ function runCommand(command, workspacePath, timeoutMs = 300000, execution, logFi
         let outBytes = 0, errBytes = 0;
         let fileStream;
         let fileCarry = '';
+        let fileFailure;
         try {
-            if (logFilePath)
-                fileStream = fs.createWriteStream(logFilePath, { flags: 'w' });
+            if (logFilePath) {
+                fileStream = commandLogFs.createWriteStream(logFilePath, { flags: 'w', mode: 0o600 });
+                fileStream.on('error', (error) => { fileFailure ||= error; });
+            }
         }
-        catch { /* best effort */ }
+        catch (error) {
+            fileFailure = error;
+        }
         const collect = (chunk, stream) => {
             const bytes = chunk.byteLength;
             if (stream === 'stdout')
                 outBytes += bytes;
             else
                 errBytes += bytes;
-            fileStream?.write(`[${stream}] `);
-            if (fileStream) {
+            if (fileStream && !fileFailure)
+                fileStream.write(`[${stream}] `);
+            if (fileStream && !fileFailure) {
                 if (storageMode === 'redacted-local') {
                     const text = fileCarry + chunk.toString();
                     const cut = Math.max(0, text.length - 128);
@@ -117,20 +124,34 @@ function runCommand(command, workspacePath, timeoutMs = 300000, execution, logFi
         };
         child.stdout?.on('data', (c) => collect(c, 'stdout'));
         child.stderr?.on('data', (c) => collect(c, 'stderr'));
-        const closeFile = () => { if (fileStream) {
-            if (storageMode === 'redacted-local' && fileCarry)
-                fileStream.write((0, redaction_1.redactText)(fileCarry).text);
-            fileCarry = '';
-            fileStream.end();
+        const closeFile = async () => {
+            const stream = fileStream;
             fileStream = undefined;
-        } };
-        const finish = (result) => {
+            if (!stream)
+                return;
+            if (storageMode === 'redacted-local' && fileCarry && !fileFailure)
+                stream.write((0, redaction_1.redactText)(fileCarry).text);
+            fileCarry = '';
+            await new Promise((resolve) => {
+                if (stream.destroyed) {
+                    resolve();
+                    return;
+                }
+                const done = () => { stream.removeListener('finish', done); stream.removeListener('close', done); resolve(); };
+                stream.once('finish', done);
+                stream.once('close', done);
+                stream.end();
+            });
+        };
+        const finish = async (result) => {
             if (settled)
                 return;
             settled = true;
             if (timeout)
                 clearTimeout(timeout);
-            closeFile();
+            await closeFile();
+            if (fileFailure)
+                result.commandLogFailure = { ...(fileFailure.code ? { code: fileFailure.code } : {}), message: fileFailure.message };
             result.stdout = result.stdout || outCollector.finish().text;
             result.stderr = result.stderr || errCollector.finish().text;
             result.interleaved = interleavedCollector.finish().text;
@@ -142,7 +163,7 @@ function runCommand(command, workspacePath, timeoutMs = 300000, execution, logFi
         child.once('close', (code, signal) => {
             if (timingOut)
                 return;
-            finish({ command, exitCode: code ?? (signal ? -1 : 1), stdout: '', stderr: '', durationMs: Date.now() - startTime, error: signal ? `Process terminated by ${signal}` : undefined, autoDetected, signal, executionStatus: 'completed' });
+            finish({ command, exitCode: code ?? (signal ? -1 : 1), stdout: '', stderr: '', durationMs: Date.now() - startTime, error: signal ? `Process terminated by ${signal}` : undefined, autoDetected, signal, executionStatus: signal ? 'terminated' : 'completed' });
         });
         // Handle timeout
         timeout = setTimeout(async () => {
@@ -228,12 +249,34 @@ function formatCommandLog(res) {
     block += `\n--- EXIT CODE: ${res.exitCode} (Duration: ${res.durationMs}ms) ---\n\n`;
     return block;
 }
-async function appendFileStream(destination, sourcePath) {
+async function appendFileStream(write, sourcePath, createReadStream = fs.createReadStream) {
     await new Promise((resolve, reject) => {
-        const source = fs.createReadStream(sourcePath);
-        source.on('error', reject);
-        source.on('end', () => resolve());
-        source.pipe(destination, { end: false });
+        const source = createReadStream(sourcePath);
+        let settled = false;
+        const cleanup = () => { source.removeListener('error', fail); source.removeListener('end', done); source.removeListener('data', onData); };
+        const done = () => { if (settled)
+            return; settled = true; cleanup(); resolve(); };
+        const fail = (error) => {
+            if (settled)
+                return;
+            settled = true;
+            cleanup();
+            const rejectClosed = () => reject(error);
+            if (source.closed)
+                rejectClosed();
+            else {
+                source.once('close', rejectClosed);
+                source.destroy();
+            }
+        };
+        const onData = (chunk) => {
+            source.pause();
+            write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)).then(() => { if (!settled)
+                source.resume(); }, fail);
+        };
+        source.on('error', fail);
+        source.on('data', onData);
+        source.on('end', done);
     });
 }
 /**
@@ -242,7 +285,7 @@ async function appendFileStream(destination, sourcePath) {
  * emitted in command order regardless of execution mode.
  */
 async function runSuite(commands, workspacePath, options = {}) {
-    const { maxOutputLines, timeoutMs, parallel, execution, storageMode = 'raw-local', retentionDays, maxDiskMb } = options;
+    const { maxOutputLines, timeoutMs, parallel, execution, storageMode = 'raw-local', retentionDays, maxDiskMb, logFs, commandLogFs } = options;
     const logDir = await (0, log_store_1.ensureSafeRoot)(workspacePath);
     // Ensure log directory exists
     if (!fs.existsSync(logDir)) {
@@ -253,7 +296,7 @@ async function runSuite(commands, workspacePath, options = {}) {
     const rawLogPath = path.join(logDir, logFileName);
     const tempDir = path.join(logDir, `.stream-${process.pid}-${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
-    const runOne = (cmd, index) => timeoutMs ? runCommand(cmd, workspacePath, timeoutMs, execution, path.join(tempDir, `${index}.out`), storageMode) : runCommand(cmd, workspacePath, 300000, execution, path.join(tempDir, `${index}.out`), storageMode);
+    const runOne = (cmd, index) => timeoutMs ? runCommand(cmd, workspacePath, timeoutMs, execution, path.join(tempDir, `${index}.out`), storageMode, commandLogFs) : runCommand(cmd, workspacePath, 300000, execution, path.join(tempDir, `${index}.out`), storageMode, commandLogFs);
     let results;
     try {
         if (parallel) {
@@ -270,23 +313,54 @@ async function runSuite(commands, workspacePath, options = {}) {
         fs.rmSync(tempDir, { recursive: true, force: true });
         throw error;
     }
-    await (0, log_store_1.ensureLogGitignore)(workspacePath);
-    const managedLog = await (0, log_store_1.createRunLog)(workspacePath, { runId: logFileName.replace(/\.log$/, ''), storageMode });
+    const warnings = [];
+    await (0, log_store_1.ensureLogGitignore)(workspacePath).catch((error) => warnings.push(`log gitignore update failed: ${error instanceof Error ? error.message : String(error)}`));
+    let managedLog;
+    let auditStatus = 'persisted';
+    let auditFailure;
+    let auditStage = 'create';
     try {
+        const commandLogFailure = results.find((result) => result.commandLogFailure)?.commandLogFailure;
+        if (commandLogFailure) {
+            auditStage = 'write';
+            throw Object.assign(new Error(`command output persistence failed: ${commandLogFailure.message}`), { code: commandLogFailure.code });
+        }
+        managedLog = await (0, log_store_1.createRunLog)(workspacePath, { runId: logFileName.replace(/\.log$/, ''), storageMode, fs: logFs });
+        auditStage = 'write';
         for (let i = 0; i < results.length; i++) {
             const header = `========================================================\nCOMMAND: ${results[i].command}\n========================================================\n\n`;
             await managedLog.write(header);
             const commandOutputPath = path.join(tempDir, `${i}.out`);
             if (fs.existsSync(commandOutputPath))
-                await managedLog.write(await fs.promises.readFile(commandOutputPath));
+                await appendFileStream((chunk) => managedLog.write(chunk), commandOutputPath);
             await managedLog.write(`\n--- EXIT CODE: ${results[i].exitCode} (Duration: ${results[i].durationMs}ms) ---\n\n`);
         }
+        auditStage = 'fsync';
         await managedLog.close();
     }
     catch (error) {
-        await managedLog.close().catch(() => undefined);
-        fs.rmSync(tempDir, { recursive: true, force: true });
-        throw error;
+        auditStatus = 'failed';
+        const failureStage = typeof error === 'object' && error && 'auditStage' in error ? error.auditStage : auditStage;
+        const code = typeof error === 'object' && error && 'code' in error ? String(error.code) : undefined;
+        const retainedPath = typeof error === 'object' && error && 'retainedPath' in error ? String(error.retainedPath) : undefined;
+        let evidenceExists = Boolean(retainedPath && fs.existsSync(retainedPath));
+        let tempCleanup = evidenceExists ? 'retained' : 'none';
+        if (failureStage === 'write' && managedLog) {
+            const cleanup = await managedLog.abort();
+            tempCleanup = cleanup.status;
+        }
+        if ((failureStage === 'fsync' || failureStage === 'close') && !evidenceExists)
+            tempCleanup = 'removed';
+        if (typeof error === 'object' && error && 'cleanupOutcome' in error)
+            tempCleanup = error.cleanupOutcome;
+        const orphanPath = typeof error === 'object' && error && 'orphanPath' in error ? String(error.orphanPath) : undefined;
+        auditFailure = {
+            stage: failureStage,
+            ...(code ? { code } : {}), message: error instanceof Error ? error.message : String(error),
+            ...(evidenceExists ? { evidencePath: path.relative(workspacePath, retainedPath) } : {}),
+            ...(orphanPath && path.resolve(orphanPath).startsWith(fs.realpathSync(path.resolve(workspacePath, '.codex-local-test-runs')) + path.sep) ? { orphanPath: path.relative(fs.realpathSync(workspacePath), orphanPath) } : {}),
+            tempCleanup,
+        };
     }
     const rawSourceBytes = results.reduce((sum, result) => sum + (result.rawSourceBytes || 0), 0);
     /* Keep the model-facing excerpt bounded by construction; the complete source remains only on disk. */
@@ -310,7 +384,10 @@ async function runSuite(commands, workspacePath, options = {}) {
     // Return path relative to the workspace path for the client
     const relativeLogPath = path.relative(workspacePath, rawLogPath);
     /* Register the run so its log is addressable by a stable runId via query_log / grep_log. Best-effort: a failed index write must never fail the run itself. */
+    const registeredLogPath = auditStatus === 'persisted' ? relativeLogPath : auditFailure?.evidencePath;
     try {
+        if (!registeredLogPath)
+            throw new Error('run has no persisted audit evidence to register');
         const exitCodes = {};
         for (const r of results) {
             exitCodes[r.command] = r.exitCode;
@@ -320,22 +397,25 @@ async function runSuite(commands, workspacePath, options = {}) {
             commands,
             exitCodes,
             timestamp: new Date().toISOString(),
-            rawLogPath: relativeLogPath,
+            rawLogPath: registeredLogPath,
             lineCount: trimmedLogContent.split('\n').length
         });
     }
-    catch {
-        /* ignore registry write failures */
+    catch (error) {
+        warnings.push(`run registry update failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     const result = {
         results,
-        rawLogPath: relativeLogPath,
+        rawLogPath: auditStatus === 'persisted' ? relativeLogPath : (auditFailure?.evidencePath || ''),
         trimmedLogContent,
         rawSourceBytes,
-        rawSourceTokens: Math.ceil(rawSourceBytes / 4)
+        rawSourceTokens: Math.ceil(rawSourceBytes / 4),
+        auditStatus,
+        ...(auditFailure ? { auditFailure } : {}),
+        warnings
     };
     fs.rmSync(tempDir, { recursive: true, force: true });
-    await (0, log_store_1.pruneLogs)(workspacePath, { storageMode, retentionDays, maxDiskMb });
+    await (0, log_store_1.pruneLogs)(workspacePath, { storageMode, retentionDays, maxDiskMb }).catch((error) => warnings.push(`log pruning failed: ${error instanceof Error ? error.message : String(error)}`));
     return result;
 }
 /* Prefix every line with its 1-based line number so a model (query_log) can cite exact line ranges back to the caller. */

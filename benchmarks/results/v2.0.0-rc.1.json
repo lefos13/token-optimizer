@@ -1,0 +1,302 @@
+{
+  "schemaVersion": 2,
+  "release": "2.0.0-rc.1",
+  "benchmarkSourceCommit": "2b82d9d40fa09c989b5982b2c13c4f93042e230d",
+  "benchmarkSourceTree": "73766cd9adfd0ae8e1cfb71a19724d1c1cd51d54",
+  "benchmarkInputHash": "b41f9b474651cc5971809127d2c25a77e2424488c74d1ed27934cb80bd817fdc",
+  "packageLockHash": "4c2bd4d4c768f48642584e2837e85af13db9527118d0483d2448e22f991469a0",
+  "dependencyVersions": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "nodemailer": "9.0.3",
+    "zod": "4.4.3"
+  },
+  "timestamp": "2026-07-12T20:56:53.144Z",
+  "platform": "darwin-arm64",
+  "methodology": {
+    "executionsPerSample": 1,
+    "ecosystemWorkloadSamples": 1,
+    "releaseGateWorkloadSamples": 3,
+    "releaseGateWorkload": "binary-long-line-56mb",
+    "baseline": "dedicated Node measurement worker plus shell and workload descendants",
+    "product": "compiled MCP server over SDK stdio plus deterministic local OpenAI-compatible HTTP mock",
+    "executionConfig": "fresh temporary user config permits unrestricted execution only for controlled fixture commands and is deleted after each measurement",
+    "rss": "peak aggregate RSS of root process and descendants sampled via ps every 2ms",
+    "limitations": [
+      "Ecosystem workload timing and RSS are single measurements.",
+      "Very short-lived processes between samples may be missed; RSS is platform-reported and not cross-platform comparable."
+    ]
+  },
+  "workloads": [
+    {
+      "workload": "npm-success",
+      "ecosystem": "npm",
+      "command": "node benchmarks/fixtures/npm/noisy.js",
+      "outcome": "success",
+      "exitCode": 0,
+      "rawBytes": 170910,
+      "rawTokens": 42728,
+      "returnedBytes": 40216,
+      "returnedTokens": 10054,
+      "savingsPercent": 76.47,
+      "rssStatus": "measured",
+      "baselinePeakRssMb": 116.34,
+      "productPeakRssMb": 104.86,
+      "productOverheadRssMb": -11.48,
+      "baselineDurationMs": 181.85,
+      "durationMs": 252.18,
+      "provider": {
+        "model": "benchmark-digest-v1",
+        "latencyMs": 36
+      },
+      "redaction": {
+        "count": 1,
+        "categories": [
+          "secret-assignment"
+        ]
+      }
+    },
+    {
+      "workload": "python-success",
+      "ecosystem": "python",
+      "command": "python3 benchmarks/fixtures/python/noisy.py",
+      "outcome": "success",
+      "exitCode": 0,
+      "rawBytes": 182913,
+      "rawTokens": 45729,
+      "returnedBytes": 42916,
+      "returnedTokens": 10729,
+      "savingsPercent": 76.54,
+      "rssStatus": "measured",
+      "baselinePeakRssMb": 84.8,
+      "productPeakRssMb": 87.39,
+      "productOverheadRssMb": 2.59,
+      "baselineDurationMs": 170.66,
+      "durationMs": 226.15,
+      "provider": {
+        "model": "benchmark-digest-v1",
+        "latencyMs": 40
+      },
+      "redaction": {
+        "count": 1,
+        "categories": [
+          "secret-assignment"
+        ]
+      }
+    },
+    {
+      "workload": "go-success",
+      "ecosystem": "go",
+      "status": "skipped",
+      "reason": "toolchain-unavailable"
+    },
+    {
+      "workload": "npm-failure",
+      "ecosystem": "npm",
+      "command": "node benchmarks/fixtures/npm/noisy.js --fail",
+      "outcome": "failure",
+      "exitCode": 7,
+      "rawBytes": 170922,
+      "rawTokens": 42731,
+      "returnedBytes": 40285,
+      "returnedTokens": 10072,
+      "savingsPercent": 76.43,
+      "rssStatus": "measured",
+      "baselinePeakRssMb": 116.19,
+      "productPeakRssMb": 114.25,
+      "productOverheadRssMb": -1.94,
+      "baselineDurationMs": 183.14,
+      "durationMs": 217.83,
+      "provider": {
+        "model": "benchmark-digest-v1",
+        "latencyMs": 36
+      },
+      "redaction": {
+        "count": 1,
+        "categories": [
+          "secret-assignment"
+        ]
+      }
+    },
+    {
+      "workload": "python-failure",
+      "ecosystem": "python",
+      "command": "python3 benchmarks/fixtures/python/noisy.py --fail",
+      "outcome": "failure",
+      "exitCode": 7,
+      "rawBytes": 182925,
+      "rawTokens": 45732,
+      "returnedBytes": 42985,
+      "returnedTokens": 10747,
+      "savingsPercent": 76.5,
+      "rssStatus": "measured",
+      "baselinePeakRssMb": 85.66,
+      "productPeakRssMb": 83.56,
+      "productOverheadRssMb": -2.09,
+      "baselineDurationMs": 162.47,
+      "durationMs": 198.43,
+      "provider": {
+        "model": "benchmark-digest-v1",
+        "latencyMs": 30
+      },
+      "redaction": {
+        "count": 1,
+        "categories": [
+          "secret-assignment"
+        ]
+      }
+    },
+    {
+      "workload": "go-failure",
+      "ecosystem": "go",
+      "status": "skipped",
+      "reason": "toolchain-unavailable"
+    },
+    {
+      "workload": "rust-success",
+      "ecosystem": "rust",
+      "status": "skipped",
+      "reason": "toolchain-unavailable"
+    },
+    {
+      "workload": "rust-failure",
+      "ecosystem": "rust",
+      "status": "skipped",
+      "reason": "toolchain-unavailable"
+    },
+    {
+      "workload": "binary-long-line-56mb",
+      "ecosystem": "npm",
+      "command": "node benchmarks/fixtures/npm/large.js",
+      "outcome": "success",
+      "exitCode": 0,
+      "rawBytes": 58720259,
+      "rawTokens": 14680065,
+      "repetitions": 3,
+      "samples": [
+        {
+          "workload": "binary-long-line-56mb",
+          "ecosystem": "npm",
+          "command": "node benchmarks/fixtures/npm/large.js",
+          "outcome": "success",
+          "exitCode": 0,
+          "rawBytes": 58720259,
+          "rawTokens": 14680065,
+          "returnedBytes": 26031,
+          "returnedTokens": 6508,
+          "savingsPercent": 99.96,
+          "rssStatus": "measured",
+          "baselinePeakRssMb": 168.73,
+          "productPeakRssMb": 243.48,
+          "productOverheadRssMb": 74.75,
+          "baselineDurationMs": 4076.61,
+          "durationMs": 470.53,
+          "provider": {
+            "model": "benchmark-digest-v1",
+            "latencyMs": 32
+          },
+          "redaction": {
+            "count": 1,
+            "categories": [
+              "secret-assignment"
+            ]
+          }
+        },
+        {
+          "workload": "binary-long-line-56mb",
+          "ecosystem": "npm",
+          "command": "node benchmarks/fixtures/npm/large.js",
+          "outcome": "success",
+          "exitCode": 0,
+          "rawBytes": 58720259,
+          "rawTokens": 14680065,
+          "returnedBytes": 26031,
+          "returnedTokens": 6508,
+          "savingsPercent": 99.96,
+          "rssStatus": "measured",
+          "baselinePeakRssMb": 168.16,
+          "productPeakRssMb": 232.69,
+          "productOverheadRssMb": 64.53,
+          "baselineDurationMs": 5895.54,
+          "durationMs": 485.81,
+          "provider": {
+            "model": "benchmark-digest-v1",
+            "latencyMs": 36
+          },
+          "redaction": {
+            "count": 1,
+            "categories": [
+              "secret-assignment"
+            ]
+          }
+        },
+        {
+          "workload": "binary-long-line-56mb",
+          "ecosystem": "npm",
+          "command": "node benchmarks/fixtures/npm/large.js",
+          "outcome": "success",
+          "exitCode": 0,
+          "rawBytes": 58720259,
+          "rawTokens": 14680065,
+          "returnedBytes": 26031,
+          "returnedTokens": 6508,
+          "savingsPercent": 99.96,
+          "rssStatus": "measured",
+          "baselinePeakRssMb": 169.3,
+          "productPeakRssMb": 245.89,
+          "productOverheadRssMb": 76.59,
+          "baselineDurationMs": 5705.34,
+          "durationMs": 482.01,
+          "provider": {
+            "model": "benchmark-digest-v1",
+            "latencyMs": 34
+          },
+          "redaction": {
+            "count": 1,
+            "categories": [
+              "secret-assignment"
+            ]
+          }
+        }
+      ],
+      "rssStatus": "measured",
+      "aggregates": {
+        "durationMs": {
+          "median": 482.01,
+          "min": 470.53,
+          "max": 485.81,
+          "range": 15.28000000000003
+        },
+        "baselineDurationMs": {
+          "median": 5705.34,
+          "min": 4076.61,
+          "max": 5895.54,
+          "range": 1818.9299999999998
+        },
+        "providerLatencyMs": {
+          "median": 34,
+          "min": 32,
+          "max": 36,
+          "range": 4
+        },
+        "baselineRssMb": {
+          "median": 168.73,
+          "min": 168.16,
+          "max": 169.3,
+          "range": 1.1400000000000148
+        },
+        "productRssMb": {
+          "median": 243.48,
+          "min": 232.69,
+          "max": 245.89,
+          "range": 13.199999999999989
+        },
+        "overheadRssMb": {
+          "median": 74.75,
+          "min": 64.53,
+          "max": 76.59,
+          "range": 12.060000000000002
+        }
+      }
+    }
+  ]
+}

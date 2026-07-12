@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import * as path from 'node:path';
-import { terminateProcessTree } from '../../src/process-tree';
+import { terminateProcessTree, terminateWindowsTree, type WindowsTerminationAdapter } from '../../src/process-tree';
 import { runCommand } from '../../src/runner';
 
 const fixturePath = path.resolve(__dirname, '../../../test/fixtures/spawn-process-tree.js');
@@ -49,7 +49,9 @@ test('termination removes the spawned grandchild', { skip: process.platform === 
 test('termination escalates when a descendant ignores SIGTERM', { skip: process.platform === 'win32' }, async () => {
   const child = spawn(process.execPath, [fixturePath], {
     detached: true,
-    env: { ...process.env, IGNORE_TERM: '1' },
+    /* The delay makes the old PID-only synchronization fail deterministically:
+       termination must not start until the resistant handler is installed. */
+    env: { ...process.env, IGNORE_TERM: '1', READY_DELAY_MS: '75' },
     stdio: ['ignore', 'pipe', 'ignore'],
   });
   const grandchildPid = await readGrandchildPid(child);
@@ -70,4 +72,28 @@ test('runner timeout records process-tree termination', { skip: process.platform
   assert.equal(result.exitCode, -1);
   assert.equal(result.error, 'Timeout');
   assert.equal(result.termination?.terminated, true);
+});
+
+test('Windows adapter escalates taskkill from tree to forced tree', async () => {
+  const calls: string[][] = []; let waits = 0;
+  const adapter: WindowsTerminationAdapter = {
+    taskkill: async (args) => { calls.push(args); return { code: 0 }; },
+    waitForExit: async () => ++waits === 2,
+    isAlive: () => true,
+  };
+  const result = await terminateWindowsTree(42, 10, adapter);
+  assert.equal(result.method, 'taskkill-force');
+  assert.deepEqual(calls, [['/PID', '42', '/T'], ['/PID', '42', '/T', '/F']]);
+});
+
+test('Windows adapter reports failed forced termination', async () => {
+  const adapter: WindowsTerminationAdapter = {
+    taskkill: async () => ({ code: 1, error: new Error('taskkill denied') }),
+    waitForExit: async () => false,
+    isAlive: () => true,
+  };
+  const result = await terminateWindowsTree(42, 1, adapter);
+  assert.equal(result.terminated, false);
+  assert.equal(result.method, 'error');
+  assert.match(result.error || '', /denied/);
 });

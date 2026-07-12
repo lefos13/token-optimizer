@@ -5,6 +5,7 @@ const { applyLifecyclePlan } = require('../../../packages/installer/lib/uninstal
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { createRegistrationAdapter, createFilesystemMarketplaceAdapter, createServiceAdapter, removeRegistration, removeRegistrationIdentity, upsertJsonProperty } = require('../../../packages/installer/lib/lifecycle-adapters.js');
 
 test('uninstall emits a warning and preserves user-modified files', () => {
   const file = '/managed/user-edited';
@@ -30,5 +31,96 @@ test('uninstall preserves a directive file changed after installation', () => {
   const manifest = { schemaVersion: 2, roots: [home], files: [], managedBlocks: [{ path: file, marker: 'TOKEN_OPTIMIZER_START', sha256: 'installer-hash' }] };
   const plan = planUninstall(manifest, { hash: () => 'changed-hash' });
   assert.equal(plan.operations.length, 0);
-  assert.equal(plan.warnings[0].code, 'USER_MODIFIED_FILE');
+  assert.equal(plan.warnings[0].code, 'USER_MODIFIED_BLOCK');
+});
+
+test('uninstall rolls back files when a later reversible registration fails', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-uninstall-rollback-'));
+  const file = path.join(home, 'owned'); fs.writeFileSync(file, 'owned');
+  const sha256 = require('node:crypto').createHash('sha256').update('owned').digest('hex');
+  const manifest = { schemaVersion: 2, roots: [home], files: [{ path: file, sha256, ownership: 'installer' }], registrations: [{ client: 'codex', ownership: 'installer' }] };
+  const adapter = { capture: () => ({ present: true }), apply: () => { throw new Error('fixture'); }, restore: () => {} };
+  assert.throws(() => applyLifecyclePlan(planUninstall(manifest), { registrationAdapter: adapter }), /rolled back/);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'owned');
+});
+
+test('uninstall fails closed before external state without a reversible adapter', () => {
+  const manifest = { schemaVersion: 2, roots: ['/managed'], files: [], registrations: [{ client: 'claude', ownership: 'installer' }] };
+  assert.throws(() => applyLifecyclePlan(planUninstall(manifest), { requireExternalAdapters: true }), /rolled back/);
+});
+
+test('marketplace registration adapter removes and re-adds Claude and Codex on rollback', () => {
+  for (const client of ['claude', 'codex']) {
+    const calls: any[] = []; const adapter = createRegistrationAdapter({ execFileSync: (...args: any[]) => calls.push(args) });
+    const recipe = client === 'claude' ? { remove: ['plugin', 'uninstall', 'token'], restore: ['plugin', 'install', 'token'] } : { remove: ['plugin', 'remove', 'token'], restore: ['plugin', 'add', 'token'] };
+    const operation = { kind: 'client-command', client, paths: [], recipe };
+    const state = adapter.capture(operation); adapter.apply(operation); adapter.restore(operation, state);
+    assert.deepEqual(calls.map((call) => call.slice(0, 2)), [[client, recipe.remove], [client, recipe.restore]]);
+  }
+});
+
+test('JSON registration cleanup preserves comments, formatting, and unrelated servers', () => {
+  for (const client of ['opencode', 'cursor', 'antigravity']) { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'registration-bytes-')); const file = path.join(home, 'config.jsonc'); const container = client === 'opencode' ? 'mcp' : 'mcpServers'; const original = `{\n  // keep this comment\n  "${container}": {\n    "other": { "command": "keep" },\n    "token_optimizer": { "command": "remove" }\n  },\n  "untouched": true\n}\n`; fs.writeFileSync(file, original); removeRegistration(file, client); const actual = fs.readFileSync(file, 'utf8'); assert.ok(actual.includes('// keep this comment')); assert.ok(actual.includes('"other": { "command": "keep" }')); assert.ok(actual.includes('"untouched": true')); assert.ok(!actual.includes('token_optimizer')); }
+});
+
+test('JSON and JSONC registration upsert preserves every unrelated byte', () => {
+  for (const container of ['mcp', 'mcpServers']) { const original = `{\n  // before\n  "${container}": {\n    "other": { "command": "keep" }, // inline\n    "token_optimizer": { "command": "old" }\n  },\n  "tail": [1, 2, 3]\n}\n`; const next = upsertJsonProperty(original, container, 'token_optimizer', { command: 'new' }); assert.ok(next.includes('// before')); assert.ok(next.includes('"other": { "command": "keep" }, // inline')); assert.ok(next.includes('"tail": [1, 2, 3]')); assert.ok(next.includes('"command":"new"') || next.includes('"command": "new"')); }
+});
+
+test('same-file JSON and TOML aliases remove only the noncanonical identity', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'alias-identity-')); const json = path.join(home, 'mcp.json'); fs.writeFileSync(json, '{"mcpServers":{"token_optimizer":{"command":"keep"},"token-optimizer":{"command":"drop"},"other":{}}}'); removeRegistrationIdentity({ client: 'cursor', name: 'token-optimizer', path: json }); assert.ok(fs.readFileSync(json, 'utf8').includes('token_optimizer')); assert.ok(!fs.readFileSync(json, 'utf8').includes('token-optimizer'));
+  const toml = path.join(home, 'config.toml'); fs.writeFileSync(toml, '[mcp_servers.token_optimizer]\ncommand="keep"\n\n[mcp_servers."token-optimizer"]\ncommand="drop"\n'); removeRegistrationIdentity({ client: 'codex', name: 'token-optimizer', path: toml }); const next = fs.readFileSync(toml, 'utf8'); assert.ok(next.includes('[mcp_servers.token_optimizer]')); assert.ok(!next.includes('[mcp_servers."token-optimizer"]'));
+});
+
+test('registration cleanup is scoped to MCP container and full TOML namespace', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'scoped-cleanup-')); const json = path.join(home, 'config.jsonc'); fs.writeFileSync(json, '{"token_optimizer":{"keep":true},"nested":{"mcpServers":{"token_optimizer":{"keep":true}}},"mcpServers":{"token_optimizer":{"drop":true},"other":{}}}'); removeRegistration(json, 'cursor'); const jsonText = fs.readFileSync(json, 'utf8'); assert.equal((jsonText.match(/token_optimizer/g) || []).length, 2); assert.ok(jsonText.includes('"other"'));
+  const toml = path.join(home, 'config.toml'); fs.writeFileSync(toml, '# keep\n[mcp_servers."token-optimizer"]\ncommand="drop"\n[mcp_servers."token-optimizer".env]\nA="drop"\n[mcp_servers.other]\ncommand="keep"\n'); removeRegistrationIdentity({ client: 'codex', name: 'token-optimizer', path: toml }); const tomlText = fs.readFileSync(toml, 'utf8'); assert.ok(tomlText.includes('# keep')); assert.ok(tomlText.includes('[mcp_servers.other]')); assert.ok(!tomlText.includes('A="drop"'));
+});
+
+test('LaunchAgent permission failure leaves plist untouched', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'launchagent-permission-')); const file = path.join(home, 'agent.plist'); fs.writeFileSync(file, 'owned');
+  const adapter = createServiceAdapter({ execFileSync: (_cmd: string, args: string[]) => { if (args[0] === 'print') return ''; const error: any = new Error('Operation not permitted'); error.stderr = 'Operation not permitted'; throw error; } });
+  const operation = { kind: 'platform-service', service: 'fixture', path: file };
+  assert.throws(() => adapter.apply(operation), /permitted/); assert.equal(fs.readFileSync(file, 'utf8'), 'owned');
+});
+
+test('managed launchctl environment apply restores exact previous values', () => {
+  const state: Record<string, string> = { TOKEN_OPTIMIZER_PROVIDER_MODE: 'previous' };
+  const exec = (_cmd: string, args: string[]) => { if (args[0] === 'print') return ''; if (args[0] === 'getenv') return state[args[1]] || ''; if (args[0] === 'setenv') { state[args[1]] = args[2]; return ''; } if (args[0] === 'unsetenv') { delete state[args[1]]; return ''; } return ''; };
+  const adapter = createServiceAdapter({ execFileSync: exec, services: [{ service: 'fixture', managedEnv: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'local' } }] });
+  const operation = { kind: 'platform-service', service: 'fixture', action: 'apply-managed-env', envKeys: ['TOKEN_OPTIMIZER_PROVIDER_MODE'] };
+  const before = adapter.capture(operation); adapter.apply(operation); assert.equal(state.TOKEN_OPTIMIZER_PROVIDER_MODE, 'local'); adapter.restore(operation, before); assert.equal(state.TOKEN_OPTIMIZER_PROVIDER_MODE, 'previous');
+});
+
+test('marketplace normalization rollback restores the exact duplicate identity set', () => {
+  const before = [{ version: '2.0.0-beta.6' }, { version: '2.0.0-beta.5' }, { version: '1.9.0' }]; let state = structuredClone(before); const marketplaceAdapter = { list: () => structuredClone(state), replace: (_client: string, next: any[]) => { state = structuredClone(next); } }; const adapter = createRegistrationAdapter({ marketplaceAdapter }); const operation = { kind: 'client-command', command: 'normalize-marketplace-registration', client: 'claude', paths: [], canonicalIdentity: before[0], recipe: { remove: ['remove'], restore: ['add'] } }; const captured = adapter.capture(operation); adapter.apply(operation); assert.deepEqual(state, [before[0]]); adapter.restore(operation, captured); assert.deepEqual(state, before);
+});
+
+test('marketplace normalization fails closed without exact state enumeration', () => {
+  const plan = { schemaVersion: 2, operations: [{ kind: 'client-command', command: 'normalize-marketplace-registration', client: 'claude', paths: [], canonicalIdentity: { version: '2.0.0-beta.6' } }] };
+  assert.throws(() => applyLifecyclePlan(plan, { registrationAdapter: createRegistrationAdapter() }), /rolled back/);
+});
+
+test('filesystem marketplace adapter restores exact version directories', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-fs-')); const root = path.join(home, '.claude', 'plugins', 'cache', 'token-optimizer-marketplace', 'token-optimizer'); for (const version of ['2.0.0-beta.6', '2.0.0-beta.5']) { const plugin = path.join(root, version, '.claude-plugin'); fs.mkdirSync(plugin, { recursive: true }); fs.writeFileSync(path.join(plugin, 'plugin.json'), JSON.stringify({ name: 'token-optimizer', version })); fs.writeFileSync(path.join(root, version, 'marker'), version); } const marketplaceAdapter = createFilesystemMarketplaceAdapter(home); const adapter = createRegistrationAdapter({ marketplaceAdapter }); const operation = { kind: 'client-command', command: 'normalize-marketplace-registration', client: 'claude', paths: [], canonicalIdentity: { path: path.join(root, '2.0.0-beta.6'), version: '2.0.0-beta.6' } }; const captured = adapter.capture(operation); adapter.apply(operation); assert.deepEqual(fs.readdirSync(root), ['2.0.0-beta.6']); adapter.restore(operation, captured); assert.deepEqual(fs.readdirSync(root).sort(), ['2.0.0-beta.5', '2.0.0-beta.6']);
+});
+
+test('marketplace location contract covers cache, alternate, and skills layouts', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-layouts-')); const paths = [path.join(home, '.claude', 'plugins', 'cache', 'token-optimizer-marketplace', 'token-optimizer', '2.0.0-beta.6'), path.join(home, '.claude', 'skills', 'token-optimizer'), path.join(home, '.codex', 'plugins', 'cache', 'Softaware-marketplace', 'token-optimizer', '2.0.0-beta.6'), path.join(home, '.codex', 'plugins', 'token-optimizer', '2.0.0-beta.6')]; for (const entry of paths) { const plugin = path.join(entry, entry.includes('.claude') ? '.claude-plugin' : '.codex-plugin'); fs.mkdirSync(plugin, { recursive: true }); fs.writeFileSync(path.join(plugin, 'plugin.json'), JSON.stringify({ name: 'token-optimizer', version: '2.0.0-beta.6' })); fs.writeFileSync(path.join(entry, 'marker'), 'x'); } const adapter = createFilesystemMarketplaceAdapter(home); assert.equal(adapter.list('claude').length, 2); assert.equal(adapter.list('codex').length, 2);
+});
+
+test('lifecycle success disposes marketplace capture state', () => {
+  let disposed = 0; const marketplaceAdapter = { list: () => [{ version: 'old' }], replace: () => {}, dispose: () => { disposed++; } }; const registrationAdapter = createRegistrationAdapter({ marketplaceAdapter }); const plan = { schemaVersion: 2, operations: [{ kind: 'client-command', command: 'normalize-marketplace-registration', client: 'claude', paths: [], canonicalIdentity: { version: 'old' } }] }; applyLifecyclePlan(plan, { registrationAdapter }); assert.equal(disposed, 1);
+});
+
+test('marketplace canonical path disambiguates same version across Codex roots', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-same-version-')); const roots = [path.join(home, '.codex', 'plugins', 'cache', 'Softaware-marketplace', 'token-optimizer', '2.0.0-beta.6'), path.join(home, '.codex', 'plugins', 'token-optimizer', '2.0.0-beta.6')]; for (const [index, entry] of roots.entries()) { const plugin = path.join(entry, '.codex-plugin'); fs.mkdirSync(plugin, { recursive: true }); fs.writeFileSync(path.join(plugin, 'plugin.json'), JSON.stringify({ name: 'token-optimizer', version: '2.0.0-beta.6' })); fs.writeFileSync(path.join(entry, 'marker'), String(index)); } const adapter = createFilesystemMarketplaceAdapter(home); const registration = createRegistrationAdapter({ marketplaceAdapter: adapter }); const operation = { kind: 'client-command', command: 'normalize-marketplace-registration', client: 'codex', paths: [], canonicalIdentity: { path: roots[1], version: '2.0.0-beta.6' } }; const captured = registration.capture(operation); registration.apply(operation); assert.equal(fs.readFileSync(path.join(roots[1], 'marker'), 'utf8'), '1'); assert.equal(fs.existsSync(roots[0]), false); registration.restore(operation, captured); assert.equal(fs.readFileSync(path.join(roots[0], 'marker'), 'utf8'), '0');
+});
+
+test('unrecognized marketplace directories remain untouched', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-custom-')); const root = path.join(home, '.claude', 'plugins', 'cache', 'token-optimizer-marketplace', 'token-optimizer'); const owned = path.join(root, '2.0.0-beta.6'); fs.mkdirSync(path.join(owned, '.claude-plugin'), { recursive: true }); fs.writeFileSync(path.join(owned, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'token-optimizer', version: '2.0.0-beta.6' })); const custom = path.join(root, 'custom-user-dir'); fs.mkdirSync(custom); fs.writeFileSync(path.join(custom, 'keep'), 'yes'); const adapter = createFilesystemMarketplaceAdapter(home); const identities = adapter.list('claude'); adapter.replace('claude', identities); assert.equal(fs.readFileSync(path.join(custom, 'keep'), 'utf8'), 'yes');
+});
+
+test('identity-less custom Claude skills manifest is unowned and untouched', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-custom-skill-')); const skill = path.join(home, '.claude', 'skills', 'token-optimizer'); const plugin = path.join(skill, '.claude-plugin'); fs.mkdirSync(plugin, { recursive: true }); fs.writeFileSync(path.join(plugin, 'plugin.json'), JSON.stringify({ version: 'custom' })); fs.writeFileSync(path.join(skill, 'keep'), 'user-owned'); const adapter = createFilesystemMarketplaceAdapter(home); assert.deepEqual(adapter.list('claude'), []); assert.equal(fs.readFileSync(path.join(skill, 'keep'), 'utf8'), 'user-owned');
 });

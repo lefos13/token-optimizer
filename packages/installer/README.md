@@ -101,6 +101,17 @@ Default `install` behavior:
   (chmod 600) that re-applies the values at every future login — a bare
   `launchctl setenv` does not survive a reboot or logout. Switching to a
   provider with no managed values (or an uninstall) removes the LaunchAgent.
+
+Credential-bearing modes use `--credential-store native` by default. The
+installer writes only `TOKEN_OPTIMIZER_CREDENTIAL_REF` to all client config
+shapes and the LaunchAgent; the launcher resolves the native secret and exposes
+it only to the MCP child. Native-store failure aborts without fallback.
+`--credential-store env` references an existing `LLM_GATEWAY_TOKEN`,
+`OPENROUTER_BYOK_KEY`, or `OPENROUTER_API_KEY` in the parent/client environment;
+it never stores a supplied secret and fails when the variable is absent.
+`--credential-store config` explicitly opts into protected-file plaintext.
+Local and skip need no store. Credential writes participate in install/config
+rollback, and uninstall removes only credentials recorded as installer-owned.
   Pass `--skip-launchctl` to skip all GUI-session env writes.
 
 Client-specific behavior:
@@ -138,8 +149,13 @@ npx @softawarest/token-optimizer-installer defaults --clients claude,codex,openc
 Preview every mutation with `--dry-run` (or `--json` for automation), including
 managed paths, client commands, credential-store operations, and GUI-session
 environment changes. The ownership manifest at `~/.token-optimizer/manifest.json`
-stores paths, hashes, and references only—never raw API keys. Repair and
-uninstall operate only on matching managed hashes, preserving user edits.
+stores paths, hashes, and references only—never raw API keys. It records only
+packaged, source-repairable files; dependency caches, `.data`, logs, analytics,
+and baselines are excluded. Repair consumes stable doctor paths and operation
+hints into an exact idempotent plan. Uninstall operates only on matching owned
+hashes, preserving user edits, and rolls back earlier mutations on failure.
+Registration and service cleanup fails closed unless a reversible adapter can
+capture and restore prior external state; the CLI reports the required follow-up.
 Rollback snapshots are scoped to selected client roots (and requested Cursor
 projects), avoiding unrelated macOS privacy-protected home directories.
 
@@ -151,13 +167,35 @@ npx @softawarest/token-optimizer-installer repair --dry-run
 npx @softawarest/token-optimizer-installer uninstall --dry-run
 ```
 
-`status` is read-only; `doctor` performs a provider health check and exits `1`
-for errors, `2` for warnings with `--strict`, and `0` when healthy. Credential
+`status` is read-only, makes no provider/network request, and launches no client
+CLI. It inspects MCP config and marketplace cache files, installed launcher
+metadata, resolvable SDK server and zod/v3 runtime dependencies,
+credential-store accessibility, manifest integrity, macOS LaunchAgent state,
+and optional `--workspace` logs. `doctor` adds quota-free local `/models`, direct
+OpenRouter `/auth/key`, or gateway BYOK metadata validation and exits `1` for errors,
+`2` for warnings with `--strict`, and `0` when healthy. Credential
 stores prefer macOS Keychain, Windows DPAPI/Credential Manager, and Linux
 Secret Service/libsecret; any fallback is visible in the dry-run plan. Legacy
 provider migration removes only superseded managed keys. Raw logs are scoped to
 an absolute workspace and managed with `logs status|prune|purge`; purge keeps
 baseline and analytics metadata unless explicit include flags are supplied.
+
+For a v1 upgrade, run `token-optimizer install --migrate --dry-run --json`,
+then remove the preview flags to apply. The migration preserves legacy BYOK
+gateway routing by default, uses the transactional credential store, creates a
+private backup and manifest, and delays plaintext cleanup until doctor passes.
+The exact preview operation IDs execute in order; the doctor resolves the new
+credential reference and sends mode-appropriate authentication before
+structured cleanup. Repeated runs are no-ops and any failure restores
+pre-migration file, service, registration, credential, and manifest state.
+The public migration CLI skips real Claude/Codex CLI and macOS launchctl
+mutation, then prints a normal-install follow-up for those external steps.
+Library callers can opt in only with adapters that capture exact pre-state and
+provide apply/rollback functions. Detection is allowlisted to known client
+configuration files; it never scans conversations or arbitrary client data.
+Within shared config files, cleanup edits only Token Optimizer’s managed server
+environment/TOML sections and never another MCP server’s credentials.
+All migration failures are credential-redacted before CLI or JSON reporting.
 
 Flow-specific commands:
 

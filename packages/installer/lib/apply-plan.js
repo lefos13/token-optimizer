@@ -3,13 +3,17 @@
    while allowing the compatibility installer API to share the same pipeline. */
 const executions = new WeakMap();
 
-function registerPlan(plan, execute, prepare) {
-  executions.set(plan, { execute, prepare });
+function registerPlan(plan, execute, prepare, state, executePlan) {
+  executions.set(plan, { execute, prepare, state, executePlan });
   return plan;
 }
 
 function applyChangePlan(plan, adapters = {}) {
   if (!plan || !Array.isArray(plan.operations)) throw new TypeError("invalid change plan");
+  const registered = executions.get(plan);
+  if (!adapters.applyOperation && !adapters.apply && registered?.executePlan) {
+    return registered.executePlan(plan);
+  }
   const applied = [];
   const rolledBack = [];
   const manualRemediation = [];
@@ -33,7 +37,7 @@ function applyChangePlan(plan, adapters = {}) {
       try { entry.commit(); }
       catch { manualRemediation.push(entry.operation); }
     }
-    return { applied, rolledBack, manualRemediation, installedClients: plan.clients ? [...plan.clients] : [] };
+    return { applied, rolledBack, manualRemediation, installedClients: plan.clients ? [...plan.clients] : [], credentialRef: executions.get(plan)?.state?.credentialRef, credentialOwned: executions.get(plan)?.state?.credentialOwned, credentialOwnershipCleared: executions.get(plan)?.state?.credentialOwnershipCleared === true };
   } catch (error) {
     for (let index = inverses.length - 1; index >= 0; index -= 1) {
       const entry = inverses[index];

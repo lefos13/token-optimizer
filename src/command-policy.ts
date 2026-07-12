@@ -5,7 +5,8 @@ import type { ExecutionProfile } from './types';
 export type PolicyReasonCode =
   | 'ALLOWLIST_MATCH' | 'AUTO_DETECTED' | 'PROFILE_UNRESTRICTED'
   | 'COMMAND_NOT_ALLOWED' | 'SENSITIVE_PATH' | 'WORKSPACE_ESCAPE'
-  | 'DESTRUCTIVE_PATTERN' | 'NETWORK_EXFILTRATION' | 'NESTED_SHELL';
+  | 'DESTRUCTIVE_PATTERN' | 'NETWORK_EXFILTRATION' | 'NESTED_SHELL'
+  | 'SHELL_METACHARACTER';
 
 export type PolicyDecision =
   | { allowed: true; profile: ExecutionProfile; reasonCode: PolicyReasonCode }
@@ -59,6 +60,29 @@ function matchesPrefix(command: string, prefixes: string[] = []): boolean {
   });
 }
 
+function scanShellSyntax(command: string): { composition: boolean; unmatchedQuote: boolean } {
+  let quote: 'single' | 'double' | undefined;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    if (quote === 'single') {
+      if (char === "'") quote = undefined;
+      continue;
+    }
+    if (quote === 'double') {
+      if (char === '"') quote = undefined;
+      else if (char === '\\' && /[$`"\\\n]/.test(command[index + 1] || '')) index += 1;
+      else if (char === '`' || (char === '$' && command[index + 1] === '(')) return { composition: true, unmatchedQuote: false };
+      continue;
+    }
+    if (char === '\\') { index += 1; continue; }
+    if (char === "'") { quote = 'single'; continue; }
+    if (char === '"') { quote = 'double'; continue; }
+    if (char === '$' && command[index + 1] === '(') return { composition: true, unmatchedQuote: false };
+    if (/[;|&`<>\r\n]/.test(char)) return { composition: true, unmatchedQuote: false };
+  }
+  return { composition: false, unmatchedQuote: quote !== undefined };
+}
+
 async function canonicalPath(candidate: string): Promise<string> {
   let current = path.resolve(candidate);
   const suffix: string[] = [];
@@ -109,6 +133,8 @@ export async function evaluateCommand(input: PolicyInput): Promise<PolicyDecisio
   if (nestedShellPattern.test(command)) return deny(input.profile, 'NESTED_SHELL', 'Nested shell execution is not permitted.');
   if (destructivePattern.test(command) || hasDestructiveRm(command)) return deny(input.profile, 'DESTRUCTIVE_PATTERN', 'Destructive command pattern is not permitted.');
   if (networkPattern.test(command) || /(?:^|\s)(?:>|>>).*https?:\/\//i.test(command)) return deny(input.profile, 'NETWORK_EXFILTRATION', 'Network access or exfiltration is not permitted.');
+  const syntax = scanShellSyntax(command);
+  if (syntax.composition || syntax.unmatchedQuote) return deny(input.profile, 'SHELL_METACHARACTER', syntax.unmatchedQuote ? 'Unmatched shell quote is not permitted.' : 'Command chaining, substitution, and redirection are not permitted.');
   if (input.profile === 'unrestricted') return { allowed: true, profile: input.profile, reasonCode: 'PROFILE_UNRESTRICTED' };
   if (matchesPrefix(command, input.allowedCommandPrefixes)) return { allowed: true, profile: input.profile, reasonCode: 'ALLOWLIST_MATCH' };
   if (input.profile === 'standard' && matchesPrefix(command, input.autoDetectedCommands)) return { allowed: true, profile: input.profile, reasonCode: 'AUTO_DETECTED' };

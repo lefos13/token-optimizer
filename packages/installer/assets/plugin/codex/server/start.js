@@ -56,38 +56,46 @@ if (!upToDate) {
   }
 }
 
+if (process.env.TOKEN_OPTIMIZER_REPAIR_ONLY === "1") process.exit(0);
+
 const child = spawn(process.execPath, [path.join(__dirname, "index.js")], {
   stdio: "inherit",
   env: (() => {
     /* Resolve credential references only for the child process. The launcher
        itself never writes the secret back to a client config or stdout. */
     const env = { ...process.env, NODE_PATH: path.join(data, "node_modules") };
+    const platform = env.NODE_ENV === "test" && env.TOKEN_OPTIMIZER_LAUNCHER_TEST_PLATFORM
+      ? env.TOKEN_OPTIMIZER_LAUNCHER_TEST_PLATFORM
+      : process.platform;
     const ref = env.TOKEN_OPTIMIZER_CREDENTIAL_REF;
     if (ref) {
       let secret = env[ref] || env[ref.replace(/^env:/, "")];
       let parsed = ref;
       try { parsed = JSON.parse(ref); } catch {}
       if (!secret && parsed && typeof parsed === "object") {
-        if (parsed.store === "env") secret = env[parsed.account || parsed.variable || "TOKEN_OPTIMIZER_CREDENTIAL"];
+        if (parsed.store === "env") secret = env[parsed.variable || parsed.account || "TOKEN_OPTIMIZER_CREDENTIAL"];
       if (!secret && (parsed.store === "config" || parsed.store === "protected-config")) {
           try {
-            const file = env.TOKEN_OPTIMIZER_CREDENTIALS_FILE || path.join(require("os").homedir(), ".token-optimizer", "credentials.json");
+            const file = parsed.path || parsed.filePath || env.TOKEN_OPTIMIZER_CREDENTIALS_FILE || path.join(require("os").homedir(), ".token-optimizer", "credentials.json");
             const values = JSON.parse(fs.readFileSync(file, "utf8"));
             secret = values[(parsed.service || "token-optimizer") + ":" + (parsed.account || require("os").userInfo().username)];
           } catch {}
         }
       }
-      if (!secret && parsed.store === "native") {
+      if (!secret && parsed && typeof parsed === "object" && ["macos-keychain", "linux-secret-service", "windows-dpapi"].includes(parsed.store)) {
         try {
-          if (process.platform === "darwin") secret = execFileSync("security", ["find-generic-password", "-s", parsed.service || "token-optimizer", "-a", parsed.account || "", "-w"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-          else if (process.platform === "linux") secret = execFileSync("secret-tool", ["lookup", "service", parsed.service || "token-optimizer", "account", parsed.account || ""], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-          else if (process.platform === "win32" && parsed.store === "windows-dpapi") secret = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String((Get-Content -Raw -LiteralPath $args[0])), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))", parsed.path || parsed.filePath || path.join(require("os").homedir(), ".token-optimizer", "credential.dpapi")], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+          if (parsed.store === "macos-keychain" && platform === "darwin") secret = execFileSync("security", ["find-generic-password", "-s", parsed.service || "token-optimizer", "-a", parsed.account || "", "-w"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+          else if (parsed.store === "linux-secret-service" && platform === "linux") secret = execFileSync("secret-tool", ["lookup", "service", parsed.service || "token-optimizer", "account", parsed.account || ""], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+          else if (parsed.store === "windows-dpapi" && platform === "win32") secret = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String((Get-Content -Raw -LiteralPath $args[0])), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))", parsed.path || parsed.filePath || path.join(require("os").homedir(), ".token-optimizer", "credential.dpapi")], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
         } catch {}
       }
       if (secret) {
         const mode = env.TOKEN_OPTIMIZER_PROVIDER_MODE;
         const key = mode === "gateway-token" ? "LLM_GATEWAY_TOKEN" : mode === "openrouter-direct" ? "OPENROUTER_API_KEY" : "OPENROUTER_BYOK_KEY";
         env[key] = secret;
+      } else {
+        console.error("token-optimizer launcher: credential reference could not be resolved");
+        process.exit(1);
       }
     }
     return env;

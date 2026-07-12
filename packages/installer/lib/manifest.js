@@ -6,6 +6,8 @@ const path = require("path");
    can distinguish files it owns from user edits. Replacement is atomic and
    permissions are private because the manifest contains filesystem metadata. */
 const SCHEMA_VERSION = 2;
+const RUNTIME_SEGMENTS = new Set(["node_modules", ".data", ".cache", "cache", "logs", ".codex-local-test-runs"]);
+const RUNTIME_BASENAMES = new Set(["analytics.json", "analytics-summary.json", "baseline.json", "registry.json"]);
 function manifestPath(home) { return path.join(path.resolve(home || process.env.HOME || os.homedir()), ".token-optimizer", "manifest.json"); }
 
 function validateManifest(manifest, home) {
@@ -15,6 +17,9 @@ function validateManifest(manifest, home) {
   if (!Array.isArray(manifest.roots) || manifest.roots.length === 0 || manifest.roots.some((root) => typeof root !== "string" || !path.isAbsolute(root))) throw new Error("manifest requires absolute allowed roots");
   const roots = manifest.roots.map((root) => path.resolve(root));
   const rootRealpaths = roots.map((root) => realpathWithMissingTail(root));
+  const assetRoots = manifest.assetRoots === undefined ? [] : manifest.assetRoots;
+  if (!Array.isArray(assetRoots) || assetRoots.some((root) => typeof root !== "string" || !path.isAbsolute(root))) throw new Error("manifest assetRoots require absolute paths");
+  const canonicalAssets = assetRoots.map((root) => realpathWithMissingTail(root));
   for (const file of manifest.files) {
     if (!file || typeof file.path !== "string" || !path.isAbsolute(file.path) || file.path.includes("\0") || file.path.split(path.sep).includes("..")) {
       throw new Error("manifest contains an invalid path");
@@ -23,8 +28,33 @@ function validateManifest(manifest, home) {
     const canonical = realpathWithMissingTail(resolved);
     if (!rootRealpaths.some((root) => canonical === root || canonical.startsWith(`${root}${path.sep}`))) throw new Error(`manifest path outside known roots: ${file.path}`);
     if (typeof file.sha256 !== "string" || typeof file.ownership !== "string") throw new Error("manifest file entries require sha256 and ownership");
+    if (file.source !== undefined) {
+      if (typeof file.source !== "string" || !path.isAbsolute(file.source)) throw new Error("manifest source must be absolute");
+      const source = realpathWithMissingTail(file.source);
+      if (!canonicalAssets.some((root) => source === root || source.startsWith(`${root}${path.sep}`))) throw new Error("manifest source outside assetRoots");
+    }
+  }
+  if (manifest.credentials !== undefined && (!Array.isArray(manifest.credentials) || manifest.credentials.some((item) => !item || item.ownership !== "installer" || !item.reference || typeof item.reference.store !== "string"))) {
+    throw new Error("manifest credentials require installer ownership and a store reference");
   }
   return manifest;
+}
+
+/* Only files that can be restored byte-for-byte from packaged assets belong in
+   the ownership manifest. Dependency caches and runtime output are disposable
+   state and must never become uninstall authority. */
+function isSourceRepairableFile(file, assetRoots = []) {
+  if (!file || typeof file.path !== "string" || typeof file.source !== "string") return false;
+  const segments = path.resolve(file.path).split(path.sep);
+  if (segments.some((segment) => RUNTIME_SEGMENTS.has(segment)) || RUNTIME_BASENAMES.has(path.basename(file.path)) || /\.(?:log|tmp|cache)$/i.test(file.path)) return false;
+  const source = path.resolve(file.source);
+  return assetRoots.some((root) => source === root || source.startsWith(`${root}${path.sep}`));
+}
+
+function compactManifest(manifest) {
+  const assetRoots = (manifest.assetRoots || []).filter((root) => typeof root === "string" && path.isAbsolute(root)).map((root) => path.resolve(root));
+  const files = (manifest.files || []).filter((file) => isSourceRepairableFile(file, assetRoots));
+  return { manifest: { ...manifest, files }, removedEntries: (manifest.files || []).length - files.length };
 }
 
 function realpathWithMissingTail(target) {
@@ -66,4 +96,4 @@ function readManifest(home) {
   return result;
 }
 
-module.exports = { SCHEMA_VERSION, manifestPath, validateManifest, writeManifest, readManifest };
+module.exports = { SCHEMA_VERSION, manifestPath, validateManifest, writeManifest, readManifest, isSourceRepairableFile, compactManifest };

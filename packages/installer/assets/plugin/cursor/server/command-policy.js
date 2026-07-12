@@ -44,6 +44,43 @@ function matchesPrefix(command, prefixes = []) {
         return candidate.length > 0 && (normalized === candidate || normalized.startsWith(`${candidate} `));
     });
 }
+function scanShellSyntax(command) {
+    let quote;
+    for (let index = 0; index < command.length; index += 1) {
+        const char = command[index];
+        if (quote === 'single') {
+            if (char === "'")
+                quote = undefined;
+            continue;
+        }
+        if (quote === 'double') {
+            if (char === '"')
+                quote = undefined;
+            else if (char === '\\' && /[$`"\\\n]/.test(command[index + 1] || ''))
+                index += 1;
+            else if (char === '`' || (char === '$' && command[index + 1] === '('))
+                return { composition: true, unmatchedQuote: false };
+            continue;
+        }
+        if (char === '\\') {
+            index += 1;
+            continue;
+        }
+        if (char === "'") {
+            quote = 'single';
+            continue;
+        }
+        if (char === '"') {
+            quote = 'double';
+            continue;
+        }
+        if (char === '$' && command[index + 1] === '(')
+            return { composition: true, unmatchedQuote: false };
+        if (/[;|&`<>\r\n]/.test(char))
+            return { composition: true, unmatchedQuote: false };
+    }
+    return { composition: false, unmatchedQuote: quote !== undefined };
+}
 async function canonicalPath(candidate) {
     let current = node_path_1.default.resolve(candidate);
     const suffix = [];
@@ -101,6 +138,9 @@ async function evaluateCommand(input) {
         return deny(input.profile, 'DESTRUCTIVE_PATTERN', 'Destructive command pattern is not permitted.');
     if (networkPattern.test(command) || /(?:^|\s)(?:>|>>).*https?:\/\//i.test(command))
         return deny(input.profile, 'NETWORK_EXFILTRATION', 'Network access or exfiltration is not permitted.');
+    const syntax = scanShellSyntax(command);
+    if (syntax.composition || syntax.unmatchedQuote)
+        return deny(input.profile, 'SHELL_METACHARACTER', syntax.unmatchedQuote ? 'Unmatched shell quote is not permitted.' : 'Command chaining, substitution, and redirection are not permitted.');
     if (input.profile === 'unrestricted')
         return { allowed: true, profile: input.profile, reasonCode: 'PROFILE_UNRESTRICTED' };
     if (matchesPrefix(command, input.allowedCommandPrefixes))
