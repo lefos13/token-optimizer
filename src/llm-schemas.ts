@@ -31,7 +31,7 @@ export const TriageSchema = VerdictSchema;
 
 const CodeReviewIssueSchema = z.object({
   file: NonEmptyBoundedString,
-  line: z.number().int().positive().optional(),
+  line: z.number().int().positive().nullable().optional(),
   severity: z.enum(['error', 'warning']),
   description: NonEmptyBoundedString,
   suggestedFix: z.string().max(4000).nullable(),

@@ -64,7 +64,6 @@ export interface StatsStore {
   publicStats(): PublicStats;
 }
 
-const MAX_DAYS = 180;
 const MAX_MODELS = 50;
 const MAX_TOOLS = 50;
 const NAME_RE = /^[a-z0-9_]{1,48}$/;
@@ -143,13 +142,6 @@ export function createStatsStore(stateDir: string, now: () => number = () => Dat
     }
   }
 
-  function trimDays(): void {
-    const keys = Object.keys(state.days).sort();
-    while (keys.length > MAX_DAYS) {
-      delete state.days[keys.shift() as string];
-    }
-  }
-
   /* Statistics are aggregate-only and must remain comparable over time. A
      schema change discards legacy counters before the public portal can serve
      them, while preserving unrelated issued-token state in its own file. */
@@ -198,7 +190,6 @@ export function createStatsStore(stateDir: string, now: () => number = () => Dat
       bucket.rawSourceTokens += record.rawSourceTokens;
       bucket.savingsSum += record.savingsPercentage;
       state.days[day] = bucket;
-      trimDays();
       persist();
       return true;
     },

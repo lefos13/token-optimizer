@@ -19,7 +19,7 @@ function fmt(n: number): string {
 }
 
 export function renderStatsPage(stats: PublicStats): string {
-  const days = Object.entries(stats.days).sort(([a], [b]) => (a < b ? -1 : 1)).slice(-30);
+  const days = Object.entries(stats.days).sort(([a], [b]) => (a < b ? -1 : 1));
   const maxSaved = Math.max(1, ...days.map(([, d]) => d.tokensSaved));
   const bars = days.map(([day, d]) => {
     const h = Math.max(2, Math.round((d.tokensSaved / maxSaved) * 120));
@@ -42,8 +42,8 @@ p.sub{color:#8b949e;margin:0 0 2rem}
 .card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:1rem}
 .card .v{font-size:1.8rem;font-weight:700;color:#58a6ff}
 .card .l{color:#8b949e;font-size:.85rem;margin-top:.25rem}
-.chart{display:flex;align-items:flex-end;gap:3px;height:130px;background:#161b22;border:1px solid #30363d;border-radius:10px;padding:1rem;margin-bottom:2rem}
-.bar{flex:1;background:#238636;border-radius:2px 2px 0 0;min-width:4px}
+.chart{display:flex;align-items:flex-end;gap:3px;height:130px;background:#161b22;border:1px solid #30363d;border-radius:10px;padding:1rem;margin-bottom:2rem;overflow-x:auto}
+.bar{flex:0 0 6px;background:#238636;border-radius:2px 2px 0 0;min-width:6px}
 table{width:100%;border-collapse:collapse;background:#161b22;border:1px solid #30363d;border-radius:10px;overflow:hidden}
 th,td{text-align:left;padding:.5rem .75rem;border-bottom:1px solid #21262d;font-size:.9rem}
 th{color:#8b949e;font-weight:600}
@@ -57,7 +57,7 @@ footer{color:#484f58;font-size:.8rem;margin-top:2rem}
 <div class="card"><div class="v">${(stats.averageSavingsPercentage * 100).toFixed(1)}%</div><div class="l">average context savings</div></div>
 <div class="card"><div class="v">${fmt(stats.totalLocalLlmTokens)}</div><div class="l">tokens handled by small models</div></div>
 </div>
-<h2 style="font-size:1.1rem">Tokens saved — last 30 active days</h2>
+<h2 style="font-size:1.1rem">Tokens saved — full history (${days.length} active day${days.length === 1 ? '' : 's'})</h2>
 <div class="chart">${bars || '<span style="color:#8b949e">No data yet.</span>'}</div>
 <h2 style="font-size:1.1rem">By tool</h2>
 <table><thead><tr><th>Tool</th><th>Calls</th><th>Tokens saved</th><th>Avg savings</th></tr></thead>
@@ -144,9 +144,18 @@ export function renderAccessRequestPage(): string {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>token-optimizer — request access</title>
 <style>
-:root{color-scheme:light dark}body{font-family:system-ui,sans-serif;max-width:38rem;margin:10vh auto;padding:0 1.25rem}form{display:grid;gap:.75rem}label{display:grid;gap:.35rem}input,button{font:inherit;padding:.65rem}button{justify-self:start}#message{min-height:1.5rem}.hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+:root{color-scheme:light dark}body{font-family:system-ui,sans-serif;max-width:38rem;margin:6vh auto;padding:0 1.25rem}form{display:grid;gap:.75rem}label{display:grid;gap:.35rem}input,button{font:inherit;padding:.65rem}button{justify-self:start}#message{min-height:1.5rem}.hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+.about{border:1px solid rgba(128,128,128,.35);border-radius:10px;padding:1rem 1.25rem;margin-bottom:1.5rem}
+.about h2{font-size:1rem;margin:0 0 .5rem}
+.about p{margin:.4rem 0;font-size:.92rem;line-height:1.5}
+.about a{color:inherit}
 </style></head><body><main>
 <h1>Request access</h1>
+<section class="about">
+<h2>What is token-optimizer?</h2>
+<p>Token Optimizer is an MCP server that runs your project's build, lint, and test commands and turns large, noisy logs into compact, actionable results. Raw logs stay on your machine — your coding agent only sees a verdict, a triage summary, or a targeted excerpt, never the full log.</p>
+<p>This gateway is a shared LLM backend the tool calls to classify those results. Requesting access here gets you a token so you can use the gateway provider instead of running your own local model or API key. See <a href="/stats">live impact stats</a> for aggregate usage across all installs.</p>
+</section>
 <p>Enter your email to request a token for the token-optimizer gateway.</p>
 <form id="request-form"><label>Email <input id="email" name="email" type="email" autocomplete="email" required></label><div class="hp" aria-hidden="true"><label>Website <input id="website" name="website" type="text" tabindex="-1" autocomplete="off"></label></div><button type="submit">Request access</button></form>
 <p id="message" role="status" aria-live="polite"></p>

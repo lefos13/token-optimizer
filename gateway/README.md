@@ -121,7 +121,8 @@ MCP clients push a sanitized aggregate record after each tool call (default-on
 when the gateway is configured; users opt out with
 `LLM_GATEWAY_SHARE_ANALYTICS=off`). Only records with at least 1,000 raw-source
 tokens qualify for the gateway's aggregate counters. Per-day buckets are kept
-for 180 days, tool/model breakdowns are capped, numbers are clamped, and state
+indefinitely (never trimmed) so the showcase page never loses historical
+telemetry; tool/model breakdowns are capped and numbers are clamped, and state
 is persisted in `STATE_DIR/global-stats.json`. This release resets existing
 aggregate statistics once through the v2 stats schema; issued-token records are
 not affected.

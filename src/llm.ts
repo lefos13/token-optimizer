@@ -457,7 +457,11 @@ Schema:
     const jsonString = extractJSON(completion.content);
     const parsed = parseLLMResponse('review', jsonString);
     if (!parsed.success) throw new LLMValidationFailure(parsed.validationErrors);
-    const result: CodeReviewResponse = { ...(parsed.data as Omit<CodeReviewResponse, 'reviewAvailable'>), reviewAvailable: true };
+    const data = parsed.data as Omit<CodeReviewResponse, 'reviewAvailable'>;
+    /* The model sometimes emits an explicit "line": null instead of omitting the key for issues
+       without a specific line; normalize that back to undefined to match CodeReviewIssue's type. */
+    const issues = data.issues.map((issue) => issue.line == null ? { ...issue, line: undefined } : issue);
+    const result: CodeReviewResponse = { ...data, issues, reviewAvailable: true };
     return attachLLMResultMetadata(result, completion);
   } catch (error: any) {
     /* The local LLM is offline or returned unparseable output. Stay conservative: report no issues rather than a phantom warning, and flag that the review did not actually run. */
