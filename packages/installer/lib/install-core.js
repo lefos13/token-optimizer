@@ -276,6 +276,13 @@ function installSelectedClients(options) {
    if any client write fails after credential mutation. */
 function planProviderConfiguration(options = {}) {
   const paths = installerPaths(options);
+  /* Unlike planInstallation, this never resolved the "detected"/empty-list placeholder into real
+     client names -- every target's matchesClient(options.clients) call compared real names like
+     "claude" against the literal string "detected" and always returned false, so `config` (used
+     to add a provider after `install --provider skip`, or to switch providers later) silently
+     wrote to zero clients while still reporting success. Also fixes the identical bug in this
+     function's own rollback-snapshot filter three lines below, which used the same raw list. */
+  options.clients = normalizeClients(options.clients, paths.home);
   const runtime = createCredentialTransaction(options, paths);
   const operations = createChangePlan({ action: "config" }, [
     ...(runtime.needsCredential ? [{ id: "config:provider:credential", kind: "credential", phase: "credentials", provider: runtime.provider, reference: `${options.credentialStore || "native"}:${runtime.provider}` }] : []),
@@ -566,8 +573,12 @@ function installCodex(options) {
 function applyGatewayConfig(options) {
   const paths = installerPaths(options);
   const values = options.providerValues || buildProviderValues(options);
+  /* Defensive: callers are expected to normalize "detected"/empty client lists before reaching
+     here (see planProviderConfiguration), but normalizeClients is idempotent on an already-real
+     list, so re-running it here costs nothing and guards any future caller that forgets to. */
+  const clients = normalizeClients(options.clients, paths.home);
   for (const target of getGatewayTargets(paths.home)) {
-    if (!target.matches(options.clients)) {
+    if (!target.matches(clients)) {
       continue;
     }
     const config = safeReadConfig(target);

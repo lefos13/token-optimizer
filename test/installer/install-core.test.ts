@@ -450,6 +450,23 @@ test('provider config to skip clears owned credential and persists empty ownersh
   assert.equal(result.credentialOwnershipCleared, true);
 });
 
+test('applyProviderConfiguration with no explicit clients resolves "detected" instead of writing to none', () => {
+  /* Real failure: `token-optimizer config --local ...` (no --clients flag, the common real-world
+   * invocation) reported "Provider configuration written" but silently wrote to zero client
+   * config files. planInstallation normalizes options.clients ("detected"/empty -> real client
+   * names) but planProviderConfiguration never did, so target.matches(options.clients) compared
+   * real names like "opencode" against the literal placeholder string "detected" and always
+   * returned false. */
+  const home = tmpDir('to-config-detected-');
+  const assetsRoot = tmpDir('to-config-detected-assets-');
+  writeFixtureAssets(assetsRoot);
+  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'skip', skipLaunchctl: true, skipClientCommands: true, defaults: false });
+  installer.applyProviderConfiguration({ home, provider: 'local', localApiUrl: 'http://127.0.0.1:8080/v1', localModel: 'Qwen/Qwen2.5-Coder-7B-Instruct-GGUF:Q4_K_M', skipLaunchctl: true });
+  const opencodeConfigText = fs.readFileSync(path.join(home, '.config', 'opencode', 'opencode.jsonc'), 'utf8');
+  assert.match(opencodeConfigText, /"LOCAL_LLM_API_URL":\s*"http:\/\/127\.0\.0\.1:8080\/v1"/);
+  assert.match(opencodeConfigText, /"LOCAL_LLM_MODEL":\s*"Qwen\/Qwen2\.5-Coder-7B-Instruct-GGUF:Q4_K_M"/);
+});
+
 test('installOpenCode with provider "local" registers the server with no token required', () => {
   const home = tmpDir('to-installer-home-');
   const assetsRoot = tmpDir('to-installer-assets-');
