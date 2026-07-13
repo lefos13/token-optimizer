@@ -5,7 +5,7 @@ const { spawnSync } = require("child_process");
 const path = require("path");
 
 const env = { ...process.env };
-for (const key of ["LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_API_KEY", "TOKEN_OPTIMIZER_PROVIDER_MODE"]) {
+for (const key of ["LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_API_KEY", "TOKEN_OPTIMIZER_PROVIDER_MODE", "TOKEN_OPTIMIZER_CREDENTIAL_REF", "LOCAL_LLM_API_URL", "LOCAL_LLM_MODEL"]) {
   delete env[key];
 }
 const result = spawnSync(process.execPath, ["--test", ...process.argv.slice(2)], {

@@ -37,6 +37,42 @@ Five generators package the same `token-optimizer` skill for different clients. 
 - **Claude Code**: Launched via `${CLAUDE_PLUGIN_ROOT}/server/start.sh`; deps persist in `${CLAUDE_PLUGIN_DATA}`. Output is committed. Claude Code pins to the git SHA from first install, so a static `VERSION` makes "Update" a silent no-op.
 - **Codex**: Launched via `./server/start.sh` from the plugin root; deps persist in `${PLUGIN_DATA}` or `.data/` fallback. Output is committed. Avoid argv-level environment variable expansion in `.mcp.json`.
 
+## README Scope
+
+`README.md` and `packages/installer/README.md` are end-user-facing only:
+installation, provider choice, usage, and troubleshooting a normal user would
+hit. Keep them high-level and short.
+
+- Do not add implementation mechanics (execution-profile/signal internals,
+  temp-file/audit lifecycle states, redaction regex grammar/budget, exact
+  installer rollback/migration step ordering, launchctl/LaunchAgent
+  mechanics) to either README. That detail belongs in
+  `docs/security/threat-model.md` (security-relevant behavior) or in code
+  comments/tests (implementation detail) — not in a file an end user reads
+  to install and use the tool.
+- The release procedure (tag/publish mechanics, preflight, dist-tags) belongs
+  in this file, not in `README.md` — see "Release Procedure" below.
+- When a change to server/installer behavior requires a README update, ask
+  "would a first-time end user need this to install or use the tool?" If not,
+  it does not belong in the README.
+
+## Release Procedure
+
+Releases are published only from an approved GitHub Release whose tag is
+exactly `v<package version>`. Stable versions publish under `latest`;
+`alpha`, `beta`, and `rc` versions publish only under their matching npm
+dist-tag. Before creating the tag, commit generated assets and run `npm ci`,
+`npm run release:preflight`, and `npm test`. The preflight rejects dirty
+trees, version or tag mismatches, generated drift, high/critical audit
+findings, and invalid package/SBOM output. CycloneDX files are written to the
+ignored `release-artifacts/` directory. The release workflow publishes the
+installer with npm trusted-publishing provenance; it never publishes from a
+branch push.
+
+Local and pull-request validation can use
+`npm run release:preflight -- --allow-no-tag`; this explicit bypass is
+reported as `NO_RELEASE_TAG` and is never used by the publishing workflow.
+
 ## Repository Shape
 
 - `src/index.ts`: MCP server setup, tool registration, request handlers, and output shaping.

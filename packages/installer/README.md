@@ -1,9 +1,5 @@
 # Token Optimizer Installer
 
-Execution `signal` is `null` when no OS signal was observed and is populated only for signal-terminated processes.
-
-Execution profiles (`safe`, `standard`, `unrestricted`) are deny-first policy controls, not an operating-system sandbox; lower-trust settings cannot elevate the user's ceiling. Logs default to 7-day retention and a 500 MB per-workspace quota, with expired/oldest logs pruned under `.codex-local-test-runs/`. Responses expose completed/blocked/timed_out/spawn_failed statuses, policy and auto-detection metadata, truncation, provider status, warnings, and redaction summaries.
-
 Optional one-command installer for Token Optimizer.
 
 Run it from outside a Token Optimizer source checkout so `npx` cannot prefer a
@@ -18,25 +14,20 @@ npx --yes @softawarest/token-optimizer-installer
 npx @softawarest/token-optimizer-installer
 ```
 
-On every run the installer first checks npm for a newer installer release. If
-one exists and the session is interactive, it prints the available version and
-offers to re-run `npx --yes @softawarest/token-optimizer-installer@latest` with
-your original arguments so you always install the latest build (npx can
-otherwise serve a cached version). The check is best-effort: network or
-registry errors, a non-interactive session, `--skip-update-check`, or
-`TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK=1` skip it and let the current version run.
+On every run the installer checks npm for a newer release and, in an
+interactive session, offers to re-run itself on the latest version with your
+original arguments. Skip this with `--skip-update-check` or
+`TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK=1`.
 
-The installer copies packaged MCP server/plugin assets into stable user-owned
-locations, prompts for how to configure the LLM provider, writes supported
-client MCP config, and applies default-on global instructions where the client
-exposes a writable file.
+The installer copies the MCP server/plugin assets into stable user-owned
+locations, prompts for how to configure the LLM provider, writes client MCP
+config, and turns on default-on usage where the client supports it.
+**Restart the affected client after installation.**
 
-Re-running the installer is safe and refreshes Token Optimizer. It replaces
-installer-managed local files for Antigravity, OpenCode, and Cursor; updates
-the Claude marketplace plugin when the Claude CLI is available; and removes
-then re-adds the Codex marketplace plugin to replace Codex's versioned cache.
-If a client CLI is unavailable, the installer keeps the CLI-free local
-fallback. Restart the affected client after installation.
+Re-running the installer is always safe — it refreshes Token Optimizer to the
+current version and reapplies your provider configuration.
+
+## Choosing a provider
 
 **A gateway/proxy token is not required** to use this tool. With no provider
 flags, the installer prompts for one of three providers, plus a skip option:
@@ -47,87 +38,58 @@ flags, the installer prompts for one of three providers, plus a skip option:
 | `byok` | **No, none at all** | You, via your own OpenRouter account | Unlimited |
 | `local` | **No, none at all** | Nobody — your own hardware | Unlimited |
 
-Provider privacy at inference time is explicit:
-
-| Provider mode | Inference destination | Remote payload | Credential boundary |
-| --- | --- | --- | --- |
-| `local` | Your local OpenAI-compatible endpoint | Nothing beyond that endpoint | No Token Optimizer credential |
-| `openrouter-direct` | OpenRouter | Redacted, bounded excerpts | OpenRouter key goes directly to OpenRouter |
-| `gateway-token` | Softaware gateway | Redacted, bounded excerpts | Gateway token; gateway-managed model |
-| `gateway-byok` | Softaware gateway → OpenRouter | Redacted, bounded excerpts plus BYOK key | BYOK key is visible to the Softaware gateway |
-
-Legacy v1 gateway + BYOK environment variables remain mapped to `gateway-byok`
-and produce a compatibility warning; migration does not silently change the
-destination. Remote results may include `redactionSummary` and
-`providerWarnings` metadata (never secret values). `raw-local` diagnostics can
-still contain secrets printed by commands. If inference is unavailable or model
-output fails schema validation, command exit codes remain authoritative and the
-installer-connected tools report a conservative `uncertain` result.
-
-In `gateway-byok` mode the OpenRouter key crosses the Softaware gateway before
-reaching OpenRouter; choose `openrouter-direct` when
-the key must go directly to OpenRouter.
-
 1. **Gateway access token** — shared infrastructure, requires an approved token.
    Request one at [https://llm-proxy.lnf.gr/](https://llm-proxy.lnf.gr/).
 2. **Your own OpenRouter key (`byok`)** — get a key from
-   [openrouter.ai](https://openrouter.ai), no request or approval needed. The
-   gateway does not authenticate a BYOK-only caller at all: since you aren't
-   using the operator's OpenRouter setup, there's nothing for a proxy token to
-   gate. Unlimited usage, billed to your own account.
-3. **Local LLM only** — no token at all; point the tools at any OpenAI-compatible
-   endpoint you run yourself (e.g. llama.cpp, LM Studio, Ollama's OpenAI-compat
-   API). Defaults to `http://localhost:8080/v1`.
+   [openrouter.ai](https://openrouter.ai), no request or approval needed.
+   Unlimited usage, billed to your own account. The installer prompts for an
+   optional model to pin after the key, or accepts `--byok-model <model-id>`.
+3. **Local LLM only** — no token at all; point the tools at any
+   OpenAI-compatible endpoint you run yourself (e.g. llama.cpp, LM Studio,
+   Ollama's OpenAI-compat API). Defaults to `http://localhost:8080/v1`.
 4. **Skip for now** — installs the MCP server with no provider configured;
    finish later with `token-optimizer config`.
+
+Remote requests are always redacted before leaving your machine, and results
+may carry `redactionSummary`/`providerWarnings` metadata (never secret
+values). If your provider is unavailable or returns something invalid, exit
+codes remain authoritative and the tool reports a conservative "uncertain"
+result rather than inventing a verdict.
+
+If you migrated from an older setup, your OpenRouter key may still route through the gateway (`gateway-byok`) — that routing is preserved as-is; switch to a direct key (`byok`) if you'd rather it never cross the gateway. See the
+[main README](../../README.md#security) and
+[threat model](../../docs/security/threat-model.md) for the full security
+design.
 
 With no `--clients` option, the installer targets detected clients. Use
 `--clients all` to force every supported client.
 
-Default `install` behavior:
+## What gets installed, per client
 
-- prompts for the provider mode (unless `--provider`, `--token`, `--byok-key`, or `--local` is passed)
-- installs marketplace/plugin assets for Claude Code and Codex
-- copies bundled plugin/server/skill assets for Antigravity, OpenCode, and Cursor
-- writes the resulting provider env vars into supported client config:
-  - `gateway` → `LLM_GATEWAY_URL`, `LLM_GATEWAY_TOKEN`
-  - `byok` → `LLM_GATEWAY_URL`, `OPENROUTER_BYOK_KEY`, optional `OPENROUTER_BYOK_MODEL` (no `LLM_GATEWAY_TOKEN` is written)
-  - `local` → `LOCAL_LLM_API_URL`, `LOCAL_LLM_MODEL`
-- writes default-on instruction files for Claude Code, Codex, Antigravity, and OpenCode
-- on macOS, mirrors the provider env into the GUI-session environment so
-  Dock/Finder/Spotlight-launched clients inherit it. This is done two ways: an
-  immediate `launchctl setenv` for the current login, plus a `RunAtLoad`
-  LaunchAgent at `~/Library/LaunchAgents/com.softawarest.token-optimizer.env.plist`
-  (chmod 600) that re-applies the values at every future login — a bare
-  `launchctl setenv` does not survive a reboot or logout. Switching to a
-  provider with no managed values (or an uninstall) removes the LaunchAgent.
+- **Claude Code:** adds the packaged marketplace plugin (or, if the `claude`
+  CLI isn't available, a `~/.claude/skills/token-optimizer/` fallback), writes
+  `~/.claude/settings.json` and `~/.claude/CLAUDE.md`.
+- **Codex:** registers the bundled server in `~/.codex/config.toml` and copies
+  the skill into `~/.codex/skills/token-optimizer/`.
+- **Antigravity:** copies the plugin into
+  `~/.gemini/config/plugins/token-optimizer` and writes `~/.gemini/GEMINI.md`.
+- **OpenCode:** copies the server and skill into `~/.config/opencode/` and
+  writes `~/.config/opencode/opencode.jsonc` / `AGENTS.md`.
+- **Cursor:** copies the server into `~/.cursor/token-optimizer-server` and
+  writes `~/.cursor/mcp.json`. Cursor has no global default-on rule by file
+  path — use `--cursor-project /path/to/project` to copy the project rule, or
+  add a User Rule in Cursor Settings.
 
-Credential-bearing modes use `--credential-store native` by default. The
-installer writes only `TOKEN_OPTIMIZER_CREDENTIAL_REF` to all client config
-shapes and the LaunchAgent; the launcher resolves the native secret and exposes
-it only to the MCP child. Native-store failure aborts without fallback.
-`--credential-store env` references an existing `LLM_GATEWAY_TOKEN`,
-`OPENROUTER_BYOK_KEY`, or `OPENROUTER_API_KEY` in the parent/client environment;
-it never stores a supplied secret and fails when the variable is absent.
-`--credential-store config` explicitly opts into protected-file plaintext.
-Local and skip need no store. Credential writes participate in install/config
-rollback, and uninstall removes only credentials recorded as installer-owned.
-  Pass `--skip-launchctl` to skip all GUI-session env writes.
+On macOS, provider settings are also mirrored into your GUI-session
+environment (so Dock/Finder/Spotlight-launched clients see them too) and
+persisted across reboots via a LaunchAgent. Pass `--skip-launchctl` to skip
+this.
 
-Client-specific behavior:
-
-- Claude Code:
-  adds the packaged marketplace, updates `token-optimizer@token-optimizer-marketplace` (falling back to install when it is not yet present), writes `~/.claude/settings.json`, writes `~/.claude/CLAUDE.md`.
-  If the `claude` CLI is unavailable (desktop-app installs, common on Windows), the plugin is instead copied into `~/.claude/skills/token-optimizer/`, which Claude Code loads as a skills-directory plugin (`token-optimizer@skills-dir`) on the next session.
-- Codex:
-  adds the packaged marketplace, removes any installed `token-optimizer` cache entry, and adds it from `Softaware-marketplace` for skill discovery. It always registers the bundled Node server as `[mcp_servers.token_optimizer]` in `~/.codex/config.toml`, carrying the selected provider environment into the MCP process, and copies the skill into `~/.codex/skills/token-optimizer/`.
-- Antigravity:
-  copies the plugin into `~/.gemini/config/plugins/token-optimizer`, writes Gemini/plugin MCP config, writes `~/.gemini/GEMINI.md`.
-- OpenCode:
-  copies the server and skill into `~/.config/opencode/`, writes `~/.config/opencode/opencode.jsonc`, writes `~/.config/opencode/AGENTS.md`.
-- Cursor:
-  copies the server into `~/.cursor/token-optimizer-server`, writes `~/.cursor/mcp.json`.
-  Global defaults are not supported by file path; use `--cursor-project /path/to/project` to copy the project rule, or add a User Rule in Cursor Settings.
+Credential-bearing providers default to your OS's native credential store
+(Keychain / Windows Credential Manager / Secret Service). Use
+`--credential-store env` to reference an already-exported environment
+variable instead, or `--credential-store config` to opt into plaintext
+storage in the config file. `local` and `skip` need no credential store.
 
 Examples:
 
@@ -146,22 +108,6 @@ npx @softawarest/token-optimizer-installer defaults --clients claude,codex,openc
 
 ## Inspect, repair, and remove safely
 
-Preview every mutation with `--dry-run`, including managed paths, client
-commands, credential-store operations, and GUI-session environment changes.
-Add `--json` for machine-readable output — it only changes the output format
-and never substitutes for `--dry-run`: `repair --json` and `uninstall --json`
-without `--dry-run` execute the real operation and print its JSON result. The
-ownership manifest at `~/.token-optimizer/manifest.json`
-stores paths, hashes, and references only—never raw API keys. It records only
-packaged, source-repairable files; dependency caches, `.data`, logs, analytics,
-and baselines are excluded. Repair consumes stable doctor paths and operation
-hints into an exact idempotent plan. Uninstall operates only on matching owned
-hashes, preserving user edits, and rolls back earlier mutations on failure.
-Registration and service cleanup fails closed unless a reversible adapter can
-capture and restore prior external state; the CLI reports the required follow-up.
-Rollback snapshots are scoped to selected client roots (and requested Cursor
-projects), avoiding unrelated macOS privacy-protected home directories.
-
 ```bash
 npx @softawarest/token-optimizer-installer install --local --dry-run
 npx @softawarest/token-optimizer-installer status
@@ -170,81 +116,39 @@ npx @softawarest/token-optimizer-installer repair --dry-run
 npx @softawarest/token-optimizer-installer uninstall --dry-run
 ```
 
-`status` is read-only, makes no provider/network request, and launches no client
-CLI. It inspects MCP config and marketplace cache files, installed launcher
-metadata, resolvable SDK server and zod/v3 runtime dependencies,
-credential-store accessibility, manifest integrity, macOS LaunchAgent state,
-and optional `--workspace` logs. `doctor` adds quota-free local `/models`, direct
-OpenRouter `/auth/key`, or gateway BYOK metadata validation and exits `1` for errors,
-`2` for warnings with `--strict`, and `0` when healthy. Credential
-stores prefer macOS Keychain, Windows DPAPI/Credential Manager, and Linux
-Secret Service/libsecret; any fallback is visible in the dry-run plan. Legacy
-provider migration removes only superseded managed keys. Raw logs are scoped to
-an absolute workspace and managed with `logs status|prune|purge`; purge keeps
-baseline and analytics metadata unless explicit include flags are supplied.
+Every mutating command supports `--dry-run` to preview exactly what would
+change before anything happens; add `--json` for machine-readable output.
+`status` is read-only and makes no network call. `doctor` additionally
+verifies your provider is reachable and exits non-zero on problems (`2` for
+warnings with `--strict`). `repair` fixes exactly what `doctor` flagged.
+`uninstall` removes only what this installer owns, preserves any files you've
+edited yourself, and rolls back cleanly if it can't finish.
 
-For a v1 upgrade, run `token-optimizer install --migrate --dry-run --json`,
-then remove the preview flags to apply. The migration preserves legacy BYOK
-gateway routing by default, uses the transactional credential store, creates a
-private backup and manifest, and delays plaintext cleanup until doctor passes.
-The exact preview operation IDs execute in order; the doctor resolves the new
-credential reference and sends mode-appropriate authentication before
-structured cleanup. Repeated runs are no-ops and any failure restores
-pre-migration file, service, registration, credential, and manifest state.
-The public migration CLI skips real Claude/Codex CLI and macOS launchctl
-mutation, then prints a normal-install follow-up for those external steps.
-Library callers can opt in only with adapters that capture exact pre-state and
-provide apply/rollback functions. Detection is allowlisted to known client
-configuration files; it never scans conversations or arbitrary client data.
-Within shared config files, cleanup edits only Token Optimizer’s managed server
-environment/TOML sections and never another MCP server’s credentials.
-All migration failures are credential-redacted before CLI or JSON reporting.
+Raw command logs are managed separately with
+`token-optimizer logs status|prune|purge --workspace <absolute-path>`.
 
-Flow-specific commands:
+## Upgrading from v1
 
-- `npx @softawarest/token-optimizer-installer`:
-  full install, prompts for a provider, and writes defaults where supported.
-- `npx @softawarest/token-optimizer-installer --local`:
-  full install with a local LLM only; no token, no gateway config written.
-- `npx @softawarest/token-optimizer-installer --byok-key sk-or-...`:
-  full install with your own OpenRouter key; no proxy token is asked for or written.
-  The installer prompts for an optional model after the key, or accepts
-  `--byok-model <model-id>`. This setting is used only with BYOK; when omitted
-  or blank, the gateway keeps its task-specific/default model selection.
-  Shared gateway-token callers cannot override the gateway model.
-- `npx @softawarest/token-optimizer-installer --no-defaults`:
-  full install and provider config, but skip default-on instructions.
-- `npx @softawarest/token-optimizer-installer config --token <token>`:
-  write only gateway config.
-- `npx @softawarest/token-optimizer-installer config --byok-key sk-or-...`:
-  write only BYOK config; no `--token` needed.
-- `npx @softawarest/token-optimizer-installer defaults --clients claude,codex,opencode`:
-  write only default-on instructions.
+```bash
+npx @softawarest/token-optimizer-installer install --migrate --dry-run --json
+npx @softawarest/token-optimizer-installer install --migrate
+```
 
-Publish verification:
+Preview first, then re-run without the preview flags to apply. Migration
+detects your existing v1 setup, preserves your current provider routing,
+backs up your old configuration, and only removes legacy plaintext
+credentials after confirming the new setup actually works. A failed migration
+rolls back everything automatically.
+
+## Windows support
+
+The installer is fully supported on Windows — all MCP servers launch via
+`node server/start.js` (`bash` is never required). Requirements: `node` and
+`npm` on `PATH`.
+
+## Verifying a publish
 
 ```bash
 npm view @softawarest/token-optimizer-installer name version dist-tags --json
 npx @softawarest/token-optimizer-installer --help
 ```
-
-Wait to share the package until both commands succeed.
-
-Cursor global MCP config can be written automatically. Cursor default-on rules
-are project-scoped unless you add an equivalent global User Rule in Cursor
-Settings.
-
-## Windows support
-
-The installer is fully supported on Windows. All MCP servers are launched with
-`node server/start.js` (a cross-platform launcher) — `bash` is never required.
-For Codex, this direct registration is also the credential-bearing runtime
-path, while the marketplace plugin supplies skill discovery.
-
-The launcher verifies that the MCP SDK and `zod/v3` resolve before startup. An
-incomplete launcher-owned dependency cache is removed and reinstalled once,
-then verified again; healthy caches remain on the no-install fast path.
-Client CLI detection uses `where` on Windows, and `.cmd`-shim CLIs are invoked
-through `cmd.exe`. When the `claude` or `codex` CLI is not on `PATH` (typical
-for desktop-app installs), the CLI-free fallbacks above are used instead.
-Requirements: `node` and `npm` on `PATH`.

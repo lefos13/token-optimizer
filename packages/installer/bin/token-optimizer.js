@@ -114,12 +114,13 @@ async function main() {
       }
       const result = await migrateInstallation(migrationOptions);
       console.log(result.status === "already-migrated" ? "Migration already complete; no changes applied." : `Migrated Token Optimizer for: ${result.plan.clients.join(", ")}`);
-      if (result.status !== "already-migrated") console.log("Follow-up: restart clients; run a normal install to perform client plugin registration and macOS GUI-session service setup.");
+      if (result.status !== "already-migrated") console.log("Follow-up: restart clients; run a normal install to perform client plugin registration and macOS GUI-session service setup, then `doctor`/`repair` to clear any leftover legacy registration.");
       return;
     }
     const providerOptions = await resolveProviderOptions(args, rl);
     const defaults = args.defaults !== "false" && args["no-defaults"] !== true;
     const options = {
+      home: args.home,
       clients,
       ...providerOptions,
       defaults,

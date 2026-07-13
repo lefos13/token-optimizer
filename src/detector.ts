@@ -53,7 +53,7 @@ export async function detectCommands(workspacePath: string): Promise<string[]> {
   }
 
   // Python project detection
-  if (checkFile('pytest.ini') || checkFile('conftest.py') || checkFile('requirements.txt') || checkFile('Pipfile')) {
+  if (checkFile('pytest.ini') || checkFile('conftest.py') || checkFile('requirements.txt') || checkFile('Pipfile') || checkFile('pyproject.toml')) {
     // If pytest is typical or manage.py is present for Django, etc.
     if (checkFile('manage.py')) {
       commands.push('python manage.py test');

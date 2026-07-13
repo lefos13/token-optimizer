@@ -138,6 +138,62 @@ test('spawned CLI completes install, doctor, repair, uninstall, and repeated uni
   }
 });
 
+test('install/config/defaults honor --home even when it differs from the HOME env var', () => {
+  const repository = path.resolve(process.cwd(), '..'); const bin = path.join(repository, 'packages/installer/bin/token-optimizer.js');
+  const targetHome = fs.mkdtempSync(path.join(os.tmpdir(), 'to-home-flag-target-'));
+  const decoyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'to-home-flag-decoy-'));
+  const base = { cwd: repository, encoding: 'utf8', env: { ...process.env, HOME: decoyHome, TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK: '1' } };
+  const install = spawnSync(process.execPath, [bin, 'install', '--provider', 'local', '--clients', 'claude', '--home', targetHome, '--skip-client-commands', '--skip-launchctl'], base);
+  assert.equal(install.status, 0, `install: ${install.stderr}`);
+  assert.ok(fs.existsSync(path.join(targetHome, '.claude', 'settings.json')), '--home target should receive the install');
+  assert.equal(fs.existsSync(path.join(decoyHome, '.claude')), false, 'HOME env decoy must not receive any files when --home is given');
+  const config = spawnSync(process.execPath, [bin, 'config', '--local', '--home', targetHome], base);
+  assert.equal(config.status, 0, `config: ${config.stderr}`);
+  assert.equal(fs.existsSync(path.join(decoyHome, '.token-optimizer')), false, 'config must not touch the HOME env decoy either');
+  const defaultsRun = spawnSync(process.execPath, [bin, 'defaults', '--clients', 'claude', '--home', targetHome], base);
+  assert.equal(defaultsRun.status, 0, `defaults: ${defaultsRun.stderr}`);
+  assert.ok(fs.existsSync(path.join(targetHome, '.claude', 'CLAUDE.md')), '--home target should receive defaults');
+  assert.equal(fs.existsSync(path.join(decoyHome, '.claude', 'CLAUDE.md')), false, 'defaults must not touch the HOME env decoy');
+});
+
+test('spawned CLI migrates a real v1 layout, then a follow-up install + repair reaches a healthy state', () => {
+  const repository = path.resolve(process.cwd(), '..'); const bin = path.join(repository, 'packages/installer/bin/token-optimizer.js');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-cli-migrate-'));
+  const env: Record<string, string | undefined> = { ...process.env, HOME: home, TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK: '1' };
+  for (const key of ['LLM_GATEWAY_URL', 'LLM_GATEWAY_TOKEN', 'LOCAL_LLM_API_URL', 'LOCAL_LLM_MODEL', 'TOKEN_OPTIMIZER_CREDENTIAL_REF', 'TOKEN_OPTIMIZER_PROVIDER_MODE', 'OPENROUTER_BYOK_KEY', 'OPENROUTER_API_KEY']) delete env[key];
+  const base = { cwd: repository, encoding: 'utf8', env };
+  const claudeDir = path.join(home, '.claude');
+  fs.mkdirSync(claudeDir, { recursive: true });
+  const v1Settings = { mcpServers: { token_optimizer: { command: 'node', args: ['/old/path/start.js'], env: { LOCAL_LLM_API_URL: 'http://127.0.0.1:8080/v1', LOCAL_LLM_MODEL: 'local-model' } } } };
+  fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify(v1Settings));
+
+  const dryRun = spawnSync(process.execPath, [bin, 'install', '--migrate', '--dry-run', '--json', '--home', home, '--skip-client-commands', '--skip-launchctl'], base);
+  assert.equal(dryRun.status, 0, `migrate dry-run: ${dryRun.stderr}`);
+  const preview = JSON.parse(dryRun.stdout);
+  assert.deepEqual(preview.clients, ['claude']);
+  assert.equal(fs.readFileSync(path.join(claudeDir, 'settings.json'), 'utf8'), JSON.stringify(v1Settings), 'dry-run must not mutate the v1 layout');
+
+  const migrate = spawnSync(process.execPath, [bin, 'install', '--migrate', '--home', home, '--skip-client-commands', '--skip-launchctl'], base);
+  assert.equal(migrate.status, 0, `migrate apply: ${migrate.stderr}`);
+  assert.match(migrate.stdout, /Migrated Token Optimizer for: claude/);
+  assert.match(migrate.stdout, /repair.*leftover legacy registration/);
+
+  const repeated = spawnSync(process.execPath, [bin, 'install', '--migrate', '--json', '--home', home, '--skip-client-commands', '--skip-launchctl'], base);
+  assert.equal(repeated.status, 0, `repeated migrate: ${repeated.stderr}`);
+
+  const followUp = spawnSync(process.execPath, [bin, 'install', '--local', '--local-url', 'http://127.0.0.1:8080/v1', '--local-model', 'local-model', '--clients', 'claude', '--home', home, '--skip-client-commands', '--skip-launchctl'], base);
+  assert.equal(followUp.status, 0, `follow-up install: ${followUp.stderr}`);
+
+  const repair = spawnSync(process.execPath, [bin, 'repair', '--home', home, '--skip-launchctl'], base);
+  assert.equal(repair.status, 0, `repair: ${repair.stderr}`);
+
+  const status = spawnSync(process.execPath, [bin, 'doctor', '--home', home, '--provider', 'local', '--json'], base);
+  assert.ok([0, 1].includes(status.status), `doctor: ${status.stderr}`);
+  const report = JSON.parse(status.stdout);
+  assert.ok(!report.findings.some((item: any) => ['STALE_REGISTRATION', 'MISSING_LAUNCHER', 'DUPLICATE_REGISTRATION'].includes(item.code)), `leftover legacy finding after migrate+install+repair: ${status.stdout}`);
+  assert.equal(report.healthy, true, `not healthy after migrate+install+repair: ${status.stdout}`);
+});
+
 test('uninstall --json without --dry-run actually applies, not just previews', () => {
   const repository = path.resolve(process.cwd(), '..'); const bin = path.join(repository, 'packages/installer/bin/token-optimizer.js');
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-cli-json-apply-'));
