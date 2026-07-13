@@ -13,6 +13,18 @@ test('change plans are immutable and contain no credential value', () => {
   assert.doesNotMatch(JSON.stringify(plans.createChangePlan({ note: 'plain secret', apiKey: 'secret' }, [plans.credentialOperation('x', { apiKey: 'plain-secret' })])), /plain-secret|plain secret/);
 });
 
+test('non-credential operation fields survive even when they contain a credential-shaped word', () => {
+  /* Real failure: a bundled dependency (jose) ships a file literally named generate_secret.js.
+   * The credential-value scrub must not touch this path just because it contains "secret" --
+   * that scrub is for actual secret values inside credential operations, not arbitrary paths. */
+  const josePath = '/Users/x/.cursor/token-optimizer-server/.data/node_modules/jose/dist/webapi/key/generate_secret.js';
+  const removeOp = plans.removeFileOperation(josePath);
+  assert.equal(removeOp.path, josePath);
+  const copyOp = plans.copyTreeOperation('/src/api_key_reference.md', '/dest/api_key_reference.md');
+  assert.equal(copyOp.source, '/src/api_key_reference.md');
+  assert.equal(copyOp.path, '/dest/api_key_reference.md');
+});
+
 test('change plans reject unknown operation kinds and format deterministically', () => {
   assert.throws(() => plans.createChangePlan({}, [{ kind: 'delete-everything' }]), /unsupported operation kind/);
   const plan = plans.createChangePlan({ version: '2.0.0' }, [{ kind: 'write-file', path: '/managed/file' }]);

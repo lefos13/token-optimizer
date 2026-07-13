@@ -27,7 +27,11 @@ function safeOperation(operation) {
 
 function sanitizeObject(value, credentialScope = false) {
   if (Array.isArray(value)) return value.map((child) => sanitizeObject(child, credentialScope));
-  if (!value || typeof value !== "object") return typeof value === "string" && /sk-or-|bearer\s|api[_-]?key|secret/i.test(value) ? undefined : value;
+  /* credentialScope must gate this: outside a "credential" operation, string values are file
+     paths, source paths, etc. -- structural fields that legitimately contain common substrings
+     like "secret" (e.g. a real dependency path such as node_modules/jose/.../generate_secret.js)
+     and must never be nulled out just for matching a credential-shaped word. */
+  if (!value || typeof value !== "object") return typeof value === "string" && credentialScope && /sk-or-|bearer\s|api[_-]?key|secret/i.test(value) ? undefined : value;
   const result = {};
   for (const [key, child] of Object.entries(value)) {
     if (/token|secret|password|api[_-]?key|private[_-]?key|contents|value/i.test(key)) continue;
@@ -39,7 +43,10 @@ function sanitizeObject(value, credentialScope = false) {
 
 function createChangePlan(metadata = {}, operations = []) {
   if (!Array.isArray(operations)) throw new TypeError("operations must be an array");
-  const safeMetadata = sanitizeObject(metadata);
+  /* Unlike operation fields (paths, sources -- gated to credential-kind operations only, see
+     sanitizeObject), plan metadata is arbitrary free-form description with no structural
+     meaning, so it keeps the broader content-pattern scrub regardless of operation kind. */
+  const safeMetadata = sanitizeObject(metadata, true);
   const plan = { schemaVersion: 2, ...safeMetadata, operations: operations.map(safeOperation) };
   return deepFreeze(plan);
 }
