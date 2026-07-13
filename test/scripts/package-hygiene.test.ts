@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 
 const root = path.resolve(__dirname, '..', '..', '..');
 const installerRoot = path.join(root, 'packages', 'installer');
+const { parsePackResult } = require('../../../scripts/release-policy');
 
 type PackageManifest = {
   license?: string;
@@ -32,7 +33,7 @@ function dryRunInventory(packagePath: string): string[] {
     shell: process.platform === 'win32',
   });
   assert.equal(result.status, 0, result.stderr);
-  const [pack] = JSON.parse(result.stdout) as PackResult[];
+  const pack = parsePackResult(result.stdout) as PackResult;
   return pack.files.map((file) => file.path).sort();
 }
 

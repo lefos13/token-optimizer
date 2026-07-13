@@ -6,6 +6,14 @@ const addFormats = require("ajv-formats");
 const ALLOWED_PRERELEASES = new Set(["alpha", "beta", "rc"]);
 const DIST_TAGS = new Set(["latest", ...ALLOWED_PRERELEASES]);
 
+/* npm <=11's `pack --dry-run --json` prints a top-level array; npm >=12 changed this to an
+ * object keyed by package name. Both still contain exactly one entry for a single-package pack,
+ * so normalize either shape to that one entry rather than assuming a specific npm CLI version. */
+function parsePackResult(stdout) {
+  const parsed = JSON.parse(stdout);
+  return Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
+}
+
 function distTagForVersion(version) {
   const match = /^(\d+)\.(\d+)\.(\d+)(?:-([a-z]+)\.(\d+))?$/.exec(version);
   if (!match || (match[4] && !ALLOWED_PRERELEASES.has(match[4]))) throw new Error("TAG_POLICY_REJECTED");
@@ -66,4 +74,4 @@ function inspectTrackedFiles(root, tracked, readFile = fs.readFileSync, lstat = 
   }
 }
 
-module.exports = { DIST_TAGS, SECRET_PATTERN, distTagForVersion, validateReleaseTag, validateCycloneDx, inspectInventory, inspectTrackedFiles };
+module.exports = { DIST_TAGS, SECRET_PATTERN, distTagForVersion, validateReleaseTag, validateCycloneDx, inspectInventory, inspectTrackedFiles, parsePackResult };

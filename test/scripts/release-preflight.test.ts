@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const root = path.resolve(__dirname, '..', '..', '..');
-const { validateReleaseTag, inspectInventory, validateCycloneDx, inspectTrackedFiles } = require('../../../scripts/release-policy');
+const { validateReleaseTag, inspectInventory, validateCycloneDx, inspectTrackedFiles, parsePackResult } = require('../../../scripts/release-policy');
 const { PreflightFailure, runPreflight } = require('../../../scripts/release-preflight');
 
 test('tag policy reports stable machine codes and never maps prerelease to latest', () => {
@@ -188,6 +188,6 @@ test('actual npm pack dry-run JSON inventories satisfy release policy', () => {
     /* npm is a .cmd shim on Windows; spawning it directly without shell:true fails to launch. */
     const result = spawnSync('npm', ['pack', packagePath, '--dry-run', '--json'], { cwd: root, encoding: 'utf8', shell: process.platform === 'win32' });
     assert.equal(result.status, 0, result.stderr);
-    inspectInventory(JSON.parse(result.stdout)[0], packageRoot, kind);
+    inspectInventory(parsePackResult(result.stdout), packageRoot, kind);
   }
 });

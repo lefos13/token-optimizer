@@ -96,7 +96,7 @@ function runPreflight(root, injected = {}) {
       const code = kind === "root" ? "ROOT_PACK_FAILED" : "INSTALLER_PACK_FAILED";
       const result = commands.pack ? commands.pack(kind, packagePath) : execute("npm", ["pack", packagePath, "--dry-run", "--json"]);
       if (result.status !== 0) fail(code, result.stderr);
-      try { const [pack] = JSON.parse(result.stdout); policy.inspectInventory(pack, packageRoot, kind); } catch (error) { fail(error.message.split(":")[0], error.message); }
+      try { const pack = policy.parsePackResult(result.stdout); policy.inspectInventory(pack, packageRoot, kind); } catch (error) { fail(error.message.split(":")[0], error.message); }
     }
   }
   return { ok: true, code: "RELEASE_PREFLIGHT_PASSED", version: rootPackage.version, distTag, warnings: tag ? [] : ["NO_RELEASE_TAG"], artifacts: ["root.cdx.json", "installer.cdx.json"] };

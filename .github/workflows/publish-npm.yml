@@ -29,8 +29,12 @@ jobs:
       # static NPM_TOKEN secret) requires npm CLI >= 11.5.1. Node 22's bundled npm is older than
       # that, so without this the OIDC exchange silently never happens and the final publish step
       # falls back to an unauthenticated request -- which the registry answers with 404 rather
-      # than a clear auth error, even though the package already exists.
-      - run: npm install -g npm@latest
+      # than a clear auth error, even though the package already exists. Pinned to the 11.x line
+      # rather than `latest`: npm 12 changed `pack --json`'s output from a top-level array to an
+      # object keyed by package name, which broke this same job's test:security step the first
+      # time `latest` was tried here. scripts/release-policy.js's parsePackResult() now tolerates
+      # both shapes regardless, but there's no reason to opt into that churn in CI on purpose.
+      - run: npm install -g npm@11
       - run: npm ci
       - run: npm run build
       - run: npm run build:gateway
