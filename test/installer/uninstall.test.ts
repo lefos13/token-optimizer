@@ -105,6 +105,32 @@ test('filesystem marketplace adapter restores exact version directories', () => 
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-fs-')); const root = path.join(home, '.claude', 'plugins', 'cache', 'token-optimizer-marketplace', 'token-optimizer'); for (const version of ['2.0.0-beta.6', '2.0.0-beta.5']) { const plugin = path.join(root, version, '.claude-plugin'); fs.mkdirSync(plugin, { recursive: true }); fs.writeFileSync(path.join(plugin, 'plugin.json'), JSON.stringify({ name: 'token-optimizer', version })); fs.writeFileSync(path.join(root, version, 'marker'), version); } const marketplaceAdapter = createFilesystemMarketplaceAdapter(home); const adapter = createRegistrationAdapter({ marketplaceAdapter }); const operation = { kind: 'client-command', command: 'normalize-marketplace-registration', client: 'claude', paths: [], canonicalIdentity: { path: path.join(root, '2.0.0-beta.6'), version: '2.0.0-beta.6' } }; const captured = adapter.capture(operation); adapter.apply(operation); assert.deepEqual(fs.readdirSync(root), ['2.0.0-beta.6']); adapter.restore(operation, captured); assert.deepEqual(fs.readdirSync(root).sort(), ['2.0.0-beta.5', '2.0.0-beta.6']);
 });
 
+test('normalize resolves a real doctor-shaped canonical identity (path is the manifest file, not the directory)', () => {
+  /* Real production failure: doctor.js builds marketplace identities with `path` set to the
+   * plugin.json manifest file and `installedPath` set to the version directory (see doctor.js's
+   * `configPath: manifest || installedPath` construction) -- not `path` as the directory, which
+   * is what every other fixture in this file uses. Confirmed on an actual install: repair crashed
+   * with "marketplace identity snapshot unavailable" because resolveSource compared the
+   * manifest-file path against list()'s directory-keyed entries and never matched. */
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-real-shape-'));
+  const root = path.join(home, '.claude', 'plugins', 'cache', 'token-optimizer-marketplace', 'token-optimizer');
+  for (const version of ['1.6.0', '2.0.0-rc.6']) {
+    const plugin = path.join(root, version, '.claude-plugin');
+    fs.mkdirSync(plugin, { recursive: true });
+    fs.writeFileSync(path.join(plugin, 'plugin.json'), JSON.stringify({ name: 'token-optimizer', version }));
+  }
+  const marketplaceAdapter = createFilesystemMarketplaceAdapter(home);
+  const adapter = createRegistrationAdapter({ marketplaceAdapter });
+  const installedPath = path.join(root, '2.0.0-rc.6');
+  const operation = {
+    kind: 'client-command', command: 'normalize-marketplace-registration', client: 'claude', paths: [],
+    canonicalIdentity: { client: 'claude', name: 'token-optimizer', type: 'marketplace', path: path.join(installedPath, '.claude-plugin', 'plugin.json'), installedPath, version: '2.0.0-rc.6', stale: false },
+  };
+  adapter.capture(operation);
+  adapter.apply(operation);
+  assert.deepEqual(fs.readdirSync(root), ['2.0.0-rc.6']);
+});
+
 test('marketplace location contract covers cache, alternate, and skills layouts', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'marketplace-layouts-')); const paths = [path.join(home, '.claude', 'plugins', 'cache', 'token-optimizer-marketplace', 'token-optimizer', '2.0.0-beta.6'), path.join(home, '.claude', 'skills', 'token-optimizer'), path.join(home, '.codex', 'plugins', 'cache', 'Softaware-marketplace', 'token-optimizer', '2.0.0-beta.6'), path.join(home, '.codex', 'plugins', 'token-optimizer', '2.0.0-beta.6')]; for (const entry of paths) { const plugin = path.join(entry, entry.includes('.claude') ? '.claude-plugin' : '.codex-plugin'); fs.mkdirSync(plugin, { recursive: true }); fs.writeFileSync(path.join(plugin, 'plugin.json'), JSON.stringify({ name: 'token-optimizer', version: '2.0.0-beta.6' })); fs.writeFileSync(path.join(entry, 'marker'), 'x'); } const adapter = createFilesystemMarketplaceAdapter(home); assert.equal(adapter.list('claude').length, 2); assert.equal(adapter.list('codex').length, 2);
 });
