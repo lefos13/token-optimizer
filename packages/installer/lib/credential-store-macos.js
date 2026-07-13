@@ -18,8 +18,8 @@ function createMacOSCredentialStore(options = {}) {
       exec(options.swiftPath || "/usr/bin/swift", ["-e", MACOS_KEYCHAIN_SET_SCRIPT, service, account || ""], { input: secretOf(value), encoding: "utf8" });
       return reference("macos-keychain", value, { ...options, service, account });
     },
-    get(value = {}) { try { return String(exec(options.securityPath || "/usr/bin/security", args(value.account), { encoding: "utf8" })).trim(); } catch (error) { if (error.status === 44 || error.code) return null; throw error; } },
-    delete(value = {}) { try { exec(options.securityPath || "/usr/bin/security", ["delete-generic-password", "-s", service, "-a", value.account || account || ""], { encoding: "utf8" }); } catch (error) { if (error.status !== 44 && !error.code) throw error; } return true; },
+    get(value = {}) { try { return String(exec(options.securityPath || "/usr/bin/security", args(value.account), { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })).trim(); } catch (error) { if (error.status === 44 || error.code) return null; throw error; } },
+    delete(value = {}) { try { exec(options.securityPath || "/usr/bin/security", ["delete-generic-password", "-s", service, "-a", value.account || account || ""], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); } catch (error) { if (error.status !== 44 && !error.code) throw error; } return true; },
   };
 }
 module.exports = { createMacOSCredentialStore, MACOS_KEYCHAIN_SET_SCRIPT };

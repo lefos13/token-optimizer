@@ -21,6 +21,18 @@ function readlineWith(...answers: string[]) {
   };
 }
 
+test('fresh install does not preserve ambient provider state without a canonical installation', () => {
+  const ambientOnly = { provider: { mode: 'gateway-token', requiresCredential: true, credentialConfigured: true }, manifest: { exists: false, valid: false }, clients: { registrations: [] } };
+  assert.equal(cli.shouldPreserveInstalledProvider(ambientOnly), false);
+  const installed = { provider: { mode: 'local', requiresCredential: false, credentialConfigured: true }, manifest: { exists: true, valid: true }, clients: { registrations: [{ stale: false }] } };
+  assert.equal(cli.shouldPreserveInstalledProvider(installed), true);
+});
+
+test('reinstall does not preserve an inaccessible credential reference', () => {
+  const broken = { provider: { mode: 'gateway-token', requiresCredential: true, credentialConfigured: false }, manifest: { exists: true, valid: true }, clients: { registrations: [{ stale: false }] } };
+  assert.equal(cli.shouldPreserveInstalledProvider(broken), false);
+});
+
 test('interactive BYOK setup asks for one optional model', async () => {
   const options = await cli.resolveProviderOptions(
     { provider: 'byok' },

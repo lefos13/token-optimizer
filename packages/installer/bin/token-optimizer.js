@@ -124,7 +124,7 @@ async function main() {
     }
     const existing = command === "install" ? await inspectInstallation({ home: args.home, performHealthProbe: false }) : null;
     const explicitProvider = args.provider !== undefined || args.local === true || args.token !== undefined || args["byok-key"] !== undefined;
-    const providerOptions = command === "install" && !explicitProvider && existing?.provider?.mode && existing.provider.mode !== "skip"
+    const providerOptions = command === "install" && !explicitProvider && shouldPreserveInstalledProvider(existing)
       ? preservedProviderOptions(existing.provider)
       : await resolveProviderOptions(args, rl);
     const providerWarnings = args["dry-run"] === true ? [] : await validateProviderBeforeMutation({ ...providerOptions, home: args.home });
@@ -213,6 +213,15 @@ function preservedProviderOptions(provider) {
   return options;
 }
 
+/* Automatic preservation is an upgrade behavior, not fresh-install discovery.
+   Ambient legacy variables cannot prove that a client has a usable installation. */
+function shouldPreserveInstalledProvider(report) {
+  if (!report?.provider?.mode || report.provider.mode === "skip") return false;
+  const active = (report.clients?.registrations || []).some((registration) => registration.stale !== true);
+  if (!active) return false;
+  return !report.provider.requiresCredential || report.provider.credentialConfigured === true;
+}
+
 /* Authentication rejection is deterministic and blocks mutation. Transport
    failures are advisory so a temporary outage cannot strand a valid upgrade. */
 async function validateProviderBeforeMutation(options) {
@@ -298,7 +307,7 @@ async function resolveProviderOptions(args, rl) {
       byokModel,
     };
   }
-  if (explicit === "gateway-token" || args.token || process.env.LLM_GATEWAY_TOKEN) {
+  if (explicit === "gateway-token" || args.token) {
     const gatewayToken = args.token || process.env.LLM_GATEWAY_TOKEN || await askRequired(rl, "Gateway access token: ");
     return {
       provider: args.provider === "gateway" ? "gateway" : "gateway-token",
@@ -555,6 +564,7 @@ module.exports = {
   parseArgs,
   createProgressReporter,
   preservedProviderOptions,
+  shouldPreserveInstalledProvider,
   validateProviderBeforeMutation,
   checkForUpdate,
   fetchLatestVersion,
