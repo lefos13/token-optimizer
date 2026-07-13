@@ -99,7 +99,8 @@ async function executeMigrationPlan(plan, runtime) {
       else if (operation.kind === "credential" && operation.phase === "credentials") {
         const credential = createMigrationCredential(state, providerOptions, options, plan.effectiveProvider.mode);
         credentialRef = credential.reference; credentialOwned = credential.owned; runtime.credentialRuntime = credential;
-      } else if (operation.phase === "copy") installer.copyClientAssets(operation.client, migrationInstallOptions(runtime, credentialRef));
+      } else if (operation.id === "install:execution-policy") installer.writeExecutionPolicy(state.home);
+      else if (operation.phase === "copy") installer.copyClientAssets(operation.client, migrationInstallOptions(runtime, credentialRef));
       else if (operation.phase === "config") configureMigrationClient(operation.client, runtime, credentialRef);
       else if (operation.phase === "service") {
         const installOptions = migrationInstallOptions(runtime, credentialRef);

@@ -27,6 +27,12 @@ config, and turns on default-on usage where the client supports it.
 Re-running the installer is always safe — it refreshes Token Optimizer to the
 current version and reapplies your provider configuration.
 
+Installation also creates `~/.config/token-optimizer/config.json` with the
+recommended `standard` execution profile when no profile is already selected.
+Existing profile choices and unrelated settings are preserved. Standard mode
+allows detected validation commands while continuing to reject command
+chaining, redirection, destructive commands, and sensitive paths.
+
 ## Choosing a provider
 
 **A gateway/proxy token is not required** to use this tool. With no provider

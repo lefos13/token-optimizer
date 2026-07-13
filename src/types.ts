@@ -134,7 +134,7 @@ export interface ConfigLayers {
 
 export interface EffectiveConfig {
   provider: { mode: ProviderMode; apiUrl: string; model: string; taskRouting?: Partial<Record<LLMResponseTask, string>>; credentialEnv?: string; credential?: string; byokCredential?: string; byokModel?: string };
-  execution: { profile: ExecutionProfile; allowedCommandPrefixes: string[]; autoDetectedCommands?: string[] };
+  execution: { profile: ExecutionProfile; profileSource?: 'user' | 'project' | 'tool' | 'implicit-default'; allowedCommandPrefixes: string[]; autoDetectedCommands?: string[] };
   logs: { retentionDays: number; maxDiskMb: number; storageMode: 'raw-local' | 'redacted-local' };
   redaction: { rules: Array<{ pattern: string; flags?: string; category: string; replacement?: string }> };
   warnings: string[];

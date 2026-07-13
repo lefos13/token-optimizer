@@ -159,11 +159,13 @@ export function resolveEffectiveConfig(input: ConfigLayers = {}): EffectiveConfi
   const layers = { ...input, user, project, tool };
   const ceiling = user?.execution?.profile || 'safe';
   const requested = layers.tool?.execution?.profile || layers.project?.execution?.profile || ceiling;
+  const profileSource = layers.tool?.execution?.profile ? 'tool' : layers.project?.execution?.profile ? 'project' : user?.execution?.profile ? 'user' : 'implicit-default';
   if (profiles.indexOf(requested) > profiles.indexOf(ceiling)) warnings.push(`project/tool execution profile cannot elevate user ceiling (${ceiling})`);
   return {
     provider: resolveProviderConfig(layers, warnings),
     execution: {
       profile: narrowerProfile(ceiling, requested),
+      profileSource,
       allowedCommandPrefixes: resolveAllowlist(layers),
       autoDetectedCommands: layers.tool?.execution?.autoDetectedCommands || layers.project?.execution?.autoDetectedCommands || [],
     },

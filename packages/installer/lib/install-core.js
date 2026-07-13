@@ -178,6 +178,26 @@ function installerPaths(options = {}) {
   };
 }
 
+/* The installer establishes a usable user-authoritative ceiling while
+   preserving explicit profile choices and unrelated configuration keys. */
+function writeExecutionPolicy(home) {
+  const filePath = path.join(path.resolve(home), ".config", "token-optimizer", "config.json");
+  let config = {};
+  if (fs.existsSync(filePath)) {
+    try { config = JSON.parse(fs.readFileSync(filePath, "utf8")); }
+    catch (error) { throw new Error(`Invalid Token Optimizer configuration at ${filePath}; fix or remove it before installing: ${error.message}`); }
+    if (!config || Array.isArray(config) || typeof config !== "object") throw new Error(`Invalid Token Optimizer configuration at ${filePath}; expected a JSON object`);
+  }
+  config.execution ||= {};
+  if (!config.execution || Array.isArray(config.execution) || typeof config.execution !== "object") throw new Error(`Invalid Token Optimizer execution configuration at ${filePath}; expected a JSON object`);
+  if (config.execution.profile === undefined) config.execution.profile = "standard";
+  else if (!["safe", "standard", "unrestricted"].includes(config.execution.profile)) throw new Error(`Invalid Token Optimizer execution profile at ${filePath}`);
+  ensureDirectory(path.dirname(filePath));
+  fs.writeFileSync(filePath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  try { fs.chmodSync(filePath, 0o600); } catch { /* Non-POSIX filesystems may not support chmod. */ }
+  return filePath;
+}
+
 /* Installation and provider-only configuration share one credential state
    machine so replacement, superseded cleanup, and rollback cannot diverge. */
 function createCredentialTransaction(options, paths) {
@@ -232,6 +252,7 @@ function planInstallation(options = {}) {
   const runtime = createCredentialTransaction(options, paths);
   const operations = [
     ...(runtime.needsCredential ? [{ id: "install:provider:credential", kind: "credential", phase: "credentials", provider: runtime.provider, reference: `${options.credentialStore || "native"}:${runtime.provider}` }] : []),
+    { id: "install:execution-policy", kind: "write-file", phase: "copy", path: path.join(paths.home, ".config", "token-optimizer", "config.json"), targets: [path.join(paths.home, ".config", "token-optimizer", "config.json")] },
     ...clients.flatMap((client) => [
     { id: `install:${client}:copy`, kind: "copy-tree", phase: "copy", client, path: paths.home, targets: clientTargets(client, paths, options) },
     { id: `install:${client}:config`, kind: "managed-block", phase: "config", client, path: paths.home },
@@ -246,6 +267,7 @@ function planInstallation(options = {}) {
       return executeCredentialOperation(runtime, operation);
     }
     if (operation.phase !== "copy") return;
+    if (operation.id === "install:execution-policy") { writeExecutionPolicy(paths.home); return; }
     const installOptions = { ...runtime.options, ...paths };
     if (operation.client === "opencode") installOpenCode(installOptions);
     else if (operation.client === "cursor") installCursor(installOptions);
@@ -351,6 +373,11 @@ function persistInstallManifest(options = {}, clients = []) {
     }
   };
   mappings.forEach(([root, sourceRoot]) => walk(root, sourceRoot));
+  const executionConfig = path.join(paths.home, ".config", "token-optimizer", "config.json");
+  if (fs.existsSync(executionConfig)) {
+    roots.push(path.dirname(executionConfig));
+    files.push({ path: executionConfig, sha256: crypto.createHash("sha256").update(fs.readFileSync(executionConfig)).digest("hex"), ownership: "installer", kind: "write-file" });
+  }
   const managedBlocks = [
     path.join(paths.home, ".claude", "CLAUDE.md"), path.join(paths.home, ".codex", "AGENTS.md"), path.join(paths.home, ".gemini", "GEMINI.md"),
     path.join(paths.home, ".config", "opencode", "AGENTS.md"),
@@ -1136,6 +1163,7 @@ module.exports = {
   planMigration,
   DIRECTIVE_MARKER_START,
   installerPaths,
+  writeExecutionPolicy,
   planInstallation,
   applyChangePlan,
   formatChangePlan,

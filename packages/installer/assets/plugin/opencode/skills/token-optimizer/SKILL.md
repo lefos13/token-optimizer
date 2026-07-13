@@ -6,6 +6,12 @@ description: Use this MCP server to scout codebases, validate code changes, revi
 
 Execution profiles are `safe`, `standard`, and `unrestricted`; tool/project requests may only narrow the user ceiling. This is deny-first policy, not an OS sandbox. Responses expose execution statuses, policy/auto-detection metadata, truncation, provider status, warnings, and redaction summaries. Logs default to a 7-day retention and 500 MB workspace quota, with workspace-scoped pruning.
 
+Installer-managed setups default to `standard`, which authorizes validation
+commands recognized from the workspace even when passed explicitly. Submit
+multiple checks separately because shell chaining remains blocked. When
+`validationOutcome` is `not_run`, execution policy stopped the command before
+validation began; do not report that as a test or lint failure.
+
 # Token Optimizer
 
 Execution metadata uses `signal: null` when no OS signal was observed; a value appears only for signal-terminated processes. `executionStatus: terminated` distinguishes those exits from `timed_out`. Command outcomes remain authoritative when audit-log persistence fails: inspect additive `auditStatus` and `auditFailure`, including any retained temporary evidence path.

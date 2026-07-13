@@ -43,6 +43,24 @@ test('MCP CallTool handler returns blocked compatibility shape', async () => {
   assert.equal(Array.isArray(payload.warnings), true);
 });
 
+test('run_test_verdict distinguishes a policy block from an executed failure', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'blocked-verdict-'));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node -e "process.exit(0)"' } }));
+  const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'blocked-config-'));
+  process.env.TOKEN_OPTIMIZER_CONFIG_HOME = configHome;
+  const result: any = await handleToolCall({ params: { name: 'run_test_verdict', arguments: { workspacePath: root, taskSummary: 'contract', testCommand: 'npm publish', executionProfile: 'safe' } } });
+  const payload = JSON.parse(result.content[0].text);
+  assert.equal(payload.verdict, 'fail');
+  assert.equal(payload.validationOutcome, 'not_run');
+  assert.equal(payload.executionStatus, 'blocked');
+  assert.equal(payload.effectiveProfile, 'safe');
+  assert.equal(payload.profileSource, 'tool');
+  assert.equal(payload.providerStatus, 'not_used');
+  assert.match(payload.summary, /was not run/);
+  delete process.env.TOKEN_OPTIMIZER_CONFIG_HOME;
+  fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(configHome, { recursive: true, force: true });
+});
+
 test('MCP CallTool handler returns completed and timed-out compatibility shapes', async () => {
   const base = { workspacePath: process.cwd(), intent: 'contract', executionProfile: 'safe', allowedCommandPrefixes: ['printf', 'sleep'] };
   const completed: any = await handleToolCall({ params: { name: 'run_command_digest', arguments: { ...base, command: 'printf ok' } } });

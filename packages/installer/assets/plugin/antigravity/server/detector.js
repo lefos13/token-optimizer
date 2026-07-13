@@ -34,6 +34,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.detectCommands = detectCommands;
+exports.detectTrustedCommands = detectTrustedCommands;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 async function detectCommands(workspacePath) {
@@ -96,4 +97,10 @@ async function detectCommands(workspacePath) {
     }
     // Generic fallback if nothing matches
     return [];
+}
+/* Explicit-command authorization accepts npm's equivalent test spelling
+   without adding a second command to the auto-detected execution list. */
+async function detectTrustedCommands(workspacePath) {
+    const commands = await detectCommands(workspacePath);
+    return commands.includes('npm test') ? [...commands, 'npm run test'] : commands;
 }

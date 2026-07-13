@@ -4,7 +4,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { detectCommands } from './detector';
+import { detectCommands, detectTrustedCommands } from './detector';
 import { runSuite, trimLog, numberLines, getGitDiff, gatherCandidates } from './runner';
 import { queryLocalLLM, queryCodeReview, queryCommandDigest, queryLogQuestion, queryScout, getLLMUsage, getLLMMetadata, attachLLMUsage, combineLLMUsage, checkLocalLLMHealth } from './llm';
 import { resolveLogPath, grepLog } from './registry';
@@ -19,7 +19,7 @@ import { ensureSafeRoot, atomicWriteJson } from './log-store';
 const server = new Server(
   {
     name: 'token-optimizer-mcp',
-    version: '2.0.1',
+    version: '2.0.2',
   },
   {
     capabilities: {
@@ -366,11 +366,13 @@ export async function handleToolCall(request: any) {
 
     try {
       // 1. Determine commands to execute
+      const detectedCommands = await detectCommands(workspacePath);
+      const trustedCommands = testCommand ? await detectTrustedCommands(workspacePath) : detectedCommands;
       let commandsToRun: string[] = [];
       if (testCommand) {
         commandsToRun = [testCommand];
       } else {
-        commandsToRun = await detectCommands(workspacePath);
+        commandsToRun = detectedCommands;
       }
 
       if (commandsToRun.length === 0) {
@@ -400,8 +402,25 @@ export async function handleToolCall(request: any) {
 
       // 2. Run commands
       const effective = resolveEffectiveConfig({ workspacePath, env: process.env, tool: { execution: { profile: executionProfile, allowedCommandPrefixes } } });
-      const execution = { ...effective.execution, autoDetectedCommands: testCommand ? [] : commandsToRun };
+      const execution = { ...effective.execution, autoDetectedCommands: trustedCommands };
       const suiteResult = await runSuite(commandsToRun, workspacePath, { maxOutputLines, timeoutMs, parallel, execution, storageMode: effective.logs.storageMode, retentionDays: effective.logs.retentionDays, maxDiskMb: effective.logs.maxDiskMb });
+
+      /* Policy rejection means validation never ran. Return deterministic
+         diagnostics without asking an LLM to interpret an empty test log. */
+      if (suiteResult.results.some((result) => result.executionStatus === 'blocked')) {
+        const runId = path.basename(suiteResult.rawLogPath).replace(/\.log$/, '');
+        const metadata = executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, [...effective.warnings, ...suiteResult.warnings], suiteResult);
+        const reason = metadata.policyDecision || 'COMMAND_NOT_ALLOWED';
+        const output = {
+          verdict: 'fail', confidence: 1, validationOutcome: 'not_run', commandsRun: commandsToRun,
+          summary: `Validation was not run because the active ${effective.execution.profile} profile blocked the command (${reason}).`,
+          failures: [{ file: null, reason: 'The command was blocked by execution policy before validation started.', suggestedFix: effective.execution.profile === 'safe' ? 'Add the exact validation command to the user allowlist or select the standard profile.' : 'Use a detected validation command or add the exact command to the user allowlist.' }],
+          runId, rawLogPath: suiteResult.rawLogPath, needsRawLogs: false, likelyRelevantToRecentChanges: false,
+          effectiveProfile: effective.execution.profile, profileSource: effective.execution.profileSource,
+          ...metadata, providerStatus: 'not_used'
+        };
+        return { content: [{ type: 'text', text: serializeWithAnalytics(workspacePath, output, { toolName: 'run_test_verdict', rawSourceText: '', rawSourceBytes: suiteResult.rawSourceBytes, avoidedRawOutput: true, runId, rawLogPath: suiteResult.rawLogPath, commands: commandsToRun }) }] };
+      }
 
       // Create a dictionary of command -> exitCode for easy triaging
       const exitCodes: Record<string, number> = {};
@@ -467,6 +486,7 @@ export async function handleToolCall(request: any) {
       const runId = path.basename(suiteResult.rawLogPath).replace(/\.log$/, '');
       const output: any = {
         verdict: finalVerdict,
+        validationOutcome: finalVerdict === 'pass' ? 'passed' : 'failed',
         confidence: triage.confidence,
         commandsRun: commandsToRun,
         summary: triage.summary,
@@ -475,6 +495,8 @@ export async function handleToolCall(request: any) {
         rawLogPath: suiteResult.rawLogPath,
         needsRawLogs: triage.needsRawLogs,
         likelyRelevantToRecentChanges: triage.likelyRelevantToRecentChanges,
+        effectiveProfile: effective.execution.profile,
+        profileSource: effective.execution.profileSource,
         ...getLLMMetadata(triage),
         ...executionMetadata(suiteResult.results, suiteResult.trimmedLogContent, suiteResult.rawSourceBytes, [...effective.warnings, ...suiteResult.warnings], suiteResult),
         providerStatus: triage.llmAvailable === false ? 'unavailable' : (triage.fallbackReason ? 'fallback' : 'available')

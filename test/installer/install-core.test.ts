@@ -90,7 +90,31 @@ test('successful install persists source-backed ownership manifest for lifecycle
   installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'skip', skipLaunchctl: true, defaults: false, skipClientCommands: true });
   const manifest = require('../../../packages/installer/lib/manifest.js').readManifest(home);
   assert.ok(manifest.files.length > 0);
-  assert.ok(manifest.files.every((file: any) => file.source && file.source.startsWith(assetsRoot)));
+  const sourceBacked = manifest.files.filter((file: any) => file.kind !== 'write-file');
+  assert.ok(sourceBacked.every((file: any) => file.source && file.source.startsWith(assetsRoot)));
+});
+
+test('install creates a private standard execution policy and records ownership', () => {
+  const home = tmpDir('to-installer-policy-home-'); const assetsRoot = tmpDir('to-installer-policy-assets-'); writeFixtureAssets(assetsRoot);
+  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'skip', skipLaunchctl: true, defaults: false, skipClientCommands: true });
+  const policyPath = path.join(home, '.config', 'token-optimizer', 'config.json');
+  assert.equal(JSON.parse(fs.readFileSync(policyPath, 'utf8')).execution.profile, 'standard');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(policyPath).mode & 0o777, 0o600);
+  assert.ok(require('../../../packages/installer/lib/manifest.js').readManifest(home).files.some((file: any) => file.path === policyPath));
+});
+
+test('execution policy preserves explicit profiles and unrelated settings', () => {
+  const home = tmpDir('to-installer-policy-existing-'); const policyPath = path.join(home, '.config', 'token-optimizer', 'config.json');
+  fs.mkdirSync(path.dirname(policyPath), { recursive: true });
+  const original = { execution: { profile: 'safe', allowedCommandPrefixes: ['npm test'] }, logs: { retentionDays: 2 } };
+  fs.writeFileSync(policyPath, JSON.stringify(original)); installer.writeExecutionPolicy(home);
+  assert.deepEqual(JSON.parse(fs.readFileSync(policyPath, 'utf8')), original);
+});
+
+test('execution policy rejects invalid existing configuration', () => {
+  const home = tmpDir('to-installer-policy-invalid-'); const policyPath = path.join(home, '.config', 'token-optimizer', 'config.json');
+  fs.mkdirSync(path.dirname(policyPath), { recursive: true }); fs.writeFileSync(policyPath, '{broken');
+  assert.throws(() => installer.writeExecutionPolicy(home), /fix or remove it before installing/);
 });
 
 test('installer launchctl state clears stale BYOK key and model when the provider changes', () => {

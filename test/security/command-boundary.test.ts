@@ -35,6 +35,14 @@ test('profiles narrow authority and all profiles reject shell composition', asyn
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('standard profile permits an explicit command extending detector output', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'to-security-detected-prefix-'));
+  const decision = await evaluateCommand({ command: 'npm test -- --runInBand', workspacePath: root, profile: 'standard', autoDetectedCommands: ['npm test'] });
+  assert.equal(decision.allowed, true);
+  if (decision.allowed) assert.equal(decision.reasonCode, 'AUTO_DETECTED');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test('scanner follows POSIX quote and escape rules and fails closed on unmatched quotes', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'to-security-quotes-'));
   const execution = { profile: 'unrestricted' as const, allowedCommandPrefixes: [] };

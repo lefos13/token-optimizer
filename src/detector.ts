@@ -66,3 +66,10 @@ export async function detectCommands(workspacePath: string): Promise<string[]> {
   // Generic fallback if nothing matches
   return [];
 }
+
+/* Explicit-command authorization accepts npm's equivalent test spelling
+   without adding a second command to the auto-detected execution list. */
+export async function detectTrustedCommands(workspacePath: string): Promise<string[]> {
+  const commands = await detectCommands(workspacePath);
+  return commands.includes('npm test') ? [...commands, 'npm run test'] : commands;
+}
