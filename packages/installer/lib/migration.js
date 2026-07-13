@@ -65,7 +65,7 @@ function planMigrationFromHome(options = {}) {
   ];
   const plan = createChangePlan({ action: "migration", version: require("../package.json").version, clients: state.clients, effectiveProvider: legacy.effectiveProvider, warnings: legacy.warnings }, operations);
   const runtime = { state, options, providerOptions, backup: null, credentialRuntime: null, doctor: null };
-  registerPlan(plan, null, null, runtime, () => executeMigrationPlan(plan, runtime));
+  registerPlan(plan, null, null, runtime, (adapters) => executeMigrationPlan(plan, runtime, adapters));
   return plan;
 }
 
@@ -79,21 +79,25 @@ async function migrateInstallation(options = {}) {
     return { status: "already-migrated", plan: planMigrationFromHome(options) };
   }
   const plan = planMigrationFromHome(options);
-  const result = await applyChangePlan(plan);
+  const result = await applyChangePlan(plan, { onProgress: options.onProgress });
   if (result.error) throw new Error(`Migration rolled back: ${result.error.message}`);
   return { status: "migrated", plan, appliedOperationIds: result.applied.map((operation) => operation.id), backup: result.backup, doctor: result.doctor, followUp: ["restart clients", "run a normal install for client registration and macOS GUI-session service setup"] };
 }
 
 /* The registered preview is the sole source of execution order. One bounded
    backup remains live until authenticated validation and cleanup both finish. */
-async function executeMigrationPlan(plan, runtime) {
+async function executeMigrationPlan(plan, runtime, adapters = {}) {
   const { state, options, providerOptions } = runtime;
   const applied = []; const rolledBack = []; const manualRemediation = []; const externalRollbacks = [];
+  const notify = typeof adapters.onProgress === "function" ? adapters.onProgress : () => {};
+  const progress = (event, operation, sequence, status) => notify({ schemaVersion: 1, event, phase: operation?.phase || "migration", sequence, total: plan.operations.length, operationId: operation?.id || "migration", kind: operation?.kind, client: operation?.client, path: operation?.path, status, message: operation ? `${status}: ${operation.id || operation.kind}` : `${status}: migration` });
   let credentialRef = providerOptions.credentialRef || null; let credentialOwned = false;
   try {
     preflightMigration(plan, runtime);
     const preparedTransactions = await prepareMigrationTransactions(plan, runtime, credentialRef);
-    for (const operation of plan.operations) {
+    for (let index = 0; index < plan.operations.length; index += 1) {
+      const operation = plan.operations[index];
+      progress("operation-start", operation, index + 1, "running");
       if (options.beforeOperation) await options.beforeOperation(operation);
       if (operation.id === "migrate:backup") runtime.backup = createBackup(state, options);
       else if (operation.kind === "credential" && operation.phase === "credentials") {
@@ -124,9 +128,12 @@ async function executeMigrationPlan(plan, runtime) {
         fs.writeFileSync(operation.path, `${JSON.stringify({ schemaVersion: 1, migratedAt: new Date().toISOString(), clients: state.clients })}\n`, { mode: 0o600 });
       }
       applied.push(operation);
+      progress("operation-complete", operation, index + 1, "completed");
     }
+    progress("complete", null, plan.operations.length, "completed");
     return { applied, rolledBack, manualRemediation, installedClients: [...state.clients], credentialRef, credentialOwned, backup: { directory: runtime.backup.directory, manifestPath: runtime.backup.manifestPath }, doctor: runtime.doctor };
   } catch (error) {
+    progress("rollback-start", applied[applied.length - 1] || plan.operations[applied.length], applied.length, "rolling-back");
     for (const transaction of externalRollbacks.reverse()) {
       try { await transaction.rollback(); rolledBack.push(transaction.operation); }
       catch { manualRemediation.push(transaction.operation); }
@@ -138,6 +145,7 @@ async function executeMigrationPlan(plan, runtime) {
         else if (credentialOwned) runtime.credentialRuntime.store.delete(credentialRef);
       } catch { manualRemediation.push(plan.operations.find((item) => item.phase === "credentials")); }
     }
+    progress("complete", null, applied.length, "failed");
     return { applied, rolledBack, manualRemediation, error: sanitizeMigrationError(error, state, options), installedClients: [...state.clients] };
   }
 }

@@ -20,7 +20,7 @@ const {
   persistProviderCredentialOwnership,
   applyDefaultDirectives,
 } = require("../lib/install-core");
-const { inspectInstallation } = require("../lib/doctor");
+const { inspectInstallation, defaultHealthProbe } = require("../lib/doctor");
 const { readManifest, writeManifest, manifestPath } = require("../lib/manifest");
 const { planRepair, planUninstall, currentStateFromManifest, applyLifecyclePlan } = require("../lib/uninstall");
 const { statusLogs, pruneLogs, purgeLogs } = require("../lib/logs");
@@ -82,8 +82,8 @@ async function main() {
       console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
       return;
     }
-    applyLifecyclePlan(plan, { requireExternalAdapters: true, registrationAdapter: createRegistrationAdapter({ marketplaceAdapter: createFilesystemMarketplaceAdapter(home || process.env.HOME) }), serviceAdapter: createServiceAdapter({ services: manifest.platformServices || [], skipLaunchctl: args["skip-launchctl"] === true }), manifest, home, planWarnings: plan.warnings || [] });
-    console.log(args.json === true ? formatChangePlan(plan, "json") : `${command}: applied ${plan.operations.length} operation(s).`);
+    const applied = applyLifecyclePlan(plan, { onProgress: createProgressReporter(args), requireExternalAdapters: true, registrationAdapter: createRegistrationAdapter({ marketplaceAdapter: createFilesystemMarketplaceAdapter(home || process.env.HOME) }), serviceAdapter: createServiceAdapter({ services: manifest.platformServices || [], skipLaunchctl: args["skip-launchctl"] === true }), manifest, home, planWarnings: plan.warnings || [] });
+    console.log(args.json === true ? JSON.stringify({ action: command, previousVersion: pkg.version, installedVersion: command === "repair" ? pkg.version : null, status: "completed", clients: [...new Set(applied.map((operation) => operation.client).filter(Boolean))], operations: applied, applied, removedStale: applied.filter((operation) => operation.kind === "remove-file" || /normalize|remove/.test(operation.command || "")), preserved: plan.warnings || [], warnings: plan.warnings || [], rollback: { applied: false, operations: [] }, doctorSummary: null }, null, 2) : `${command}: applied ${plan.operations.length} operation(s).`);
     return;
   }
 
@@ -106,18 +106,28 @@ async function main() {
         cursorProjects: parseList(args["cursor-project"] || args.cursorProject || ""),
         skipClientCommands: true,
         skipLaunchctl: true,
+        onProgress: createProgressReporter(args),
       };
-      if (args["dry-run"] === true || args.json === true) {
+      if (args["dry-run"] === true) {
         const plan = planMigrationFromHome(migrationOptions);
         console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
         return;
       }
       const result = await migrateInstallation(migrationOptions);
+      if (args.json === true) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
       console.log(result.status === "already-migrated" ? "Migration already complete; no changes applied." : `Migrated Token Optimizer for: ${result.plan.clients.join(", ")}`);
       if (result.status !== "already-migrated") console.log("Follow-up: restart clients; run a normal install to perform client plugin registration and macOS GUI-session service setup, then `doctor`/`repair` to clear any leftover legacy registration.");
       return;
     }
-    const providerOptions = await resolveProviderOptions(args, rl);
+    const existing = command === "install" ? await inspectInstallation({ home: args.home, performHealthProbe: false }) : null;
+    const explicitProvider = args.provider !== undefined || args.local === true || args.token !== undefined || args["byok-key"] !== undefined;
+    const providerOptions = command === "install" && !explicitProvider && existing?.provider?.mode && existing.provider.mode !== "skip"
+      ? preservedProviderOptions(existing.provider)
+      : await resolveProviderOptions(args, rl);
+    const providerWarnings = args["dry-run"] === true ? [] : await validateProviderBeforeMutation({ ...providerOptions, home: args.home });
     const defaults = args.defaults !== "false" && args["no-defaults"] !== true;
     const options = {
       home: args.home,
@@ -135,8 +145,9 @@ async function main() {
         console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
         return;
       }
+      const previous = existing || await inspectInstallation({ home: options.home, performHealthProbe: false });
       const plan = planInstallation(options);
-      const applyResult = applyChangePlan(plan);
+      const applyResult = applyChangePlan(plan, { onProgress: createProgressReporter(args) });
       if (applyResult.error) {
         const rolled = applyResult.rolledBack.length;
         const manual = applyResult.manualRemediation.length;
@@ -145,9 +156,25 @@ async function main() {
         process.exitCode = 1;
         return;
       }
-      persistInstallManifest({ ...options, credentialRef: applyResult.credentialRef, credentialOwned: applyResult.credentialOwned }, applyResult.installedClients);
+      persistInstallManifest({ ...options, credentialRef: applyResult.credentialRef, credentialOwned: applyResult.credentialOwned, credentialOwnershipCleared: applyResult.credentialOwnershipCleared }, applyResult.installedClients);
       const installed = applyResult.installedClients;
+      const doctor = await inspectInstallation({ home: options.home, expectedVersion: pkg.version, performHealthProbe: false });
+      const cleanupResults = applyResult.operationResults || [];
+      const removedStale = cleanupResults.flatMap((result) => result.removedStale || []);
+      const preserved = cleanupResults.flatMap((result) => result.preserved || []);
+      if (args.json === true) {
+        console.log(JSON.stringify({
+          action: "install", previousVersion: previous.installedVersion, installedVersion: pkg.version,
+          status: "completed", clients: installed, applied: applyResult.applied,
+          removedStale,
+          preserved, warnings: [...providerWarnings, ...preserved, ...doctor.findings.filter((finding) => finding.severity === "warning")],
+          rollback: { applied: false, operations: [] },
+          doctorSummary: { healthy: doctor.healthy, findings: doctor.findings.map((finding) => finding.code) },
+        }, null, 2));
+        return;
+      }
       console.log(`Installed Token Optimizer for: ${installed.join(", ")}`);
+      for (const warning of providerWarnings) console.warn(`Warning: ${warning.message}`);
       if (clients.includes("all") || clients.includes("cursor")) {
         console.log("Cursor MCP is configured globally; copy the generated Cursor rule into projects or pass --cursor-project for project rules.");
       }
@@ -176,6 +203,55 @@ async function main() {
   } finally {
     rl.close();
   }
+}
+
+function preservedProviderOptions(provider) {
+  const options = { provider: provider.mode, credentialRef: provider.credentialReference };
+  if (provider.mode === "local") options.localApiUrl = provider.url;
+  else if (provider.mode === "openrouter-direct") options.openrouterUrl = provider.url;
+  else options.gatewayUrl = provider.url;
+  return options;
+}
+
+/* Authentication rejection is deterministic and blocks mutation. Transport
+   failures are advisory so a temporary outage cannot strand a valid upgrade. */
+async function validateProviderBeforeMutation(options) {
+  const mode = normalizeProviderChoice(options.provider);
+  if (!mode || !["gateway-token", "gateway-byok", "openrouter-direct"].includes(mode)) return [];
+  let credential = options.gatewayToken || options.byokKey || options.openrouterKey;
+  if (!credential && options.credentialRef) {
+    const report = await inspectInstallation({ provider: mode, credentialRef: options.credentialRef, providerUrl: options.gatewayUrl || options.openrouterUrl, performHealthProbe: false });
+    if (report.provider.credentialConfigured) {
+      const kind = options.credentialRef.store === "config" || options.credentialRef.store === "protected-config"
+        ? "config"
+        : options.credentialRef.store === "env" ? "env" : "native";
+      const store = require("../lib/credential-store").createCredentialStore(kind, { home: options.home, service: options.credentialRef.service, account: options.credentialRef.account, path: options.credentialRef.path, envVar: options.credentialRef.variable });
+      credential = store.get(options.credentialRef);
+    }
+  }
+  try {
+    const probe = await defaultHealthProbe({ url: options.gatewayUrl || options.openrouterUrl || DEFAULT_GATEWAY_URL, mode, credential });
+    if (probe.statusCode === 401 || probe.statusCode === 403) throw new Error("Provider rejected the configured credential.");
+    if (!probe.ok) return [{ code: "PROVIDER_UNREACHABLE", severity: "warning", message: "Provider validation was unavailable; the structurally valid installation was retained." }];
+  } catch (error) {
+    if (/rejected the configured credential/i.test(error.message)) throw error;
+    return [{ code: "PROVIDER_UNREACHABLE", severity: "warning", message: "Provider validation was unavailable; the structurally valid installation was retained." }];
+  }
+  return [];
+}
+
+/* Human progress follows the sanitized plan on interactive terminals. JSON
+   mode reserves stdout for one document and optionally streams NDJSON to stderr. */
+function createProgressReporter(args = {}) {
+  if (args.quiet === true) return () => {};
+  if (args.json === true) return args.verbose === true ? (event) => process.stderr.write(`${JSON.stringify(event)}\n`) : () => {};
+  if (args.verbose !== true && !process.stdout.isTTY) return () => {};
+  return (event) => {
+    if (event.event === "operation-start") console.log(`[${event.sequence}/${event.total}] ${event.phase}: ${event.operationId}`);
+    else if (event.event === "operation-complete") console.log(`  ✓ ${event.operationId}`);
+    else if (event.event === "operation-rolled-back") console.log(`  ↩ ${event.operationId}`);
+    else if (event.event === "complete") console.log(event.status === "completed" ? "Installation steps complete." : "Installation steps failed.");
+  };
 }
 
 /* Resolves which LLM provider to configure from flags first (for scripted/CI
@@ -410,15 +486,15 @@ function printHelp() {
   console.log(`Usage:
   npx @softawarest/token-optimizer-installer [install] [options]
   token-optimizer install --clients opencode,cursor
-  token-optimizer install --dry-run [--json]
+  token-optimizer install --dry-run [--json] [--verbose|--quiet]
   token-optimizer install --migrate [--dry-run --json]
   token-optimizer install --local
   token-optimizer config --token <token>
   token-optimizer defaults --clients claude,codex,opencode
   token-optimizer status [--json] [--strict] [--workspace <absolute-path>]
   token-optimizer doctor [--json] [--strict] [--workspace <absolute-path>]
-  token-optimizer repair [--home <path>] [--dry-run]
-  token-optimizer uninstall [--home <path>] [--dry-run]
+  token-optimizer repair [--home <path>] [--dry-run] [--verbose|--quiet]
+  token-optimizer uninstall [--home <path>] [--dry-run] [--verbose|--quiet]
   token-optimizer uninstall --dry-run
   token-optimizer logs status|prune|purge --workspace <absolute-path>
 
@@ -477,6 +553,9 @@ module.exports = {
   resolveProviderOptions,
   promptForProviderInteractive,
   parseArgs,
+  createProgressReporter,
+  preservedProviderOptions,
+  validateProviderBeforeMutation,
   checkForUpdate,
   fetchLatestVersion,
   compareVersions,

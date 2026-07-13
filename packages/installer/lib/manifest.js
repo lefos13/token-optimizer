@@ -5,14 +5,14 @@ const path = require("path");
 /* Ownership is persisted separately from installer execution so a later run
    can distinguish files it owns from user edits. Replacement is atomic and
    permissions are private because the manifest contains filesystem metadata. */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const RUNTIME_SEGMENTS = new Set(["node_modules", ".data", ".cache", "cache", "logs", ".codex-local-test-runs"]);
 const RUNTIME_BASENAMES = new Set(["analytics.json", "analytics-summary.json", "baseline.json", "registry.json"]);
 function manifestPath(home) { return path.join(path.resolve(home || process.env.HOME || os.homedir()), ".token-optimizer", "manifest.json"); }
 
 function validateManifest(manifest, home) {
-  if (!manifest || manifest.schemaVersion !== SCHEMA_VERSION || !Array.isArray(manifest.files)) {
-    throw new Error(`invalid ownership manifest schema (expected ${SCHEMA_VERSION})`);
+  if (!manifest || ![2, SCHEMA_VERSION].includes(manifest.schemaVersion) || !Array.isArray(manifest.files)) {
+    throw new Error(`invalid ownership manifest schema (expected 2 or ${SCHEMA_VERSION})`);
   }
   if (!Array.isArray(manifest.roots) || manifest.roots.length === 0 || manifest.roots.some((root) => typeof root !== "string" || !path.isAbsolute(root))) throw new Error("manifest requires absolute allowed roots");
   const roots = manifest.roots.map((root) => path.resolve(root));
@@ -33,6 +33,7 @@ function validateManifest(manifest, home) {
       const source = realpathWithMissingTail(file.source);
       if (!canonicalAssets.some((root) => source === root || source.startsWith(`${root}${path.sep}`))) throw new Error("manifest source outside assetRoots");
     }
+    if (file.assetPath !== undefined && (typeof file.assetPath !== "string" || path.isAbsolute(file.assetPath) || file.assetPath.split(/[\\/]/).includes(".."))) throw new Error("manifest assetPath must be package-relative");
   }
   if (manifest.credentials !== undefined && (!Array.isArray(manifest.credentials) || manifest.credentials.some((item) => !item || item.ownership !== "installer" || !item.reference || typeof item.reference.store !== "string"))) {
     throw new Error("manifest credentials require installer ownership and a store reference");
@@ -44,9 +45,10 @@ function validateManifest(manifest, home) {
    the ownership manifest. Dependency caches and runtime output are disposable
    state and must never become uninstall authority. */
 function isSourceRepairableFile(file, assetRoots = []) {
-  if (!file || typeof file.path !== "string" || typeof file.source !== "string") return false;
+  if (!file || typeof file.path !== "string" || (typeof file.source !== "string" && typeof file.assetPath !== "string")) return false;
   const segments = path.resolve(file.path).split(path.sep);
   if (segments.some((segment) => RUNTIME_SEGMENTS.has(segment)) || RUNTIME_BASENAMES.has(path.basename(file.path)) || /\.(?:log|tmp|cache)$/i.test(file.path)) return false;
+  if (file.assetPath) return !path.isAbsolute(file.assetPath) && !file.assetPath.split(/[\\/]/).includes("..");
   const source = path.resolve(file.source);
   return assetRoots.some((root) => source === root || source.startsWith(`${root}${path.sep}`));
 }

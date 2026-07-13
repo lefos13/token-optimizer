@@ -54,6 +54,46 @@ test('doctor resolves credential reference and performs authenticated quota-free
   assert.equal(request.mode, 'gateway-token'); assert.equal(request.credential, 'valid-fixture-token'); assert.doesNotMatch(JSON.stringify(report), /valid-fixture-token/);
 });
 
+test('canonical registration provider overrides stale ambient process mode', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); const launcher = server(home, 'cursor');
+  const ref = { store: 'macos-keychain', service: 'token-optimizer', account: 'gateway-token', fingerprint: 'sha256:safe' };
+  write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', TOKEN_OPTIMIZER_CREDENTIAL_REF: JSON.stringify(ref), LLM_GATEWAY_URL: 'https://gateway.example/v1' } } } }));
+  let request: any;
+  const report = await inspectInstallation({ home, env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'local' }, performHealthProbe: true, createCredentialStore: () => ({ get: () => 'valid-fixture-token' }), healthProbe: async (value: any) => { request = value; return { ok: true }; } });
+  assert.equal(report.provider.mode, 'gateway-token');
+  assert.equal(request.mode, 'gateway-token');
+});
+
+test('canonical local registration clears ambient gateway URL and credential reference', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); const launcher = server(home, 'cursor');
+  write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'local', LOCAL_LLM_API_URL: 'http://127.0.0.1:8080/v1', LOCAL_LLM_MODEL: 'fixture-model' } } } }));
+  const report = await inspectInstallation({ home, env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', TOKEN_OPTIMIZER_CREDENTIAL_REF: JSON.stringify({ store: 'native', service: 'stale', account: 'stale' }), LLM_GATEWAY_URL: 'https://stale.invalid/v1' }, performHealthProbe: false });
+  assert.equal(report.provider.mode, 'local');
+  assert.equal(report.provider.url, 'http://127.0.0.1:8080/v1');
+  assert.equal(report.provider.credentialStore, 'none');
+  assert.equal(report.provider.credentialReference, undefined);
+});
+
+test('antigravity plugin descriptor pointing at the global launcher is one logical registration', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); const launcher = server(home, 'antigravity');
+  const registration = { mcpServers: { token_optimizer: { command: 'node', args: [launcher] } } };
+  write(path.join(home, '.gemini', 'config', 'mcp_config.json'), JSON.stringify(registration));
+  write(path.join(home, '.gemini', 'config', 'plugins', 'token-optimizer', 'mcp_config.json'), JSON.stringify(registration));
+  const report = await inspectInstallation({ home, provider: 'local' });
+  assert.equal(report.clients.registrations.filter((item: any) => item.client === 'antigravity').length, 1);
+  assert.ok(!report.findings.some((item: any) => item.code === 'DUPLICATE_REGISTRATION' && item.client === 'antigravity'));
+});
+
+test('inactive codex marketplace cache is metadata and is not runtime-validated beside direct canonical registration', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); const launcher = server(home, 'codex');
+  write(path.join(home, '.codex', 'config.toml'), `[mcp_servers.token_optimizer]\ncommand = "node"\nargs = ["${launcher}"]\n`);
+  const cache = path.join(home, '.codex', 'plugins', 'cache', 'Softaware-marketplace', 'token-optimizer', '2.0.2');
+  write(path.join(cache, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'token-optimizer', version: '2.0.2' }));
+  write(path.join(cache, 'server', 'start.js'), '');
+  const report = await inspectInstallation({ home, provider: 'local', expectedVersion: '2.0.2' });
+  assert.ok(!report.findings.some((item: any) => item.code === 'DEPENDENCY_CACHE_INCOMPLETE' && item.path?.startsWith(cache)));
+});
+
 test('local doctor performs quota-free GET /v1/models and reports a dead endpoint', async () => {
   let requested = '';
   const server = createServer((req, res) => { requested = req.url || ''; res.writeHead(200).end('{}'); });
@@ -80,7 +120,8 @@ test('reports duplicate/stale registrations, version mismatch, and missing runti
   write(path.join(home, '.claude.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [stale] } } }));
   write(path.join(home, '.claude', 'settings.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [stale] } } }));
   const report = await inspectInstallation({ home, provider: 'local', expectedVersion: '2.0.0-beta.5' });
-  for (const code of ['DUPLICATE_REGISTRATION', 'STALE_REGISTRATION', 'VERSION_MISMATCH', 'MISSING_LAUNCHER', 'DEPENDENCY_CACHE_INCOMPLETE']) assert.ok(report.findings.some((item: any) => item.code === code), code);
+  for (const code of ['STALE_REGISTRATION', 'VERSION_MISMATCH', 'MISSING_LAUNCHER', 'DEPENDENCY_CACHE_INCOMPLETE']) assert.ok(report.findings.some((item: any) => item.code === code), code);
+  assert.ok(!report.findings.some((item: any) => item.code === 'DUPLICATE_REGISTRATION'), 'identical launcher identities collapse to one registration');
 });
 
 test('marketplace probes expose stale installed version and duplicate direct registration', async () => {

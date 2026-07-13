@@ -91,7 +91,9 @@ test('successful install persists source-backed ownership manifest for lifecycle
   const manifest = require('../../../packages/installer/lib/manifest.js').readManifest(home);
   assert.ok(manifest.files.length > 0);
   const sourceBacked = manifest.files.filter((file: any) => file.kind !== 'write-file');
-  assert.ok(sourceBacked.every((file: any) => file.source && file.source.startsWith(assetsRoot)));
+  assert.equal(manifest.schemaVersion, 3);
+  assert.ok(sourceBacked.every((file: any) => file.assetPath && !path.isAbsolute(file.assetPath)));
+  assert.doesNotMatch(JSON.stringify(manifest), new RegExp(assetsRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
 test('install creates a private standard execution policy and records ownership', () => {
@@ -101,6 +103,33 @@ test('install creates a private standard execution policy and records ownership'
   assert.equal(JSON.parse(fs.readFileSync(policyPath, 'utf8')).execution.profile, 'standard');
   if (process.platform !== 'win32') assert.equal(fs.statSync(policyPath).mode & 0o777, 0o600);
   assert.ok(require('../../../packages/installer/lib/manifest.js').readManifest(home).files.some((file: any) => file.path === policyPath));
+});
+
+test('install converges codex, claude, and antigravity to their canonical client models', () => {
+  const home = tmpDir('to-installer-converge-home-'); const assetsRoot = tmpDir('to-installer-converge-assets-'); writeFixtureAssets(assetsRoot);
+  const codexCache = path.join(home, '.codex', 'plugins', 'cache', 'Softaware-marketplace', 'token-optimizer', '2.0.1');
+  fs.mkdirSync(path.join(codexCache, '.codex-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(codexCache, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'token-optimizer', version: '2.0.1' }));
+  const claudeOld = path.join(home, '.claude', 'plugins', 'cache', 'token-optimizer-marketplace', 'token-optimizer', '2.0.1');
+  const claudeCurrent = path.join(home, '.claude', 'plugins', 'cache', 'token-optimizer-marketplace', 'token-optimizer', '2.0.2');
+  for (const [root, version] of [[claudeOld, '2.0.1'], [claudeCurrent, '2.0.2']] as const) {
+    fs.mkdirSync(path.join(root, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'token-optimizer', version }));
+  }
+  installer.installSelectedClients({ home, assetsRoot, clients: ['codex', 'claude', 'antigravity'], provider: 'skip', version: '2.0.2', skipLaunchctl: true, defaults: false, skipClientCommands: true });
+  assert.equal(fs.existsSync(codexCache), false, 'Codex must be direct-only');
+  assert.equal(fs.existsSync(claudeOld), false, 'old Claude marketplace version must be removed');
+  assert.equal(fs.existsSync(claudeCurrent), true, 'current Claude marketplace version must remain');
+  assert.equal(fs.existsSync(path.join(home, '.gemini', 'config', 'plugins', 'token-optimizer', 'mcp_config.json')), false, 'Antigravity plugin-local MCP descriptor must not duplicate the global registration');
+});
+
+test('convergence preserves marketplace directories without the exact Token Optimizer identity', () => {
+  const home = tmpDir('to-installer-preserve-home-'); const assetsRoot = tmpDir('to-installer-preserve-assets-'); writeFixtureAssets(assetsRoot);
+  const unknown = path.join(home, '.codex', 'plugins', 'cache', 'Softaware-marketplace', 'token-optimizer', 'custom');
+  fs.mkdirSync(path.join(unknown, '.codex-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(unknown, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'another-plugin', version: 'custom' }));
+  installer.installSelectedClients({ home, assetsRoot, clients: ['codex'], provider: 'skip', skipLaunchctl: true, defaults: false, skipClientCommands: true });
+  assert.equal(fs.existsSync(unknown), true);
 });
 
 test('execution policy preserves explicit profiles and unrelated settings', () => {
@@ -642,9 +671,8 @@ test('installCodex writes the credential-bearing direct server after plugin CLI 
   assert.ok(codexToml.includes("LLM_GATEWAY_TOKEN = 'person-token'"));
 });
 
-/* Repeated marketplace installation must invalidate the installed Codex plugin
-   cache before adding the current staged plugin again. */
-test('installCodex refreshes an existing marketplace plugin before adding it again', () => {
+/* Codex is direct-only; installing its server must not add a marketplace MCP. */
+test('installCodex does not create a second marketplace registration', () => {
   const home = tmpDir('to-installer-home-');
   const assetsRoot = tmpDir('to-installer-assets-');
   const installRoot = path.join(home, '.token-optimizer');
@@ -673,12 +701,7 @@ test('installCodex refreshes an existing marketplace plugin before adding it aga
     process.env.PATH = originalPath;
   }
 
-  const commands = fs.readFileSync(commandLog, 'utf8').trim().split(/\r?\n/);
-  assert.deepEqual(commands, [
-    `plugin marketplace add ${installRoot}`,
-    'plugin remove token-optimizer --marketplace Softaware-marketplace',
-    'plugin add token-optimizer --marketplace Softaware-marketplace',
-  ]);
+  assert.equal(fs.existsSync(commandLog), false);
 });
 
 /* Claude owns a marketplace cache too, but its CLI offers a supported update

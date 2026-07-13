@@ -130,7 +130,7 @@ test('spawned CLI completes install, doctor, repair, uninstall, and repeated uni
     assert.equal(repair.status, 0, `${client} repair: ${repair.stderr}`);
     const postRepair = spawnSync(process.execPath, [bin, 'status', '--home', home, '--provider', 'local', '--json'], base);
     assert.ok([0, 1].includes(postRepair.status), `${client} post-repair status: ${postRepair.stderr}`);
-    const post = JSON.parse(postRepair.stdout); assert.ok(post.clients.configured.includes(client), `${client} not configured after repair: ${postRepair.stdout}`); assert.equal(post.expectedVersion, '2.0.2'); assert.ok(!post.findings.some((item: any) => ['STALE_REGISTRATION', 'MISSING_LAUNCHER', 'MANIFEST_ENTRY_MISSING', 'DUPLICATE_REGISTRATION'].includes(item.code))); assert.equal(post.healthy, true, `${client} post-repair not healthy: ${postRepair.stdout}`);
+    const post = JSON.parse(postRepair.stdout); assert.ok(post.clients.configured.includes(client), `${client} not configured after repair: ${postRepair.stdout}`); assert.equal(post.expectedVersion, '2.0.3'); assert.ok(!post.findings.some((item: any) => ['STALE_REGISTRATION', 'MISSING_LAUNCHER', 'MANIFEST_ENTRY_MISSING', 'DUPLICATE_REGISTRATION'].includes(item.code))); assert.equal(post.healthy, true, `${client} post-repair not healthy: ${postRepair.stdout}`);
     const uninstall = spawnSync(process.execPath, [bin, 'uninstall', '--home', home, '--skip-launchctl'], base);
     assert.equal(uninstall.status, 0, `${client} uninstall: ${uninstall.stderr}`);
     const repeated = spawnSync(process.execPath, [bin, 'uninstall', '--home', home, '--json'], base);
@@ -208,4 +208,30 @@ test('uninstall --json without --dry-run actually applies, not just previews', (
   assert.equal(report.action, 'uninstall');
   assert.ok(report.operations.length > 0);
   assert.equal(fs.existsSync(manifestPath), false, 'uninstall --json must actually remove the manifest, not just print a plan');
+});
+
+test('install --json emits one final document and verbose progress only on stderr', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-cli-json-install-'));
+  const repository = path.resolve(process.cwd(), '..'); const bin = path.join(repository, 'packages/installer/bin/token-optimizer.js');
+  const result = spawnSync(process.execPath, [bin, 'install', '--home', home, '--clients', 'opencode', '--provider', 'skip', '--skip-client-commands', '--skip-launchctl', '--no-defaults', '--json', '--verbose'], { cwd: repository, encoding: 'utf8', env: { ...process.env, TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK: '1' } });
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.action, 'install');
+  assert.equal(report.status, 'completed');
+  assert.equal(report.installedVersion, '2.0.3');
+  assert.deepEqual(report.clients, ['opencode']);
+  const events = result.stderr.trim().split(/\r?\n/).filter(Boolean).map((line: string) => JSON.parse(line));
+  assert.ok(events.some((event: any) => event.event === 'operation-start'));
+  assert.ok(events.some((event: any) => event.event === 'complete'));
+  assert.doesNotMatch(result.stdout + result.stderr, /LLM_GATEWAY_TOKEN|OPENROUTER_API_KEY/);
+});
+
+test('CLI provider switch persists cleared credential ownership in the manifest', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-cli-clear-credential-'));
+  const repository = path.resolve(process.cwd(), '..'); const bin = path.join(repository, 'packages/installer/bin/token-optimizer.js');
+  installer.installSelectedClients({ home, assetsRoot: path.join(repository, 'packages/installer/assets'), clients: ['cursor'], provider: 'gateway-token', gatewayToken: 'fixture-owned-token', credentialStore: 'config', skipClientCommands: true, skipLaunchctl: true, defaults: false });
+  const result = spawnSync(process.execPath, [bin, 'install', '--home', home, '--clients', 'cursor', '--provider', 'local', '--skip-client-commands', '--skip-launchctl', '--no-defaults', '--quiet'], { cwd: repository, encoding: 'utf8', env: { ...process.env, TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK: '1' } });
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = JSON.parse(fs.readFileSync(path.join(home, '.token-optimizer', 'manifest.json'), 'utf8'));
+  assert.deepEqual(manifest.credentials, []);
 });

@@ -12,6 +12,7 @@ const { marketplaceLocations, marketplaceManifest } = require("./marketplace-loc
 const CLIENTS = ["claude", "codex", "antigravity", "opencode", "cursor"];
 const PLACEHOLDER = /^(?:none|null|undefined|placeholder|change[-_ ]?me|.*(?:your|insert|replace)[-_ ]?(?:with[-_ ]?)?(?:token|key).*|<[^>]+>|\$\{[^}]+\})$/i;
 const SECRET_KEYS = ["LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_API_KEY"];
+const MANAGED_PROVIDER_KEYS = ["TOKEN_OPTIMIZER_PROVIDER_MODE", "TOKEN_OPTIMIZER_CREDENTIAL_REF", "LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_BYOK_MODEL", "LOCAL_LLM_API_URL", "LOCAL_LLM_MODEL", "OPENROUTER_API_KEY", "OPENROUTER_API_URL"];
 
 /* Diagnostics are deliberately implemented as bounded reads of known managed
    locations. Every finding has a stable code and enough machine-readable
@@ -20,13 +21,14 @@ async function inspectInstallation(options = {}) {
   const home = path.resolve(options.home || process.env.HOME || os.homedir());
   const expectedVersion = options.expectedVersion || pkg.version;
   const registrations = inspectClients(home, options);
+  const canonicalRegistrations = selectCanonicalRegistrations(registrations.registrations, expectedVersion);
   const versions = inspectVersions(registrations.registrations, expectedVersion);
   const explicitVersion = usable(options.installedVersion) ? { version: String(options.installedVersion), source: "option-installed-version", path: null }
     : usable(options.detectedVersion) ? { version: String(options.detectedVersion), source: "option-detected-version", path: null } : null;
-  const provider = inspectProviderReference(home, options, registrations.registrations);
+  const provider = inspectProviderReference(home, options, canonicalRegistrations);
   const manifest = inspectManifest(home, options);
   const logs = inspectLogState(home, options);
-  const runtime = inspectRuntime(registrations.registrations, options);
+  const runtime = inspectRuntime(canonicalRegistrations, options);
   const platformService = inspectPlatformService(home, provider, registrations.registrations, options);
   const findings = [];
 
@@ -66,7 +68,14 @@ function redactUrl(value) { if (!value) return null; try { const parsed = new UR
 
 function inspectProviderReference(home, options = {}, registrations = []) {
   const env = options.env !== undefined ? options.env : process.env;
-  const values = Object.assign({}, ...registrations.map((item) => item.env || {}), env);
+  /* Ambient variables are a compatibility fallback. A discovered canonical
+     registration describes the environment the client will actually launch. */
+  const registrationValues = Object.assign({}, ...registrations.map((item) => item.env || {}));
+  const values = { ...env };
+  if (usable(registrationValues.TOKEN_OPTIMIZER_PROVIDER_MODE)) {
+    for (const key of MANAGED_PROVIDER_KEYS) delete values[key];
+  }
+  Object.assign(values, registrationValues);
   const mode = canonicalProvider(options.providerMode || options.provider || values.TOKEN_OPTIMIZER_PROVIDER_MODE || inferMode(values));
   const rawRef = options.credentialRef || values.TOKEN_OPTIMIZER_CREDENTIAL_REF;
   let ref = rawRef;
@@ -83,8 +92,8 @@ function inspectProviderReference(home, options = {}, registrations = []) {
   } else credentialValue = usable(values[key]) ? values[key] : null;
   if (credentialValue && !usable(credentialValue)) { credentialValue = null; credentialError = "invalid"; }
   const requiresCredential = ["gateway-token", "gateway-byok", "openrouter-direct"].includes(mode);
-  const url = options.providerUrl || values.LLM_GATEWAY_URL || values.LOCAL_LLM_API_URL || (mode === "openrouter-direct" ? "https://openrouter.ai/api/v1" : requiresCredential ? "https://llm-proxy.lnf.gr/v1" : null);
-  return { mode, url: redactUrl(url), credentialStore: ref && typeof ref === "object" ? ref.store : credentialValue ? "environment" : "none", credentialConfigured: requiresCredential ? Boolean(credentialValue) : true, credentialError, credentialFingerprint: ref && typeof ref === "object" ? ref.fingerprint : undefined, requiresCredential, credentialValue };
+  const url = options.providerUrl || (mode === "local" ? values.LOCAL_LLM_API_URL : mode === "openrouter-direct" ? values.OPENROUTER_API_URL : values.LLM_GATEWAY_URL) || (mode === "openrouter-direct" ? "https://openrouter.ai/api/v1" : requiresCredential ? "https://llm-proxy.lnf.gr/v1" : null);
+  return { mode, url: redactUrl(url), credentialStore: ref && typeof ref === "object" ? ref.store : credentialValue ? "environment" : "none", credentialConfigured: requiresCredential ? Boolean(credentialValue) : true, credentialError, credentialFingerprint: ref && typeof ref === "object" ? ref.fingerprint : undefined, credentialReference: ref && typeof ref === "object" ? ref : undefined, requiresCredential, credentialValue };
 }
 function inferMode(env) { if (env.TOKEN_OPTIMIZER_PROVIDER_MODE) return env.TOKEN_OPTIMIZER_PROVIDER_MODE; if (env.LOCAL_LLM_API_URL) return "local"; if (env.LLM_GATEWAY_TOKEN) return "gateway-token"; if (env.OPENROUTER_BYOK_KEY) return "gateway-byok"; if (env.OPENROUTER_API_KEY) return "openrouter-direct"; return null; }
 
@@ -113,7 +122,21 @@ function inspectClients(home, options = {}) {
     }
   }
   registrations.push(...inspectMarketplaceRegistrations(home, options));
-  return { supported: CLIENTS, configured: [...new Set(registrations.map((item) => item.client))], registrations };
+  const logical = registrations.filter((item, index, all) => !item.launcherPath || all.findIndex((candidate) => candidate.client === item.client && candidate.launcherPath === item.launcherPath) === index);
+  return { supported: CLIENTS, configured: [...new Set(logical.map((item) => item.client))], registrations: logical };
+}
+
+/* Runtime and provider checks target one active path per client. Claude uses
+   its marketplace plugin; direct registrations are authoritative elsewhere. */
+function selectCanonicalRegistrations(registrations, expectedVersion) {
+  return CLIENTS.flatMap((client) => {
+    const candidates = registrations.filter((item) => item.client === client && !item.stale);
+    if (!candidates.length) return registrations.filter((item) => item.client === client).slice(0, 1);
+    const preferred = client === "claude"
+      ? candidates.find((item) => item.marketplace && item.version === expectedVersion) || candidates.find((item) => item.marketplace)
+      : candidates.find((item) => !item.marketplace);
+    return [preferred || candidates.find((item) => item.version === expectedVersion) || candidates[0]];
+  });
 }
 
 /* Marketplace discovery is filesystem-only in production. Optional listing
@@ -165,7 +188,7 @@ function inspectManifest(home, options = {}) {
   const file = path.join(home, ".token-optimizer", "manifest.json"); let data;
   const manifestMaxBytes = positiveLimit(options.manifestMaxBytes, 1024 * 1024);
   try { const stat = fs.lstatSync(file); if (!stat.isFile() || stat.isSymbolicLink() || stat.size > manifestMaxBytes) throw Object.assign(new Error("unsafe manifest"), { code: stat.size > manifestMaxBytes ? "MANIFEST_TOO_LARGE" : "MANIFEST_INVALID" }); data = JSON.parse(fs.readFileSync(file, "utf8")); } catch (error) { const code = error.code === "MANIFEST_TOO_LARGE" ? "MANIFEST_TOO_LARGE" : "MANIFEST_INVALID"; return { summary: { path: file, exists: error.code !== "ENOENT", valid: false, repairable: false }, findings: error.code === "ENOENT" ? [] : [manifestFinding(code, code === "MANIFEST_TOO_LARGE" ? "The ownership manifest exceeds the inspection limit." : "The ownership manifest is unreadable.", file)] }; }
-  const findings = []; const schemaValid = data && data.schemaVersion === 2 && Array.isArray(data.files) && Array.isArray(data.roots) && data.roots.length > 0;
+  const findings = []; const schemaValid = data && [2, 3].includes(data.schemaVersion) && Array.isArray(data.files) && Array.isArray(data.roots) && data.roots.length > 0;
   if (!schemaValid) findings.push(manifestFinding("MANIFEST_INVALID", "The ownership manifest schema is invalid.", file));
   const allowedRoots = knownManifestRoots(home, options).map(canonicalPath); const roots = [];
   if (schemaValid) for (const root of data.roots) { if (typeof root !== "string" || !path.isAbsolute(root)) { findings.push(manifestFinding("MANIFEST_ROOT_INVALID", "A manifest root is not a valid absolute path.", file)); continue; } try { const canonical = canonicalPath(root); if (!withinRoots(canonical, allowedRoots)) findings.push(manifestFinding("MANIFEST_ROOT_UNTRUSTED", "A manifest root is outside installer-managed locations.", root)); else roots.push(canonical); } catch (_) { findings.push(manifestFinding("MANIFEST_ROOT_INACCESSIBLE", "A manifest root cannot be resolved safely.", root)); } }
@@ -177,6 +200,7 @@ function inspectManifest(home, options = {}) {
     const entryPath = entry && entry.path;
     if (!entry || typeof entryPath !== "string" || !path.isAbsolute(entryPath) || typeof entry.sha256 !== "string" || typeof entry.ownership !== "string") { findings.push(manifestFinding("MANIFEST_ENTRY_INVALID", "A manifest file entry is malformed.", entryPath || file)); continue; }
     if (entry.source !== undefined) { let source; try { source = canonicalPath(entry.source); } catch (_) { source = null; } if (!source || !withinRoots(source, declaredAssetRoots)) { findings.push(manifestFinding("MANIFEST_SOURCE_UNTRUSTED", "A managed file source is outside declared packaged assets.", entryPath)); continue; } }
+    if (entry.assetPath !== undefined && (typeof entry.assetPath !== "string" || path.isAbsolute(entry.assetPath) || entry.assetPath.split(/[\\/]/).includes(".."))) { findings.push(manifestFinding("MANIFEST_SOURCE_UNTRUSTED", "A managed file asset identity is invalid.", entryPath)); continue; }
     let stat; try { stat = fs.lstatSync(entryPath); } catch (error) { findings.push(error.code === "ENOENT" ? { code: "MANIFEST_ENTRY_MISSING", severity: "warning", message: "A packaged managed file is missing.", remediation: "Restore it from current installer assets.", path: entryPath, operation: "restore-managed-file" } : manifestFinding("MANIFEST_ENTRY_INACCESSIBLE", "A managed file cannot be inspected.", entryPath)); continue; }
     if (stat.isSymbolicLink()) { findings.push(manifestFinding("MANIFEST_ENTRY_SYMLINK", "A managed file is a symbolic link.", entryPath)); continue; }
     let canonical; try { canonical = canonicalPath(entryPath); } catch (_) { findings.push(manifestFinding("MANIFEST_ENTRY_INACCESSIBLE", "A managed path cannot be resolved safely.", entryPath)); continue; }
@@ -188,7 +212,7 @@ function inspectManifest(home, options = {}) {
     try { const hash = crypto.createHash("sha256").update(fs.readFileSync(entryPath)).digest("hex"); if (hash !== entry.sha256) add(findings, "MANIFEST_HASH_MISMATCH", "warning", "A managed file differs from its manifest hash.", "Repair from a trusted installer asset source.", { path: entryPath, operation: "restore-managed-file" }); } catch (_) { findings.push(manifestFinding("MANIFEST_ENTRY_INACCESSIBLE", "A managed file cannot be read.", entryPath)); }
   }
   const trustedAssetRoot = canonicalPath(path.resolve(options.assetsRoot || path.join(__dirname, "..", "assets")));
-  const sources = (Array.isArray(data.assetRoots) ? data.assetRoots : []).filter((root) => { try { return typeof root === "string" && withinRoots(canonicalPath(root), [trustedAssetRoot]) && fs.existsSync(root); } catch (_) { return false; } }); const repairable = sources.length > 0 || Boolean(options.assetsRoot && fs.existsSync(options.assetsRoot));
+  const sources = (Array.isArray(data.assetRoots) ? data.assetRoots : []).filter((root) => { try { return typeof root === "string" && withinRoots(canonicalPath(root), [trustedAssetRoot]) && fs.existsSync(root); } catch (_) { return false; } }); const repairable = data.schemaVersion === 3 ? fs.existsSync(trustedAssetRoot) : sources.length > 0 || Boolean(options.assetsRoot && fs.existsSync(options.assetsRoot));
   if (findings.length && !repairable) add(findings, "MANIFEST_SOURCE_UNAVAILABLE", "error", "No trusted runtime-cache or installer asset source is available for repair.", "Reinstall from the package before running repair.", { path: file, operation: "reinstall" });
   return { summary: { path: file, exists: true, valid: schemaValid && findings.every((item) => !item.code.startsWith("MANIFEST_") || item.code === "MANIFEST_HASH_MISMATCH"), repairable }, findings };
 }

@@ -29,8 +29,11 @@ OpenCode, Cursor), installs the right plugin/server assets, writes provider
 configuration, and enables default-on usage where the client supports it.
 **Restart your client after installation.**
 
-Re-running the installer is always safe — it refreshes Token Optimizer to the
-latest version without losing your provider configuration.
+Re-running the installer performs a clean, transactional update. It preserves
+your provider configuration and files you have edited, switches each client to
+its supported current registration, and removes older installer-owned copies.
+Restart affected clients after a successful update so they discard cached MCP
+state.
 
 See the [installer guide](packages/installer/README.md) for non-interactive
 flags, managing an existing install (`status`, `doctor`, `repair`,

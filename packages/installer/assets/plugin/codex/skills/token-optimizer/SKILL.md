@@ -249,12 +249,17 @@ or TOML section, preserving credentials for every unrelated MCP server.
 Migration failures are sanitized before CLI and JSON output; do not bypass the
 structured result by printing adapter or provider exception objects directly.
 
-Re-running the npm installer refreshes all client assets: Antigravity, OpenCode,
-and Cursor replace their installer-managed local files; Claude uses its plugin
-update command when available; and Codex removes then re-adds the plugin to
-replace its versioned cache. CLI-free fallbacks remain available for desktop
-installs, including Windows, where every local MCP registration runs `node`
-with `start.js` rather than Bash. Restart the affected client after installing.
+Re-running the npm installer performs a transactional, convergent update.
+Codex uses only its direct registration and copied skill; Claude keeps one
+current marketplace plugin; Antigravity keeps one global direct registration;
+and OpenCode/Cursor keep one installer-managed direct registration. Older
+installer-owned registrations and caches are removed, while modified or
+unrecognized files are preserved and reported. CLI-free fallbacks remain
+available for desktop installs, including Windows, where every local MCP
+registration runs `node` with `start.js` rather than Bash. Interactive runs
+show progress; `--quiet` suppresses normal steps and `--verbose --json` sends
+sanitized progress events to stderr while stdout remains one JSON document.
+Restart the affected client after installing.
 
 ## Guardrails
 

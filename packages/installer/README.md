@@ -24,8 +24,11 @@ locations, prompts for how to configure the LLM provider, writes client MCP
 config, and turns on default-on usage where the client supports it.
 **Restart the affected client after installation.**
 
-Re-running the installer is always safe — it refreshes Token Optimizer to the
-current version and reapplies your provider configuration.
+Re-running the installer performs a transactional update to the current
+version. It preserves provider settings and user-edited files, converges each
+client to one supported registration, and removes older installer-owned
+copies. If a required step fails, the previous working installation is
+restored. Restart affected clients after a successful update.
 
 Installation also creates `~/.config/token-optimizer/config.json` with the
 recommended `standard` execution profile when no profile is already selected.
@@ -72,13 +75,14 @@ With no `--clients` option, the installer targets detected clients. Use
 
 ## What gets installed, per client
 
-- **Claude Code:** adds the packaged marketplace plugin (or, if the `claude`
+- **Claude Code:** keeps one current marketplace plugin (or, if the `claude`
   CLI isn't available, a `~/.claude/skills/token-optimizer/` fallback), writes
   `~/.claude/settings.json` and `~/.claude/CLAUDE.md`.
-- **Codex:** registers the bundled server in `~/.codex/config.toml` and copies
+- **Codex:** uses a direct bundled-server registration in
+  `~/.codex/config.toml` and copies
   the skill into `~/.codex/skills/token-optimizer/`.
-- **Antigravity:** copies the plugin into
-  `~/.gemini/config/plugins/token-optimizer` and writes `~/.gemini/GEMINI.md`.
+- **Antigravity:** uses one global direct MCP registration, copies the current
+  server assets, and writes `~/.gemini/GEMINI.md`.
 - **OpenCode:** copies the server and skill into `~/.config/opencode/` and
   writes `~/.config/opencode/opencode.jsonc` / `AGENTS.md`.
 - **Cursor:** copies the server into `~/.cursor/token-optimizer-server` and
@@ -124,11 +128,17 @@ npx @softawarest/token-optimizer-installer uninstall --dry-run
 
 Every mutating command supports `--dry-run` to preview exactly what would
 change before anything happens; add `--json` for machine-readable output.
+Interactive terminals show phase progress by default. Use `--verbose` for
+every operation or `--quiet` for warnings and the final result. JSON mode
+writes one final document to stdout; `--verbose --json` sends sanitized NDJSON
+progress to stderr.
 `status` is read-only and makes no network call. `doctor` additionally
 verifies your provider is reachable and exits non-zero on problems (`2` for
 warnings with `--strict`). `repair` fixes exactly what `doctor` flagged.
 `uninstall` removes only what this installer owns, preserves any files you've
-edited yourself, and rolls back cleanly if it can't finish.
+edited yourself, and rolls back cleanly if it can't finish. Install and repair
+use the same ownership rules: unrecognized or modified conflicts are retained
+and reported instead of being overwritten or deleted.
 
 Raw command logs are managed separately with
 `token-optimizer logs status|prune|purge --workspace <absolute-path>`.

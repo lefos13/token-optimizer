@@ -52,7 +52,7 @@ function planRepair(report = {}, manifest, options = {}) {
   for (const file of manifest.files) {
     const relevant = needed.has(file.path);
     if (!relevant) continue;
-    if (file.source) operations.push(copyTreeOperation(trustedRepairSource(file, manifest, options), file.path));
+    if (file.source || file.assetPath) operations.push(copyTreeOperation(trustedRepairSource(file, manifest, options), file.path));
     else if (file.kind === 'copy-tree' && file.sourcePath) operations.push(copyTreeOperation(trustedRepairSource({ ...file, source: file.sourcePath }, manifest, options), file.path));
   }
   for (const finding of actionable) {
@@ -74,6 +74,11 @@ function deduplicateOperations(operations) { const seen = new Set(); return oper
 function trustedRepairSource(file, manifest, options) {
   const trustedRoot = options.assetsRoot && path.resolve(options.assetsRoot);
   if (!trustedRoot) throw Object.assign(new Error('trusted installer assets root is required for repair'), { code: 'REPAIR_SOURCE_UNTRUSTED' });
+  if (file.assetPath) {
+    const source = path.resolve(trustedRoot, file.assetPath);
+    if (!(source === trustedRoot || source.startsWith(`${trustedRoot}${path.sep}`)) || !fs.existsSync(source)) throw Object.assign(new Error('packaged repair source is unavailable'), { code: 'REPAIR_SOURCE_UNAVAILABLE' });
+    return source;
+  }
   const declared = (manifest.assetRoots || []).map((root) => path.resolve(root)).find((root) => file.source === root || file.source.startsWith(`${root}${path.sep}`));
   if (!declared) throw Object.assign(new Error('manifest repair source is outside declared assets'), { code: 'REPAIR_SOURCE_UNTRUSTED' });
   const relative = path.relative(declared, file.source); const source = path.resolve(trustedRoot, relative);
@@ -88,6 +93,7 @@ function assertManifest(manifest) {
   const roots = [...(manifest.roots || []), ...(manifest.assetRoots || [])].filter((root) => typeof root === 'string' && path.isAbsolute(root)).map((root) => path.resolve(root));
   for (const file of manifest.files) {
     if (file.source && (!path.isAbsolute(file.source) || !roots.some((root) => file.source === root || file.source.startsWith(`${root}${path.sep}`)))) throw new Error(`manifest source outside trusted roots: ${file.source}`);
+    if (file.assetPath && (path.isAbsolute(file.assetPath) || file.assetPath.split(/[\\/]/).includes('..'))) throw new Error(`manifest asset path is not package-relative: ${file.assetPath}`);
   }
 }
 
@@ -116,21 +122,27 @@ function currentStateFromManifest(manifest) {
    successful-looking uninstall that silently leaves registrations behind. */
 function applyLifecyclePlan(plan, options = {}) {
   if (!plan || !Array.isArray(plan.operations)) throw new TypeError('invalid lifecycle plan');
-  const inverses = []; const applied = [];
+  const inverses = []; const applied = []; const notify = typeof options.onProgress === 'function' ? options.onProgress : () => {};
   try {
-    for (const operation of plan.operations) {
+    for (let index = 0; index < plan.operations.length; index += 1) {
+      const operation = plan.operations[index];
+      notify({ schemaVersion: 1, event: 'operation-start', phase: operation.phase || plan.action || 'lifecycle', sequence: index + 1, total: plan.operations.length, operationId: operation.id || operation.kind, kind: operation.kind, client: operation.client, path: operation.path, status: 'running', message: `running: ${operation.id || operation.kind}` });
       const inverse = prepareInverse(operation, options);
       if (inverse) inverses.push(inverse);
       applyOperation(operation, options);
       applied.push(operation);
+      notify({ schemaVersion: 1, event: 'operation-complete', phase: operation.phase || plan.action || 'lifecycle', sequence: index + 1, total: plan.operations.length, operationId: operation.id || operation.kind, kind: operation.kind, client: operation.client, path: operation.path, status: 'completed', message: `completed: ${operation.id || operation.kind}` });
     }
     for (const inverse of inverses) if (typeof inverse.dispose === 'function') inverse.dispose();
+    notify({ schemaVersion: 1, event: 'complete', phase: plan.action || 'lifecycle', sequence: plan.operations.length, total: plan.operations.length, status: 'completed', message: `completed: ${plan.action || 'lifecycle'}` });
   } catch (error) {
+    notify({ schemaVersion: 1, event: 'rollback-start', phase: plan.action || 'lifecycle', sequence: applied.length, total: plan.operations.length, status: 'rolling-back', message: `rolling-back: ${plan.action || 'lifecycle'}` });
     const rollbackErrors = [];
-    for (let index = inverses.length - 1; index >= 0; index -= 1) try { inverses[index](); } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+    for (let index = inverses.length - 1; index >= 0; index -= 1) try { inverses[index](); notify({ schemaVersion: 1, event: 'operation-rolled-back', phase: plan.action || 'lifecycle', sequence: index + 1, total: plan.operations.length, status: 'rolled-back', message: `rolled-back: ${plan.action || 'lifecycle'}` }); } catch (rollbackError) { rollbackErrors.push(rollbackError); }
     for (const inverse of inverses) if (typeof inverse.dispose === 'function') try { inverse.dispose(); } catch (_) {}
     const safe = new Error(rollbackErrors.length ? 'lifecycle operation failed and rollback was incomplete' : 'lifecycle operation failed; earlier mutations were rolled back');
     safe.cause = error; safe.applied = applied; safe.rollbackErrors = rollbackErrors.length;
+    notify({ schemaVersion: 1, event: 'complete', phase: plan.action || 'lifecycle', sequence: applied.length, total: plan.operations.length, status: 'failed', message: `failed: ${plan.action || 'lifecycle'}` });
     throw safe;
   }
   return applied;
