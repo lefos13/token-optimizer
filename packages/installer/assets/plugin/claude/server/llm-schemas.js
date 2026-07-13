@@ -28,7 +28,7 @@ exports.VerdictSchema = VerdictSchemaBase.superRefine((value, ctx) => {
 exports.TriageSchema = exports.VerdictSchema;
 const CodeReviewIssueSchema = zod_1.z.object({
     file: NonEmptyBoundedString,
-    line: zod_1.z.number().int().positive().optional(),
+    line: zod_1.z.number().int().positive().nullable().optional(),
     severity: zod_1.z.enum(['error', 'warning']),
     description: NonEmptyBoundedString,
     suggestedFix: zod_1.z.string().max(4000).nullable(),

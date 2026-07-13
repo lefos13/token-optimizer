@@ -387,7 +387,11 @@ Schema:
         const parsed = (0, llm_schemas_1.parseLLMResponse)('review', jsonString);
         if (!parsed.success)
             throw new LLMValidationFailure(parsed.validationErrors);
-        const result = { ...parsed.data, reviewAvailable: true };
+        const data = parsed.data;
+        /* The model sometimes emits an explicit "line": null instead of omitting the key for issues
+           without a specific line; normalize that back to undefined to match CodeReviewIssue's type. */
+        const issues = data.issues.map((issue) => issue.line == null ? { ...issue, line: undefined } : issue);
+        const result = { ...data, issues, reviewAvailable: true };
         return attachLLMResultMetadata(result, completion);
     }
     catch (error) {
