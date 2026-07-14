@@ -81,10 +81,10 @@ test('interactive BYOK setup asks for one optional model', async () => {
 });
 
 test('interactive secret input restores readline output without printing the value', async () => {
-  let output = ''; const original = (value: string) => { output += value; };
-  const rl: any = { output: { write: (value: string) => { output += value; } }, _writeToOutput: original, question: (_prompt: string, done: (answer: string) => void) => done('fixture-secret') };
+  let output = ''; let questionPrompt = ''; const original = (value: string) => { output += value; };
+  const rl: any = { output: { write: (value: string) => { output += value; } }, _writeToOutput: original, question: (prompt: string, done: (answer: string) => void) => { questionPrompt = prompt; rl._writeToOutput(prompt); rl._writeToOutput('fixture-secret'); done('fixture-secret'); } };
   const value = await cli.askSecretRequired(rl, 'Credential: ');
-  assert.equal(value, 'fixture-secret'); assert.equal(rl._writeToOutput, original); assert.equal(output, 'Credential: \n'); assert.doesNotMatch(output, /fixture-secret/);
+  assert.equal(value, 'fixture-secret'); assert.equal(questionPrompt, 'Credential: '); assert.equal(rl._writeToOutput, original); assert.equal(output, 'Credential: \n'); assert.doesNotMatch(output, /fixture-secret/);
 });
 
 test('--byok-key and --byok-model configure direct OpenRouter without prompting', async () => {
@@ -193,7 +193,7 @@ test('spawned CLI completes install, doctor, repair, uninstall, and repeated uni
     assert.equal(repair.status, 0, `${client} repair: ${repair.stderr}`);
     const postRepair = spawnSync(process.execPath, [bin, 'status', '--home', home, '--provider', 'local', '--json'], base);
     assert.ok([0, 1].includes(postRepair.status), `${client} post-repair status: ${postRepair.stderr}`);
-    const post = JSON.parse(postRepair.stdout); assert.ok(post.clients.configured.includes(client), `${client} not configured after repair: ${postRepair.stdout}`); assert.equal(post.expectedVersion, '2.0.4'); assert.ok(!post.findings.some((item: any) => ['STALE_REGISTRATION', 'MISSING_LAUNCHER', 'MANIFEST_ENTRY_MISSING', 'DUPLICATE_REGISTRATION'].includes(item.code))); assert.equal(post.healthy, true, `${client} post-repair not healthy: ${postRepair.stdout}`);
+    const post = JSON.parse(postRepair.stdout); assert.ok(post.clients.configured.includes(client), `${client} not configured after repair: ${postRepair.stdout}`); assert.equal(post.expectedVersion, '2.0.5'); assert.ok(!post.findings.some((item: any) => ['STALE_REGISTRATION', 'MISSING_LAUNCHER', 'MANIFEST_ENTRY_MISSING', 'DUPLICATE_REGISTRATION'].includes(item.code))); assert.equal(post.healthy, true, `${client} post-repair not healthy: ${postRepair.stdout}`);
     /* Launchers and clients create caches after the ownership manifest is written.
        Populate every declared and client-derived location to prove uninstall converges. */
     const finalManifest = JSON.parse(fs.readFileSync(path.join(home, '.token-optimizer', 'manifest.json'), 'utf8'));
@@ -320,7 +320,7 @@ test('install --json emits one final document and verbose progress only on stder
   const report = JSON.parse(result.stdout);
   assert.equal(report.action, 'install');
   assert.equal(report.status, 'completed');
-  assert.equal(report.installedVersion, '2.0.4');
+  assert.equal(report.installedVersion, '2.0.5');
   assert.deepEqual(report.clients, ['opencode']);
   const events = result.stderr.trim().split(/\r?\n/).filter(Boolean).map((line: string) => JSON.parse(line));
   assert.ok(events.some((event: any) => event.event === 'operation-start'));

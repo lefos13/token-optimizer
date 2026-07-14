@@ -501,11 +501,15 @@ async function askRequired(rl, prompt) {
 async function askSecretRequired(rl, prompt) {
   if (!rl?.output || typeof rl._writeToOutput !== "function") return askRequired(rl, prompt);
   while (true) {
-    rl.output.write(prompt);
     const original = rl._writeToOutput;
-    rl._writeToOutput = () => {};
+    let promptPending = true;
+    rl._writeToOutput = (value) => {
+      if (!promptPending) return;
+      promptPending = false;
+      original.call(rl, value);
+    };
     let answer;
-    try { answer = await ask(rl, ""); }
+    try { answer = await ask(rl, prompt); }
     finally { rl._writeToOutput = original; rl.output.write("\n"); }
     if (answer.trim()) return answer.trim();
     writePromptLine(rl, "This value is required.");
