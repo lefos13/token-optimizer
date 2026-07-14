@@ -33,6 +33,8 @@ test('injected macOS adapter uses argv and supports lifecycle', () => {
   assert.doesNotMatch((calls[0][1] as string[])[1], /SecItemDelete/);
   assert.doesNotMatch(JSON.stringify(calls[0][1]), /fixture-value/);
   assert.equal((calls[0][2] as { input: string }).input, 'fixture-value');
+  assert.deepEqual((calls[1][2] as { stdio: string[] }).stdio, ['ignore', 'pipe', 'pipe']);
+  assert.deepEqual((calls[2][2] as { stdio: string[] }).stdio, ['ignore', 'pipe', 'pipe']);
 });
 
 test('linux native store fails closed when secret-tool is unavailable', () => {

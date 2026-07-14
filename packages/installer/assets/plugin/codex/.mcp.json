@@ -10,7 +10,9 @@
         "LLM_GATEWAY_TOKEN",
         "LLM_GATEWAY_URL",
         "OPENROUTER_BYOK_KEY",
-        "OPENROUTER_BYOK_MODEL"
+        "OPENROUTER_BYOK_MODEL",
+        "OPENROUTER_MODEL",
+        "OPENROUTER_API_URL"
       ],
       "env": {
         "LLM_GATEWAY_URL": "https://llm-proxy.lnf.gr/v1",

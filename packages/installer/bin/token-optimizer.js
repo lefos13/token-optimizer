@@ -8,6 +8,7 @@ const {
   DEFAULT_GATEWAY_URL,
   DEFAULT_LOCAL_LLM_URL,
   DEFAULT_LOCAL_LLM_MODEL,
+  DEFAULT_OPENROUTER_URL,
   normalizeProviderChoice,
   planInstallation,
   applyChangePlan,
@@ -20,9 +21,9 @@ const {
   persistProviderCredentialOwnership,
   applyDefaultDirectives,
 } = require("../lib/install-core");
-const { inspectInstallation } = require("../lib/doctor");
+const { inspectInstallation, defaultHealthProbe } = require("../lib/doctor");
 const { readManifest, writeManifest, manifestPath } = require("../lib/manifest");
-const { planRepair, planUninstall, currentStateFromManifest, applyLifecyclePlan } = require("../lib/uninstall");
+const { planRepair, planUninstall, currentStateFromManifest, applyLifecyclePlan, hasRecognizedUninstallState } = require("../lib/uninstall");
 const { statusLogs, pruneLogs, purgeLogs } = require("../lib/logs");
 const { planMigrationFromHome, migrateInstallation } = require("../lib/migration");
 const { createRegistrationAdapter, createFilesystemMarketplaceAdapter, createServiceAdapter } = require("../lib/lifecycle-adapters");
@@ -69,21 +70,23 @@ async function main() {
 
   if (command === "repair" || command === "uninstall") {
     const home = args.home;
-    const manifest = readManifest(home);
+    let manifest = readManifest(home);
+    let reconstructedUninstall = false;
     if (!manifest) {
-      if (command === "uninstall") { console.log(args.json === true ? JSON.stringify({ status: "already-uninstalled", operations: [] }, null, 2) : "uninstall: already clean; no changes applied."); return; }
-      throw new Error("No Token Optimizer ownership manifest found");
+      if (command === "uninstall" && !hasRecognizedUninstallState(home || process.env.HOME)) { console.log(args.json === true ? JSON.stringify({ status: "already-uninstalled", operations: [] }, null, 2) : "uninstall: already clean; no changes applied."); return; }
+      if (command === "uninstall") { manifest = { schemaVersion: 3, roots: [], files: [], managedBlocks: [], credentials: [], registrations: [], platformServices: [] }; reconstructedUninstall = true; }
+      else throw new Error("No Token Optimizer ownership manifest found");
     }
     const report = command === "repair" ? await inspectInstallation({ home, performHealthProbe: false }) : null;
     const assetsRoot = require("path").resolve(__dirname, "..", "assets");
     const managedRoots = [require("path").join(home || process.env.HOME, ".token-optimizer"), require("path").join(home || process.env.HOME, ".config", "opencode"), require("path").join(home || process.env.HOME, ".cursor"), require("path").join(home || process.env.HOME, ".gemini"), require("path").join(home || process.env.HOME, ".claude"), require("path").join(home || process.env.HOME, ".codex")];
-    const plan = command === "repair" ? planRepair(report, manifest, { assetsRoot, managedRoots, manifestPath: manifestPath(home) }) : planUninstall(manifest, currentStateFromManifest(manifest), { manifestPath: manifestPath(home) });
+    const plan = command === "repair" ? planRepair(report, manifest, { assetsRoot, managedRoots, manifestPath: manifestPath(home) }) : planUninstall(manifest, currentStateFromManifest(manifest), { home: home || process.env.HOME, manifestPath: reconstructedUninstall ? undefined : manifestPath(home) });
     if (args["dry-run"] === true) {
       console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
       return;
     }
-    applyLifecyclePlan(plan, { requireExternalAdapters: true, registrationAdapter: createRegistrationAdapter({ marketplaceAdapter: createFilesystemMarketplaceAdapter(home || process.env.HOME) }), serviceAdapter: createServiceAdapter({ services: manifest.platformServices || [], skipLaunchctl: args["skip-launchctl"] === true }), manifest, home, planWarnings: plan.warnings || [] });
-    console.log(args.json === true ? formatChangePlan(plan, "json") : `${command}: applied ${plan.operations.length} operation(s).`);
+    const applied = applyLifecyclePlan(plan, { onProgress: createProgressReporter(args), requireExternalAdapters: true, registrationAdapter: createRegistrationAdapter({ marketplaceAdapter: createFilesystemMarketplaceAdapter(home || process.env.HOME) }), serviceAdapter: createServiceAdapter({ home: home || process.env.HOME, services: manifest.platformServices || [], skipLaunchctl: args["skip-launchctl"] === true }), manifest, home, planWarnings: plan.warnings || [] });
+    console.log(args.json === true ? JSON.stringify({ action: command, previousVersion: pkg.version, installedVersion: command === "repair" ? pkg.version : null, status: "completed", clients: [...new Set(applied.map((operation) => operation.client).filter(Boolean))], operations: applied, applied, removedStale: applied.filter((operation) => operation.kind === "remove-file" || /normalize|remove/.test(operation.command || "")), preserved: plan.warnings || [], warnings: plan.warnings || [], rollback: { applied: false, operations: [] }, doctorSummary: null }, null, 2) : `${command}: applied ${plan.operations.length} operation(s).`);
     return;
   }
 
@@ -91,7 +94,7 @@ async function main() {
     throw new Error(`Unsupported command: ${command}`);
   }
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const rl = readline.createInterface({ input: process.stdin, output: args.json === true ? process.stderr : process.stdout });
   try {
     await checkForUpdate(rl, args);
     const clients = parseList(args.clients || args.client || "detected");
@@ -106,18 +109,28 @@ async function main() {
         cursorProjects: parseList(args["cursor-project"] || args.cursorProject || ""),
         skipClientCommands: true,
         skipLaunchctl: true,
+        onProgress: createProgressReporter(args),
       };
-      if (args["dry-run"] === true || args.json === true) {
+      if (args["dry-run"] === true) {
         const plan = planMigrationFromHome(migrationOptions);
         console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
         return;
       }
       const result = await migrateInstallation(migrationOptions);
+      if (args.json === true) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
       console.log(result.status === "already-migrated" ? "Migration already complete; no changes applied." : `Migrated Token Optimizer for: ${result.plan.clients.join(", ")}`);
       if (result.status !== "already-migrated") console.log("Follow-up: restart clients; run a normal install to perform client plugin registration and macOS GUI-session service setup, then `doctor`/`repair` to clear any leftover legacy registration.");
       return;
     }
-    const providerOptions = await resolveProviderOptions(args, rl);
+    const existing = command === "install" ? await inspectInstallation({ home: args.home, performHealthProbe: false }) : null;
+    const explicitProvider = args.provider !== undefined || args.local === true || args.token !== undefined || args["byok-key"] !== undefined;
+    const providerOptions = command === "install" && !explicitProvider && shouldPreserveInstalledProvider(existing)
+      ? preservedProviderOptions(existing.provider)
+      : await resolveProviderOptions(args, rl);
+    const providerWarnings = args["dry-run"] === true ? [] : await validateProviderBeforeMutation({ ...providerOptions, home: args.home });
     const defaults = args.defaults !== "false" && args["no-defaults"] !== true;
     const options = {
       home: args.home,
@@ -135,8 +148,9 @@ async function main() {
         console.log(args.json === true ? formatChangePlan(plan, "json") : formatChangePlan(plan));
         return;
       }
+      const previous = existing || await inspectInstallation({ home: options.home, performHealthProbe: false });
       const plan = planInstallation(options);
-      const applyResult = applyChangePlan(plan);
+      const applyResult = applyChangePlan(plan, { onProgress: createProgressReporter(args) });
       if (applyResult.error) {
         const rolled = applyResult.rolledBack.length;
         const manual = applyResult.manualRemediation.length;
@@ -145,9 +159,25 @@ async function main() {
         process.exitCode = 1;
         return;
       }
-      persistInstallManifest({ ...options, credentialRef: applyResult.credentialRef, credentialOwned: applyResult.credentialOwned }, applyResult.installedClients);
+      persistInstallManifest({ ...options, credentialRef: applyResult.credentialRef, credentialOwned: applyResult.credentialOwned, credentialOwnershipCleared: applyResult.credentialOwnershipCleared }, applyResult.installedClients);
       const installed = applyResult.installedClients;
+      const doctor = await inspectInstallation({ home: options.home, expectedVersion: pkg.version, performHealthProbe: false });
+      const cleanupResults = applyResult.operationResults || [];
+      const removedStale = cleanupResults.flatMap((result) => result.removedStale || []);
+      const preserved = cleanupResults.flatMap((result) => result.preserved || []);
+      if (args.json === true) {
+        console.log(JSON.stringify({
+          action: "install", previousVersion: previous.installedVersion, installedVersion: pkg.version,
+          status: "completed", clients: installed, applied: applyResult.applied,
+          removedStale,
+          preserved, warnings: [...providerWarnings, ...preserved, ...doctor.findings.filter((finding) => finding.severity === "warning")],
+          rollback: { applied: false, operations: [] },
+          doctorSummary: { healthy: doctor.healthy, findings: doctor.findings.map((finding) => finding.code) },
+        }, null, 2));
+        return;
+      }
       console.log(`Installed Token Optimizer for: ${installed.join(", ")}`);
+      for (const warning of providerWarnings) console.warn(`Warning: ${warning.message}`);
       if (clients.includes("all") || clients.includes("cursor")) {
         console.log("Cursor MCP is configured globally; copy the generated Cursor rule into projects or pass --cursor-project for project rules.");
       }
@@ -178,6 +208,66 @@ async function main() {
   }
 }
 
+function preservedProviderOptions(provider) {
+  const options = { provider: provider.mode, credentialRef: provider.credentialReference };
+  if (provider.mode === "local") { options.localApiUrl = provider.url; options.localModel = provider.model; }
+  else if (provider.mode === "openrouter-direct") { options.openrouterUrl = provider.url; options.byokModel = provider.model; }
+  else { options.gatewayUrl = provider.url; if (provider.mode === "gateway-byok") options.byokModel = provider.model; }
+  return options;
+}
+
+/* Automatic preservation is an upgrade behavior, not fresh-install discovery.
+   Ambient legacy variables cannot prove that a client has a usable installation. */
+function shouldPreserveInstalledProvider(report) {
+  if (!report?.provider?.mode || report.provider.mode === "skip") return false;
+  if (report.provider.source !== "registration") return false;
+  const active = (report.clients?.registrations || []).some((registration) => registration.stale !== true);
+  if (!active) return false;
+  return !report.provider.requiresCredential || report.provider.credentialConfigured === true;
+}
+
+/* Authentication rejection is deterministic and blocks mutation. Transport
+   failures are advisory so a temporary outage cannot strand a valid upgrade. */
+async function validateProviderBeforeMutation(options) {
+  const mode = normalizeProviderChoice(options.provider);
+  if (!mode || !["gateway-token", "gateway-byok", "openrouter-direct"].includes(mode)) return [];
+  let credential = options.gatewayToken || options.byokKey || options.openrouterKey;
+  if (!credential && options.credentialRef) {
+    const report = await inspectInstallation({ provider: mode, credentialRef: options.credentialRef, providerUrl: options.gatewayUrl || options.openrouterUrl, performHealthProbe: false });
+    if (report.provider.credentialConfigured) {
+      const kind = options.credentialRef.store === "config" || options.credentialRef.store === "protected-config"
+        ? "config"
+        : options.credentialRef.store === "env" ? "env" : "native";
+      const store = require("../lib/credential-store").createCredentialStore(kind, { home: options.home, service: options.credentialRef.service, account: options.credentialRef.account, path: options.credentialRef.path, envVar: options.credentialRef.variable });
+      credential = store.get(options.credentialRef);
+    }
+  }
+  try {
+    const url = mode === "openrouter-direct" ? (options.openrouterUrl || DEFAULT_OPENROUTER_URL) : (options.gatewayUrl || DEFAULT_GATEWAY_URL);
+    const probe = await defaultHealthProbe({ url, mode, credential });
+    if (probe.statusCode === 401 || probe.statusCode === 403) throw new Error("Provider rejected the configured credential.");
+    if (!probe.ok) return [{ code: "PROVIDER_UNREACHABLE", severity: "warning", message: "Provider validation was unavailable; the structurally valid installation was retained." }];
+  } catch (error) {
+    if (/rejected the configured credential/i.test(error.message)) throw error;
+    return [{ code: "PROVIDER_UNREACHABLE", severity: "warning", message: "Provider validation was unavailable; the structurally valid installation was retained." }];
+  }
+  return [];
+}
+
+/* Human progress follows the sanitized plan on interactive terminals. JSON
+   mode reserves stdout for one document and optionally streams NDJSON to stderr. */
+function createProgressReporter(args = {}) {
+  if (args.quiet === true) return () => {};
+  if (args.json === true) return args.verbose === true ? (event) => process.stderr.write(`${JSON.stringify(event)}\n`) : () => {};
+  if (args.verbose !== true && !process.stdout.isTTY) return () => {};
+  return (event) => {
+    if (event.event === "operation-start") console.log(`[${event.sequence}/${event.total}] ${event.phase}: ${event.operationId}`);
+    else if (event.event === "operation-complete") console.log(`  ✓ ${event.operationId}`);
+    else if (event.event === "operation-rolled-back") console.log(`  ↩ ${event.operationId}`);
+    else if (event.event === "complete") console.log(event.status === "completed" ? "Installation steps complete." : "Installation steps failed.");
+  };
+}
+
 /* Resolves which LLM provider to configure from flags first (for scripted/CI
    use), falling back to an interactive menu only when nothing on the command
    line already decided it.
@@ -206,24 +296,24 @@ async function resolveProviderOptions(args, rl) {
   }
   const byokKeyFlag = args["byok-key"] || args.byokKey;
   if (explicit === "gateway-byok" || explicit === "openrouter-direct" || byokKeyFlag) {
-    const byokKey = byokKeyFlag || await askRequired(rl, "Your OpenRouter API key (sk-or-...): ");
+    const byokKey = byokKeyFlag || await askSecretRequired(rl, "Your OpenRouter API key (sk-or-...): ");
     const modelFlag = args["byok-model"] ?? args.byokModel;
     const byokModel = modelFlag !== undefined
       ? String(modelFlag).trim()
       : byokKeyFlag
         ? ""
-        : await askOptional(rl, "OpenRouter model ID (optional; Enter for gateway default): ");
+        : await askOptional(rl, explicit === "gateway-byok" ? "OpenRouter model ID (optional; Enter for gateway default): " : "OpenRouter model ID (optional; Enter for OpenRouter default): ");
+    const provider = explicit === "gateway-byok" ? "gateway-byok" : "openrouter-direct";
     return {
-      provider: explicit === "openrouter-direct" ? "openrouter-direct" : "gateway-byok",
+      provider,
       credentialStore,
-      gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL,
-      openrouterUrl: args["openrouter-url"] || args.openrouterUrl,
+      ...(provider === "gateway-byok" ? { gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL } : { openrouterUrl: args["openrouter-url"] || args.openrouterUrl || DEFAULT_OPENROUTER_URL }),
       byokKey,
       byokModel,
     };
   }
-  if (explicit === "gateway-token" || args.token || process.env.LLM_GATEWAY_TOKEN) {
-    const gatewayToken = args.token || process.env.LLM_GATEWAY_TOKEN || await askRequired(rl, "Gateway access token: ");
+  if (explicit === "gateway-token" || args.token) {
+    const gatewayToken = args.token || process.env.LLM_GATEWAY_TOKEN || await askSecretRequired(rl, "Gateway access token: ");
     return {
       provider: args.provider === "gateway" ? "gateway" : "gateway-token",
       credentialStore,
@@ -241,20 +331,20 @@ function normalizeCredentialStore(value) {
 }
 
 async function promptForProviderInteractive(args, rl) {
-  console.log("How should the LLM provider be configured?");
-  console.log("  1. Gateway access token - shared infrastructure, requires an approved token, 20 calls/day by default");
-  console.log("  2. Your own OpenRouter key - unlimited usage, billed to your account, NO token needed at all");
-  console.log("  3. Local LLM only - your own OpenAI-compatible endpoint, no token, nothing leaves your machine");
-  console.log("  4. Skip for now (configure later with `token-optimizer config`)");
+  writePromptLine(rl, "How should the LLM provider be configured?");
+  writePromptLine(rl, "  1. Gateway access token - shared infrastructure, requires an approved token, 20 calls/day by default");
+  writePromptLine(rl, "  2. Your own OpenRouter key - unlimited usage, billed to your account, NO token needed at all");
+  writePromptLine(rl, "  3. Local LLM only - your own OpenAI-compatible endpoint, no token, nothing leaves your machine");
+  writePromptLine(rl, "  4. Skip for now (configure later with `token-optimizer config`)");
   const answer = (await ask(rl, "Choice [1-4]: ")).trim();
 
   if (answer === "2") {
-    const byokKey = await askRequired(rl, "Your OpenRouter API key (sk-or-...): ");
-    const byokModel = await askOptional(rl, "OpenRouter model ID (optional; Enter for gateway default): ");
-    console.log("No proxy token needed: calls are billed to your OpenRouter account, unlimited.");
+    const byokKey = await askSecretRequired(rl, "Your OpenRouter API key (sk-or-...): ");
+    const byokModel = await askOptional(rl, "OpenRouter model ID (optional; Enter for OpenRouter default): ");
+    writePromptLine(rl, "No proxy token needed: calls are billed to your OpenRouter account, unlimited.");
     return {
       provider: "openrouter-direct",
-      openrouterUrl: args["openrouter-url"] || args.openrouterUrl || "https://openrouter.ai/api/v1",
+      openrouterUrl: args["openrouter-url"] || args.openrouterUrl || DEFAULT_OPENROUTER_URL,
       gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL,
       byokKey,
       credentialStore: args.credentialStore || "native",
@@ -264,13 +354,13 @@ async function promptForProviderInteractive(args, rl) {
   if (answer === "3") {
     const localApiUrl = (await ask(rl, `Local LLM endpoint [${DEFAULT_LOCAL_LLM_URL}]: `)).trim() || DEFAULT_LOCAL_LLM_URL;
     const localModel = (await ask(rl, `Local LLM model name [${DEFAULT_LOCAL_LLM_MODEL}]: `)).trim() || DEFAULT_LOCAL_LLM_MODEL;
-    console.log("No token needed. Make sure an OpenAI-compatible endpoint is running and reachable at that URL.");
+    writePromptLine(rl, "No token needed. Make sure an OpenAI-compatible endpoint is running and reachable at that URL.");
     return { provider: "local", localApiUrl, localModel };
   }
   if (answer === "4") {
     return { provider: "skip" };
   }
-  const gatewayToken = await askRequired(rl, "Gateway access token: ");
+  const gatewayToken = await askSecretRequired(rl, "Gateway access token: ");
   return { provider: "gateway", gatewayToken, credentialStore: args.credentialStore || "native", gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL };
 }
 
@@ -392,13 +482,37 @@ function ask(rl, prompt) {
   return new Promise((resolve) => rl.question(prompt, resolve));
 }
 
+function writePromptLine(rl, message) {
+  (rl?.output || process.stdout).write(`${message}\n`);
+}
+
 async function askRequired(rl, prompt) {
   while (true) {
     const answer = (await ask(rl, prompt)).trim();
     if (answer) {
       return answer;
     }
-    console.log("This value is required.");
+    writePromptLine(rl, "This value is required.");
+  }
+}
+
+/* TTY credential entry suppresses readline echo while preserving injectable
+   non-terminal readers used by automation and tests. */
+async function askSecretRequired(rl, prompt) {
+  if (!rl?.output || typeof rl._writeToOutput !== "function") return askRequired(rl, prompt);
+  while (true) {
+    const original = rl._writeToOutput;
+    let promptPending = true;
+    rl._writeToOutput = (value) => {
+      if (!promptPending) return;
+      promptPending = false;
+      original.call(rl, value);
+    };
+    let answer;
+    try { answer = await ask(rl, prompt); }
+    finally { rl._writeToOutput = original; rl.output.write("\n"); }
+    if (answer.trim()) return answer.trim();
+    writePromptLine(rl, "This value is required.");
   }
 }
 
@@ -410,15 +524,15 @@ function printHelp() {
   console.log(`Usage:
   npx @softawarest/token-optimizer-installer [install] [options]
   token-optimizer install --clients opencode,cursor
-  token-optimizer install --dry-run [--json]
+  token-optimizer install --dry-run [--json] [--verbose|--quiet]
   token-optimizer install --migrate [--dry-run --json]
   token-optimizer install --local
   token-optimizer config --token <token>
   token-optimizer defaults --clients claude,codex,opencode
   token-optimizer status [--json] [--strict] [--workspace <absolute-path>]
   token-optimizer doctor [--json] [--strict] [--workspace <absolute-path>]
-  token-optimizer repair [--home <path>] [--dry-run]
-  token-optimizer uninstall [--home <path>] [--dry-run]
+  token-optimizer repair [--home <path>] [--dry-run] [--verbose|--quiet]
+  token-optimizer uninstall [--home <path>] [--dry-run] [--verbose|--quiet]
   token-optimizer uninstall --dry-run
   token-optimizer logs status|prune|purge --workspace <absolute-path>
 
@@ -438,7 +552,7 @@ prompts for one of three providers, plus a skip option:
            with \`token-optimizer config\`.
 
 Options:
-  --provider <mode>            gateway, byok, local, or skip. Overrides interactive prompting.
+  --provider <mode>            gateway, byok (direct OpenRouter), local, or skip. Overrides prompting.
   --migrate                    Detect v1 state, back it up privately, and migrate transactionally.
   --credential-store <kind>    native (default), env, or config. env/config are explicit plaintext opt-ins.
   --token <token>               Gateway access token. Defaults to LLM_GATEWAY_TOKEN. Implies --provider gateway.
@@ -451,8 +565,8 @@ Options:
   --clients <list>             detected, all, claude, codex, antigravity, opencode, cursor.
   --cursor-project <path>      Copy Cursor default-on rule into a project.
   --no-defaults                Skip global default-on instruction writes.
-  --skip-client-commands       Copy marketplace/plugin assets but do not invoke client CLIs.
-  --skip-launchctl             Do not write macOS GUI-session gateway env values.
+  --skip-client-commands       Do not invoke external client CLIs; launcher runtime validation still runs.
+  --skip-launchctl             Do not write macOS GUI-session provider env values.
   --skip-update-check          Do not check npm for a newer installer version.
 `);
 }
@@ -477,9 +591,14 @@ module.exports = {
   resolveProviderOptions,
   promptForProviderInteractive,
   parseArgs,
+  createProgressReporter,
+  preservedProviderOptions,
+  shouldPreserveInstalledProvider,
+  validateProviderBeforeMutation,
   checkForUpdate,
   fetchLatestVersion,
   compareVersions,
   printInspection,
+  askSecretRequired,
   main,
 };

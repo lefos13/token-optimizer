@@ -8,7 +8,7 @@ const root = path.resolve(__dirname, '..', '..', '..');
 const releaseVersion = JSON.parse(
   fs.readFileSync(path.join(root, 'package.json'), 'utf8'),
 ).version;
-assert.equal(releaseVersion, '2.0.2');
+assert.equal(releaseVersion, '2.0.5');
 const generators = [
   'generate-plugin-antigravity.js',
   'generate-plugin-claude.js',
@@ -40,6 +40,8 @@ test('Codex marketplace configuration forwards the OpenRouter BYOK credentials',
   const envVars = source.match(/env_vars:\s*\[([\s\S]*?)\]/)?.[1] || '';
   assert.match(envVars, /OPENROUTER_BYOK_KEY/);
   assert.match(envVars, /OPENROUTER_BYOK_MODEL/);
+  assert.match(envVars, /OPENROUTER_MODEL/);
+  assert.match(envVars, /OPENROUTER_API_URL/);
 });
 
 test('generated server bundles include every runtime module required by llm.js', () => {

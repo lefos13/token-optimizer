@@ -20,7 +20,7 @@ const MANAGED_ENV_KEYS = [
 ];
 /* New explicit-mode metadata is additive so callers relying on the v1 key
    list continue to work while migrations can persist mode and references. */
-const PROVIDER_META_KEYS = ["TOKEN_OPTIMIZER_PROVIDER_MODE", "TOKEN_OPTIMIZER_CREDENTIAL_REF", "OPENROUTER_API_KEY"];
+const PROVIDER_META_KEYS = ["TOKEN_OPTIMIZER_PROVIDER_MODE", "TOKEN_OPTIMIZER_CREDENTIAL_REF", "OPENROUTER_API_KEY", "OPENROUTER_API_URL", "OPENROUTER_MODEL"];
 const ALL_MANAGED_ENV_KEYS = [...MANAGED_ENV_KEYS, ...PROVIDER_META_KEYS];
 const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
 const DEFAULT_LOCAL_LLM_URL = "http://localhost:8080/v1";

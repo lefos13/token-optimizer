@@ -20,12 +20,18 @@ original arguments. Skip this with `--skip-update-check` or
 `TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK=1`.
 
 The installer copies the MCP server/plugin assets into stable user-owned
-locations, prompts for how to configure the LLM provider, writes client MCP
+locations, prompts for how to configure the LLM provider on a fresh install,
+writes client MCP
 config, and turns on default-on usage where the client supports it.
 **Restart the affected client after installation.**
 
-Re-running the installer is always safe — it refreshes Token Optimizer to the
-current version and reapplies your provider configuration.
+Re-running the installer performs a transactional update to the current
+version. It preserves usable provider settings and user-edited files, converges each
+client to one supported registration, and removes older installer-owned
+copies. If a required step fails, the previous working installation is
+restored. A stale environment variable or inaccessible saved credential does
+not count as a usable installation and cannot suppress the provider menu.
+Restart affected clients after a successful update.
 
 Installation also creates `~/.config/token-optimizer/config.json` with the
 recommended `standard` execution profile when no profile is already selected.
@@ -35,8 +41,10 @@ chaining, redirection, destructive commands, and sensitive paths.
 
 ## Choosing a provider
 
-**A gateway/proxy token is not required** to use this tool. With no provider
-flags, the installer prompts for one of three providers, plus a skip option:
+**A gateway/proxy token is not required** to use this tool. On a fresh install
+with no provider flags, the installer prompts for one of three providers, plus
+a skip option. A normal update preserves a usable installed choice; run
+`config` or pass a provider flag to change it:
 
 | Mode | Token needed? | Who pays for inference? | Limit |
 | --- | --- | --- | --- |
@@ -72,13 +80,14 @@ With no `--clients` option, the installer targets detected clients. Use
 
 ## What gets installed, per client
 
-- **Claude Code:** adds the packaged marketplace plugin (or, if the `claude`
+- **Claude Code:** keeps one current marketplace plugin (or, if the `claude`
   CLI isn't available, a `~/.claude/skills/token-optimizer/` fallback), writes
   `~/.claude/settings.json` and `~/.claude/CLAUDE.md`.
-- **Codex:** registers the bundled server in `~/.codex/config.toml` and copies
+- **Codex:** uses a direct bundled-server registration in
+  `~/.codex/config.toml` and copies
   the skill into `~/.codex/skills/token-optimizer/`.
-- **Antigravity:** copies the plugin into
-  `~/.gemini/config/plugins/token-optimizer` and writes `~/.gemini/GEMINI.md`.
+- **Antigravity:** uses one global direct MCP registration, copies the current
+  server assets, and writes `~/.gemini/GEMINI.md`.
 - **OpenCode:** copies the server and skill into `~/.config/opencode/` and
   writes `~/.config/opencode/opencode.jsonc` / `AGENTS.md`.
 - **Cursor:** copies the server into `~/.cursor/token-optimizer-server` and
@@ -90,6 +99,9 @@ On macOS, provider settings are also mirrored into your GUI-session
 environment (so Dock/Finder/Spotlight-launched clients see them too) and
 persisted across reboots via a LaunchAgent. Pass `--skip-launchctl` to skip
 this.
+
+`--skip-client-commands` suppresses external Claude/Codex client CLI calls but
+does not skip the installer-owned launcher bootstrap and dependency validation.
 
 Credential-bearing providers default to your OS's native credential store
 (Keychain / Windows Credential Manager / Secret Service). Use
@@ -124,11 +136,19 @@ npx @softawarest/token-optimizer-installer uninstall --dry-run
 
 Every mutating command supports `--dry-run` to preview exactly what would
 change before anything happens; add `--json` for machine-readable output.
+Interactive terminals show phase progress by default. Use `--verbose` for
+every operation or `--quiet` for warnings and the final result. JSON mode
+writes one final document to stdout; `--verbose --json` sends sanitized NDJSON
+progress to stderr.
 `status` is read-only and makes no network call. `doctor` additionally
 verifies your provider is reachable and exits non-zero on problems (`2` for
 warnings with `--strict`). `repair` fixes exactly what `doctor` flagged.
-`uninstall` removes only what this installer owns, preserves any files you've
-edited yourself, and rolls back cleanly if it can't finish.
+`uninstall` removes only what this installer owns, including generated runtime
+caches, recognized stale marketplace data, and managed macOS GUI-session
+provider values. It preserves unrelated client settings and files you've
+edited yourself, and rolls back cleanly if it can't finish. Install and repair
+use the same ownership rules: unrecognized or modified conflicts are retained
+and reported instead of being overwritten or deleted.
 
 Raw command logs are managed separately with
 `token-optimizer logs status|prune|purge --workspace <absolute-path>`.

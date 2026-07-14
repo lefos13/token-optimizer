@@ -7,10 +7,12 @@ const { registerPlan, applyChangePlan, defaultAdapters } = require("./apply-plan
 const { writeManifest, readManifest } = require("./manifest");
 const crypto = require("crypto");
 const { createCredentialStore } = require("./credential-store");
+const { marketplaceLocations, marketplaceManifest } = require("./marketplace-locations");
 
 const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
 const DEFAULT_LOCAL_LLM_URL = "http://localhost:8080/v1";
 const DEFAULT_LOCAL_LLM_MODEL = "local-model";
+const DEFAULT_OPENROUTER_URL = "https://openrouter.ai/api/v1";
 /* Every env key installers may write into a client's MCP config. A provider
    mode (gateway / byok / local / skip) always yields a full values object
    across all of these keys so registering the MCP server never requires
@@ -26,6 +28,8 @@ const MANAGED_ENV_KEYS = [
   "LOCAL_LLM_API_URL",
   "LOCAL_LLM_MODEL",
   "OPENROUTER_API_KEY",
+  "OPENROUTER_API_URL",
+  "OPENROUTER_MODEL",
 ];
 
 function emptyManagedValues() {
@@ -72,7 +76,8 @@ function buildProviderValues(options) {
       throw new Error("byokKey is required for provider 'openrouter-direct'");
     }
     if (!options.credentialRef) values.OPENROUTER_API_KEY = options.openrouterKey || options.byokKey;
-    values.LLM_GATEWAY_URL = options.openrouterUrl || "https://openrouter.ai/api/v1";
+    values.OPENROUTER_MODEL = String(options.byokModel || "").trim();
+    values.OPENROUTER_API_URL = options.openrouterUrl || DEFAULT_OPENROUTER_URL;
   } else if (provider === "local") {
     values.LOCAL_LLM_API_URL = options.localApiUrl || "";
     values.LOCAL_LLM_MODEL = options.localModel || "";
@@ -85,7 +90,7 @@ function normalizeProviderChoice(provider) {
     return null;
   }
   const normalized = String(provider).trim().toLowerCase();
-  const aliases = { gateway: "gateway-token", byok: "gateway-byok", direct: "openrouter-direct" };
+  const aliases = { gateway: "gateway-token", byok: "openrouter-direct", direct: "openrouter-direct" };
   const canonical = aliases[normalized] || normalized;
   return ["gateway-token", "gateway-byok", "openrouter-direct", "local", "skip"].includes(canonical) ? canonical : null;
 }
@@ -93,7 +98,7 @@ function normalizeProviderChoice(provider) {
 /* Callers that don't pass an explicit provider get one inferred from which
    values they supplied, so existing gatewayToken-only call sites keep working. */
 function inferProvider(options) {
-  if (options.byokKey) return "gateway-byok";
+  if (options.byokKey) return "openrouter-direct";
   if (options.gatewayToken) return "gateway-token";
   if (options.localApiUrl || options.localModel) return "local";
   return "skip";
@@ -257,7 +262,9 @@ function planInstallation(options = {}) {
     { id: `install:${client}:copy`, kind: "copy-tree", phase: "copy", client, path: paths.home, targets: clientTargets(client, paths, options) },
     { id: `install:${client}:config`, kind: "managed-block", phase: "config", client, path: paths.home },
     { id: `install:${client}:service`, kind: "platform-service", phase: "service", client, platform: process.platform },
+    { id: `install:${client}:validate`, kind: "client-command", phase: "validation", client, command: "bootstrap-runtime" },
     { id: `install:${client}:command`, kind: "client-command", phase: "command", client, command: "register" },
+    { id: `install:${client}:cleanup`, kind: "remove-file", phase: "cleanup", client, path: paths.home, targets: cleanupTargets(client, paths) },
   ]),
     ...(runtime.superseded ? [{ id: "install:provider:cleanup", kind: "credential", phase: "cleanup", provider: runtime.provider, reference: runtime.superseded }] : []),
   ];
@@ -266,9 +273,14 @@ function planInstallation(options = {}) {
     if (operation.kind === "credential") {
       return executeCredentialOperation(runtime, operation);
     }
+    if (operation.phase === "validation") { bootstrapClientRuntime(operation.client, { ...runtime.options, ...paths, version: plan.version }); return; }
+    if (operation.phase === "service") { applyLaunchctlValues(buildProviderValues(runtime.options), runtime.options); return; }
+    if (operation.phase === "cleanup") return { details: convergeClientInstallations(operation.client, { ...runtime.options, ...paths, version: plan.version }) };
     if (operation.phase !== "copy") return;
     if (operation.id === "install:execution-policy") { writeExecutionPolicy(paths.home); return; }
-    const installOptions = { ...runtime.options, ...paths };
+    /* Client copy/configuration is staged without mutating GUI-session state;
+       the explicit service phase owns that external state and its rollback. */
+    const installOptions = { ...runtime.options, ...paths, skipLaunchctl: true };
     if (operation.client === "opencode") installOpenCode(installOptions);
     else if (operation.client === "cursor") installCursor(installOptions);
     else if (operation.client === "antigravity") installAntigravity(installOptions);
@@ -279,11 +291,46 @@ function planInstallation(options = {}) {
     if (operation.kind === "credential") {
       return prepareCredentialOperation(runtime, operation);
     }
+    if (operation.phase === "service") return prepareLaunchctlOperation(runtime.options);
     const boundaries = [paths.home, ...(options.cursorProjects || []).map((project) => path.resolve(project))];
     const before = snapshotTargets(operation.targets || [], boundaries);
     return { inverse: () => restoreTargets(before), commit: () => discardSnapshot(before) };
   }, runtime);
   return plan;
+}
+
+/* Runtime validation exercises the packaged launcher before registrations and
+   stale assets are committed. The repair-only mode resolves dependencies but
+   never starts a long-lived MCP process. */
+function bootstrapClientRuntime(client, options) {
+  const claudeLocation = marketplaceLocations(options.home).find((item) => item.client === "claude" && item.layout === "versioned");
+  const claudeInstalled = claudeLocation && path.join(claudeLocation.root, String(options.version || require("../package.json").version));
+  const claudeFallback = path.join(options.home, ".claude", "skills", "token-optimizer", "server", "start.js");
+  const claudeLauncher = claudeInstalled && marketplaceManifest(claudeLocation, claudeInstalled) && fs.existsSync(path.join(claudeInstalled, "server", "start.js"))
+    ? path.join(claudeInstalled, "server", "start.js")
+    : fs.existsSync(claudeFallback) ? claudeFallback : path.join(options.installRoot, "plugin", "claude", "server", "start.js");
+  const launchers = {
+    claude: claudeLauncher,
+    codex: path.join(options.installRoot, "plugin", "codex", "server", "start.js"),
+    antigravity: path.join(options.home, ".gemini", "config", "plugins", "token-optimizer", "server", "start.js"),
+    opencode: path.join(options.home, ".config", "opencode", "token-optimizer-server", "start.js"),
+    cursor: path.join(options.home, ".cursor", "token-optimizer-server", "start.js"),
+  };
+  const launcher = launchers[client];
+  if (!launcher || !fs.existsSync(launcher)) throw new Error(`Missing ${client} launcher before validation`);
+  execFileSync(process.execPath, [launcher], { stdio: "ignore", env: { ...process.env, TOKEN_OPTIMIZER_REPAIR_ONLY: "1" } });
+}
+
+/* Capture the current GUI-session provider values before the explicit service
+   phase so a later client failure restores both launchctl and its LaunchAgent. */
+function prepareLaunchctlOperation(options) {
+  if (options.skipLaunchctl || process.platform !== "darwin") return { inverse: () => {} };
+  const previous = {};
+  for (const key of MANAGED_ENV_KEYS) {
+    try { previous[key] = String(execFileSync("launchctl", ["getenv", key], { encoding: "utf8" })).trim(); }
+    catch (_) { previous[key] = ""; }
+  }
+  return { inverse: () => applyLaunchctlValues(previous, { ...options, skipLaunchctl: false }) };
 }
 
 function installSelectedClients(options) {
@@ -343,7 +390,7 @@ function persistProviderCredentialOwnership(options = {}, result = {}) {
   if (!result.credentialRef || !result.credentialOwned || result.credentialRef.store === "env") return;
   writeManifest(paths.home, existing
     ? { ...existing, credentials: [{ reference: result.credentialRef, ownership: "installer" }] }
-    : { schemaVersion: 2, roots: [paths.installRoot], assetRoots: [], managedBlocks: [], credentials: [{ reference: result.credentialRef, ownership: "installer" }], files: [] });
+    : { schemaVersion: 3, roots: [paths.installRoot], assetRoots: [], managedBlocks: [], credentials: [{ reference: result.credentialRef, ownership: "installer" }], files: [] });
 }
 
 /* Capture only installer-owned plugin trees after a successful install. The
@@ -359,6 +406,7 @@ function persistInstallManifest(options = {}, clients = []) {
     codex: [[path.join(paths.home, ".codex", "skills", "token-optimizer"), path.join(paths.assetsRoot, "plugin", "codex", "skills", "token-optimizer")], [path.join(paths.installRoot, "plugin", "codex"), path.join(paths.assetsRoot, "plugin", "codex")]],
   }[client] || [])).filter(([root]) => fs.existsSync(root));
   const roots = mappings.map(([root]) => root);
+  roots.push(paths.installRoot, paths.backupRoot);
   const files = [];
   const walk = (directory, sourceRoot) => {
     let entries; try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch (_) { return; }
@@ -368,7 +416,7 @@ function persistInstallManifest(options = {}, clients = []) {
       if (entry.isDirectory() && !entry.isSymbolicLink()) {
         if (!["node_modules", ".data", ".cache", "cache", "logs", ".codex-local-test-runs"].includes(entry.name)) walk(file, source);
       } else if (entry.isFile() && fs.existsSync(source) && !/\.(?:log|tmp|cache)$/i.test(entry.name)) {
-        files.push({ path: file, source, sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"), ownership: "installer" });
+        files.push({ path: file, assetPath: path.relative(paths.assetsRoot, source), sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"), ownership: "installer" });
       }
     }
   };
@@ -395,29 +443,43 @@ function persistInstallManifest(options = {}, clients = []) {
     antigravity: [path.join(paths.home, ".gemini", "config", "mcp_config.json")], opencode: [path.join(paths.home, ".config", "opencode", "opencode.jsonc")],
     cursor: [path.join(paths.home, ".cursor", "mcp.json")],
   };
-  const registrations = clients.map((client) => { const paths = (registrationPaths[client] || []).filter((file) => fs.existsSync(file)); return { client, paths, canonicalPath: paths[0], template: paths[0] ? captureRegistrationTemplate(paths[0], client) : null, ownership: "installer" }; })
+  /* Claude's settings file carries provider environment only; the marketplace
+     lifecycle record is its actual registration and must not be duplicated. */
+  const registrations = clients.filter((client) => client !== "claude").map((client) => { const paths = (registrationPaths[client] || []).filter((file) => fs.existsSync(file)); return { client, paths, canonicalPath: paths[0], template: paths[0] ? captureRegistrationTemplate(paths[0], client) : null, ownership: "installer" }; })
     .concat((options.lifecycleRegistrations || []).map((registration) => ({ ...registration, ownership: "installer" })));
   const launchAgent = path.join(paths.home, "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`);
   const platformServices = process.platform === "darwin" && fs.existsSync(launchAgent)
     ? [{ platform: "darwin", service: LAUNCH_AGENT_LABEL, path: launchAgent, content: fs.readFileSync(launchAgent, "utf8"), managedEnv: buildProviderValues(options), ownership: "installer" }]
     : [];
-  writeManifest(paths.home, { schemaVersion: 2, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [paths.assetsRoot], managedBlocks, credentials, registrations, platformServices, files });
+  const cleanupPaths = [path.join(paths.installRoot, ".agents"), path.join(paths.installRoot, ".claude-plugin"), paths.backupRoot];
+  for (const [root] of mappings) {
+    cleanupPaths.push(path.join(root, ".data"), path.join(root, "server", ".data"));
+  }
+  writeManifest(paths.home, { schemaVersion: 3, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [], cleanupPaths: [...new Set(cleanupPaths.map((entry) => path.resolve(entry)))], managedBlocks, credentials, registrations, platformServices, files });
 }
 
 function captureRegistrationTemplate(file, client) { const text = fs.readFileSync(file, "utf8"); if (client === "codex") return text.match(/^\[mcp_servers\.(?:"?token[_-]optimizer"?)\]\s*$[\s\S]*?(?=^\[(?!mcp_servers\.token_optimizer\.env)|(?![\s\S]))/m)?.[0] || null; try { const data = JSON.parse(text.replace(/\/\*[\s\S]*?\*\/|(^|[^:])\/\/.*$/gm, "$1").replace(/,\s*([}\]])/g, "$1")); const container = client === "opencode" ? data.mcp : data.mcpServers; return container?.token_optimizer || container?.["token-optimizer"] || null; } catch (_) { return null; } }
 
 function clientTargets(client, paths, options = {}) {
   const roots = {
-    opencode: [path.join(paths.home, ".config", "opencode")],
+    opencode: [path.join(paths.home, ".config", "opencode", "token-optimizer-server"), path.join(paths.home, ".config", "opencode", "skills", "token-optimizer"), path.join(paths.home, ".config", "opencode", "opencode.jsonc"), path.join(paths.home, ".config", "opencode", "AGENTS.md")],
     cursor: [
-      path.join(paths.home, ".cursor"),
-      ...(options.cursorProjects || []).map((project) => path.join(path.resolve(project), ".cursor")),
+      path.join(paths.home, ".cursor", "token-optimizer-server"),
+      path.join(paths.home, ".cursor", "mcp.json"),
+      ...(options.cursorProjects || []).map((project) => path.join(path.resolve(project), ".cursor", "rules", "token-optimizer.mdc")),
     ],
-    antigravity: [path.join(paths.home, ".gemini")],
-    claude: [path.join(paths.home, ".claude"), paths.installRoot],
-    codex: [path.join(paths.home, ".codex"), paths.installRoot],
+    antigravity: [path.join(paths.home, ".gemini", "config", "plugins", "token-optimizer"), path.join(paths.home, ".gemini", "config", "mcp_config.json"), path.join(paths.home, ".gemini", "GEMINI.md")],
+    claude: [path.join(paths.home, ".claude", "skills", "token-optimizer"), path.join(paths.home, ".claude", "settings.json"), path.join(paths.home, ".claude", "CLAUDE.md"), paths.installRoot],
+    codex: [path.join(paths.home, ".codex", "skills", "token-optimizer"), path.join(paths.home, ".codex", "config.toml"), path.join(paths.home, ".codex", "AGENTS.md"), paths.installRoot],
   };
   return roots[client] || [];
+}
+
+/* Cleanup snapshots cover only external versioned state. Client assets and
+   configs are already protected by the staging snapshot, while copying a live
+   npm dependency cache can race with transient install directories. */
+function cleanupTargets(client, paths) {
+  return marketplaceLocations(paths.home).filter((item) => item.client === client && item.layout === "versioned").map((item) => item.root);
 }
 
 /*
@@ -529,6 +591,7 @@ function installAntigravity(options) {
   if (options.defaults !== false) {
     applyDefaultDirectives({ ...options, clients: ["gemini"] });
   }
+  fs.rmSync(path.join(pluginDest, "mcp_config.json"), { force: true });
 }
 
 function installClaude(options) {
@@ -568,17 +631,8 @@ function installCodex(options) {
   if (fs.existsSync(marketplaceSrc)) {
     copyFile(marketplaceSrc, path.join(options.installRoot, ".agents", "plugins", "marketplace.json"));
   }
-  /* Marketplace registration keeps the plugin available for Codex skill
-     discovery. The direct server registration remains authoritative because it
-     carries the installer-managed provider environment into the MCP process. */
-  const marketplaceAdded = tryClientCommand("codex", ["plugin", "marketplace", "add", options.installRoot], options);
-  if (marketplaceAdded) {
-    /* Codex caches installed marketplace plugins by version. Removing is
-       harmless on first install and forces a fresh cache before adding. */
-    tryClientCommand("codex", ["plugin", "remove", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options);
-    tryClientCommand("codex", ["plugin", "add", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options);
-    (options.lifecycleRegistrations ||= []).push({ client: "codex", kind: "marketplace", remove: ["plugin", "remove", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], restore: ["plugin", "add", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME] });
-  }
+  /* Codex uses one direct MCP registration. Skill discovery is provided by the
+     copied skill, avoiding a second marketplace-owned MCP and version cache. */
   const startJs = path.join(pluginDest, "server", "start.js");
   const configPath = path.join(options.home, ".codex", "config.toml");
   ensureDirectory(path.dirname(configPath));
@@ -595,6 +649,50 @@ function installCodex(options) {
   if (options.defaults !== false) {
     applyDefaultDirectives({ ...options, clients: ["codex"] });
   }
+}
+
+/* Exact marketplace manifests are the ownership proof for version cleanup.
+   Unknown directories are retained even when they sit below a familiar root. */
+function convergeClientInstallations(client, options) {
+  const locations = marketplaceLocations(options.home).filter((item) => item.client === client);
+  const currentVersion = String(options.version || require("../package.json").version);
+  const removedStale = [];
+  const preserved = [];
+  for (const location of locations) {
+    let entries = [];
+    try { entries = location.layout === "single" ? [""] : fs.readdirSync(location.root); } catch (_) { continue; }
+    for (const entry of entries) {
+      const installedPath = entry ? path.join(location.root, entry) : location.root;
+      const owned = marketplaceManifest(location, installedPath);
+      if (!owned) { preserved.push({ code: "USER_MODIFIED_MARKETPLACE_ENTRY", client, path: installedPath }); continue; }
+      const version = String(owned.data.version || entry || "");
+      const remove = client === "codex" || (client === "claude" && version !== currentVersion);
+      if (remove) { fs.rmSync(installedPath, { recursive: true, force: true }); removedStale.push({ client, path: installedPath, version }); }
+    }
+  }
+  if (client === "codex") tryClientCommand("codex", ["plugin", "remove", "token-optimizer", "--marketplace", CODEX_MARKETPLACE_NAME], options);
+  if (client === "claude") {
+    /* A prior ownership manifest is sufficient proof to remove the direct
+       Claude registration that older installers managed. Unrelated MCP entries
+       and unowned configuration files remain untouched. */
+    const prior = readManifest(options.home);
+    for (const registration of (prior?.registrations || []).filter((item) => item.client === "claude" && item.ownership === "installer")) {
+      for (const configPath of registration.paths || []) {
+        let config; try { config = JSON.parse(fs.readFileSync(configPath, "utf8")); } catch (_) { continue; }
+        if (!config.mcpServers || (!config.mcpServers.token_optimizer && !config.mcpServers["token-optimizer"])) continue;
+        delete config.mcpServers.token_optimizer;
+        delete config.mcpServers["token-optimizer"];
+        fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+        removedStale.push({ client, path: configPath, version: "direct-registration" });
+      }
+    }
+    const current = locations.some((location) => location.layout === "versioned" && Boolean(marketplaceManifest(location, path.join(location.root, currentVersion))));
+    if (current) {
+      const fallback = path.join(options.home, ".claude", "skills", "token-optimizer");
+      if (fs.existsSync(fallback)) { fs.rmSync(fallback, { recursive: true, force: true }); removedStale.push({ client, path: fallback, version: "fallback" }); }
+    }
+  }
+  return { removedStale, preserved };
 }
 
 function applyGatewayConfig(options) {
@@ -675,24 +773,8 @@ function getGatewayTargets(home) {
       },
     },
     {
-      clients: ["gemini"],
+      clients: ["gemini", "antigravity"],
       filePath: path.join(home, ".gemini", "config", "mcp_config.json"),
-      readConfig: readJsonFile,
-      writeConfig: writeJsonFile,
-      matches: matchesClient,
-      applyValues(config, values) {
-        const next = config;
-        next.mcpServers = next.mcpServers || {};
-        next.mcpServers.token_optimizer = next.mcpServers.token_optimizer || {};
-        next.mcpServers.token_optimizer.command = "node";
-        next.mcpServers.token_optimizer.args = localTesterServerArgs;
-        next.mcpServers.token_optimizer.env = mergeManagedEnvValues(next.mcpServers.token_optimizer.env || {}, values);
-        return next;
-      },
-    },
-    {
-      clients: ["antigravity"],
-      filePath: path.join(home, ".gemini", "config", "plugins", "token-optimizer", "mcp_config.json"),
       readConfig: readJsonFile,
       writeConfig: writeJsonFile,
       matches: matchesClient,
@@ -911,14 +993,26 @@ function applyLaunchctlValues(values, options = {}) {
      stale credentials or model overrides in the GUI-session environment. The
      immediate setenv fixes the current login; the LaunchAgent makes it stick
      across reboots. */
-  for (const envKey of MANAGED_ENV_KEYS) {
-    if (values[envKey]) {
-      runLaunchctl(["setenv", envKey, values[envKey]], options);
-    } else {
-      runLaunchctl(["unsetenv", envKey], options);
+  if (shouldApplyCurrentSessionEnv(options)) {
+    for (const envKey of MANAGED_ENV_KEYS) {
+      if (values[envKey]) {
+        runLaunchctl(["setenv", envKey, values[envKey]], options);
+      } else {
+        runLaunchctl(["unsetenv", envKey], options);
+      }
     }
   }
   writePersistentLaunchAgent(values, options);
+}
+
+/* An explicit --home may target another user or an isolated fixture. Its
+   LaunchAgent belongs under that home, but the caller's live GUI environment
+   must remain untouched. State-file hooks intentionally model a GUI session. */
+function shouldApplyCurrentSessionEnv(options = {}) {
+  if (options.launchctlStatePath || process.env.LOCAL_OPTIMIZER_LAUNCHCTL_STATE_PATH) return true;
+  const targetHome = path.resolve(options.home || process.env.HOME || os.homedir());
+  const currentHome = path.resolve(options.currentHome || process.env.HOME || os.homedir());
+  return targetHome === currentHome;
 }
 
 /* Writes (or removes) the RunAtLoad LaunchAgent that re-applies the managed
@@ -1154,6 +1248,7 @@ module.exports = {
   DEFAULT_GATEWAY_URL,
   DEFAULT_LOCAL_LLM_URL,
   DEFAULT_LOCAL_LLM_MODEL,
+  DEFAULT_OPENROUTER_URL,
   MANAGED_ENV_KEYS,
   LAUNCH_AGENT_LABEL,
   emptyManagedValues,
@@ -1187,4 +1282,5 @@ module.exports = {
   configureMigratedClient,
   registerMigratedClient,
   applyLaunchctlValues,
+  shouldApplyCurrentSessionEnv,
 };

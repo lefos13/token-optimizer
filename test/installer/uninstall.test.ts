@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-const { planUninstall } = require('../../../packages/installer/lib/uninstall.js');
+const { planUninstall, discoverCleanupPaths } = require('../../../packages/installer/lib/uninstall.js');
 const { applyLifecyclePlan } = require('../../../packages/installer/lib/uninstall.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createRegistrationAdapter, createFilesystemMarketplaceAdapter, createServiceAdapter, removeRegistration, removeRegistrationIdentity, upsertJsonProperty } = require('../../../packages/installer/lib/lifecycle-adapters.js');
+const { createRegistrationAdapter, createFilesystemMarketplaceAdapter, createServiceAdapter, targetsCurrentHome, removeRegistration, removeRegistrationIdentity, cleanupInstallerMetadata, upsertJsonProperty } = require('../../../packages/installer/lib/lifecycle-adapters.js');
 
 test('uninstall emits a warning and preserves user-modified files', () => {
   const file = '/managed/user-edited';
@@ -13,6 +13,96 @@ test('uninstall emits a warning and preserves user-modified files', () => {
   const plan = planUninstall(manifest, { hash: () => 'user' });
   assert.equal(plan.operations.length, 0);
   assert.equal(plan.warnings[0].code, 'USER_MODIFIED_FILE');
+});
+
+test('uninstall removes declared generated caches and clears managed GUI environment', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-uninstall-generated-'));
+  const cache = path.join(home, '.managed', 'server', '.data');
+  fs.mkdirSync(cache, { recursive: true }); fs.writeFileSync(path.join(cache, 'runtime'), 'generated');
+  const manifest = { schemaVersion: 3, roots: [path.join(home, '.managed')], files: [], cleanupPaths: [cache], platformServices: [{ platform: 'darwin', service: 'fixture', path: path.join(home, 'agent.plist'), managedEnv: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'local', LOCAL_LLM_API_URL: 'http://localhost' }, ownership: 'installer' }] };
+  const plan = planUninstall(manifest, {}, { manifestPath: path.join(home, '.managed', 'manifest.json') });
+  assert.ok(plan.operations.some((operation: any) => operation.kind === 'remove-file' && operation.path === cache));
+  const service = plan.operations.find((operation: any) => operation.kind === 'platform-service');
+  assert.deepEqual([...service.envKeys].sort(), ['LOCAL_LLM_API_URL', 'TOKEN_OPTIMIZER_PROVIDER_MODE']);
+});
+
+test('uninstall rejects a declared cleanup path outside managed roots', () => {
+  const manifest = { schemaVersion: 3, roots: ['/managed'], files: [], cleanupPaths: ['/unrelated'] };
+  assert.throws(() => planUninstall(manifest), /cleanup path outside trusted roots/);
+});
+
+test('legacy cleanup ignores broad roots and unrecognized Gemini directories', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-uninstall-bounded-'));
+  const unrelated = path.join(home, '.claude');
+  const generated = path.join(home, '.cursor', 'token-optimizer-server');
+  const ambiguous = path.join(home, '.gemini', 'tmp', 'local-tester-mcp');
+  const backups = path.join(home, '.token-optimizer-mcp', 'backups');
+  fs.mkdirSync(ambiguous, { recursive: true }); fs.writeFileSync(path.join(ambiguous, 'user-file'), 'keep');
+  const paths = discoverCleanupPaths({ schemaVersion: 2, roots: [unrelated, generated], files: [] }, home);
+  assert.equal(paths.includes(path.join(unrelated, '.data')), false);
+  assert.equal(paths.includes(path.join(generated, '.data')), true);
+  assert.equal(paths.includes(ambiguous), false);
+  assert.equal(paths.includes(backups), true);
+});
+
+test('legacy cleanup removes only an exact generated Antigravity plugin descriptor', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-uninstall-antigravity-descriptor-'));
+  const file = path.join(home, '.gemini', 'config', 'plugins', 'token-optimizer', 'mcp_config.json'); fs.mkdirSync(path.dirname(file), { recursive: true });
+  const launcher = path.join(home, '.gemini', 'config', 'plugins', 'token-optimizer', 'server', 'start.js');
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: {} } } }));
+  assert.equal(discoverCleanupPaths({ schemaVersion: 2, roots: [], files: [] }, home).includes(file), true);
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher] }, unrelated: { command: 'keep' } } }));
+  assert.equal(discoverCleanupPaths({ schemaVersion: 2, roots: [], files: [] }, home).includes(file), false);
+});
+
+test('legacy cleanup removes exact generated marketplace catalogs and prunes empty cache roots', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-uninstall-marketplace-metadata-'));
+  const codex = path.join(home, '.token-optimizer', '.agents', 'plugins', 'marketplace.json');
+  const claude = path.join(home, '.token-optimizer', '.claude-plugin', 'marketplace.json');
+  fs.mkdirSync(path.dirname(codex), { recursive: true }); fs.mkdirSync(path.dirname(claude), { recursive: true });
+  fs.writeFileSync(codex, JSON.stringify({ name: 'Softaware-marketplace', plugins: [{ name: 'token-optimizer', source: { source: 'local', path: './plugin/codex' } }] }));
+  fs.writeFileSync(claude, JSON.stringify({ name: 'token-optimizer-marketplace', plugins: [{ name: 'token-optimizer', source: './plugin/claude' }] }));
+  const emptyCache = path.join(home, '.claude', 'plugins', 'cache', 'token-optimizer-marketplace', 'token-optimizer'); fs.mkdirSync(emptyCache, { recursive: true });
+  const plan = planUninstall({ schemaVersion: 3, roots: [path.join(home, '.token-optimizer')], files: [] }, {}, { home });
+  applyLifecyclePlan(plan);
+  assert.equal(fs.existsSync(codex), false); assert.equal(fs.existsSync(claude), false); assert.equal(fs.existsSync(emptyCache), false); assert.equal(fs.existsSync(path.join(home, '.token-optimizer')), false);
+});
+
+test('legacy cleanup preserves marketplace catalogs that contain unrelated entries', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-uninstall-custom-marketplace-metadata-'));
+  const codex = path.join(home, '.token-optimizer', '.agents', 'plugins', 'marketplace.json'); fs.mkdirSync(path.dirname(codex), { recursive: true });
+  fs.writeFileSync(codex, JSON.stringify({ name: 'Softaware-marketplace', plugins: [{ name: 'token-optimizer', source: { source: 'local', path: './plugin/codex' } }, { name: 'custom', source: './custom' }] }));
+  assert.equal(discoverCleanupPaths({ schemaVersion: 3, roots: [], files: [] }, home).includes(codex), false);
+});
+
+test('service uninstall unsets managed GUI values after unloading the agent', () => {
+  const calls: string[][] = [];
+  const adapter = createServiceAdapter({ execFileSync: (_command: string, args: string[]) => { calls.push(args); if (args[0] === 'print') throw Object.assign(new Error('not found'), { stderr: 'not found' }); return ''; } });
+  const operation = { kind: 'platform-service', service: 'fixture', path: '/missing/fixture.plist', envKeys: ['TOKEN_OPTIMIZER_PROVIDER_MODE', 'LOCAL_LLM_API_URL'] };
+  adapter.capture(operation); adapter.apply(operation);
+  assert.deepEqual(calls.filter((args) => args[0] === 'unsetenv').map((args) => args[1]).sort(), ['LOCAL_LLM_API_URL', 'TOKEN_OPTIMIZER_PROVIDER_MODE']);
+});
+
+test('alternate-home lifecycle service work never targets the caller GUI session', () => {
+  const targetHome = fs.mkdtempSync(path.join(os.tmpdir(), 'to-service-target-home-')); const currentHome = fs.mkdtempSync(path.join(os.tmpdir(), 'to-service-current-home-'));
+  assert.equal(targetsCurrentHome({ home: targetHome, currentHome }), false);
+  assert.equal(targetsCurrentHome({ home: currentHome, currentHome }), true);
+});
+
+test('installer metadata cleanup preserves comments, formatting, and unrelated values', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-uninstall-metadata-'));
+  const settings = path.join(home, 'settings.json');
+  const original = '{\n  // keep this comment\n  "env": { "TOKEN_OPTIMIZER_PROVIDER_MODE": "local", "USER_VALUE": "keep" },\n  "extraKnownMarketplaces": { "token-optimizer-marketplace": {}, "unrelated": {} },\n  "tail": true\n}\n';
+  fs.writeFileSync(settings, original); cleanupInstallerMetadata(settings); const next = fs.readFileSync(settings, 'utf8');
+  assert.match(next, /\/\/ keep this comment/); assert.match(next, /"USER_VALUE": "keep"/); assert.match(next, /"unrelated": \{\}/); assert.match(next, /"tail": true/); assert.doesNotMatch(next, /TOKEN_OPTIMIZER|token-optimizer-marketplace/);
+});
+
+test('installer metadata cleanup removes a final primitive value in an object', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-uninstall-metadata-tail-'));
+  const settings = path.join(home, 'settings.json');
+  fs.writeFileSync(settings, '{"env":{"USER_VALUE":"keep","LOCAL_LLM_MODEL":"remove"}}');
+  cleanupInstallerMetadata(settings);
+  assert.equal(fs.readFileSync(settings, 'utf8'), '{"env":{"USER_VALUE":"keep"}}');
 });
 
 test('uninstall removes only the managed directive block', () => {

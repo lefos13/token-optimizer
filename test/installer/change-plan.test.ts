@@ -61,3 +61,28 @@ test('apply commits prepared rollback snapshots after every operation succeeds',
   assert.equal(result.error, undefined);
   assert.equal(committed, true);
 });
+
+test('apply emits ordered sanitized progress events for success and rollback', () => {
+  const successPlan = plans.createChangePlan({}, [
+    { kind: 'write-file', id: 'write-config', phase: 'configure', path: '/managed/config.json' },
+  ]);
+  applyPlan.registerPlan(successPlan, () => undefined, () => ({ inverse: () => undefined }));
+  const successEvents: any[] = [];
+  const success = applyPlan.applyChangePlan(successPlan, { onProgress: (event: any) => successEvents.push(event) });
+  assert.equal(success.error, undefined);
+  assert.deepEqual(successEvents.map((event) => event.event), ['operation-start', 'operation-complete', 'complete']);
+  assert.equal(successEvents[0].phase, 'configure');
+  assert.equal(successEvents[0].sequence, 1);
+  assert.equal(successEvents[0].total, 1);
+  assert.equal(successEvents[0].path, '/managed/config.json');
+
+  const failedPlan = plans.createChangePlan({}, [
+    { kind: 'credential', id: 'credential', phase: 'credentials', provider: 'gateway', token: 'fixture-secret' },
+  ]);
+  applyPlan.registerPlan(failedPlan, () => { throw new Error('contains fixture-secret'); }, () => ({ inverse: () => undefined }));
+  const failedEvents: any[] = [];
+  const failed = applyPlan.applyChangePlan(failedPlan, { onProgress: (event: any) => failedEvents.push(event) });
+  assert.ok(failed.error);
+  assert.deepEqual(failedEvents.map((event) => event.event), ['operation-start', 'rollback-start', 'operation-rolled-back', 'complete']);
+  assert.doesNotMatch(JSON.stringify(failedEvents), /fixture-secret/);
+});

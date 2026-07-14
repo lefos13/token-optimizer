@@ -12,15 +12,34 @@ function applyChangePlan(plan, adapters = {}) {
   if (!plan || !Array.isArray(plan.operations)) throw new TypeError("invalid change plan");
   const registered = executions.get(plan);
   if (!adapters.applyOperation && !adapters.apply && registered?.executePlan) {
-    return registered.executePlan(plan);
+    return registered.executePlan(adapters);
   }
   const applied = [];
   const rolledBack = [];
   const manualRemediation = [];
   const inverses = [];
   const commits = [];
+  const operationResults = [];
+  /* Progress is derived only from the already-sanitized declarative plan. This
+     keeps callbacks useful for every lifecycle without exposing execution state. */
+  const notify = typeof adapters.onProgress === "function" ? adapters.onProgress : () => {};
+  const eventFor = (event, operation, sequence, status) => notify({
+    schemaVersion: 1,
+    event,
+    phase: operation?.phase || "apply",
+    sequence,
+    total: plan.operations.length,
+    operationId: operation?.id || operation?.kind,
+    kind: operation?.kind,
+    client: operation?.client,
+    path: operation?.path,
+    status,
+    message: operation ? `${status}: ${operation.id || operation.kind}` : `${status}: ${plan.action || "change plan"}`,
+  });
   try {
-    for (const operation of plan.operations) {
+    for (let index = 0; index < plan.operations.length; index += 1) {
+      const operation = plan.operations[index];
+      eventFor("operation-start", operation, index + 1, "running");
       const apply = adapters.applyOperation || adapters.apply;
       const execution = executions.get(plan);
       if (!apply && !execution) throw new Error("change plan is not registered for execution");
@@ -31,17 +50,21 @@ function applyChangePlan(plan, adapters = {}) {
       if (transaction && typeof transaction.commit === "function") commits.push({ operation, commit: transaction.commit });
       const result = apply ? apply(operation, plan) : execution?.execute(operation);
       applied.push(operation);
+      if (result && result.details) operationResults.push({ operationId: operation.id, ...result.details });
       if (result && typeof result.inverse === "function") inverses.push({ operation, inverse: result.inverse });
+      eventFor("operation-complete", operation, index + 1, "completed");
     }
     for (const entry of commits) {
       try { entry.commit(); }
       catch { manualRemediation.push(entry.operation); }
     }
-    return { applied, rolledBack, manualRemediation, installedClients: plan.clients ? [...plan.clients] : [], credentialRef: executions.get(plan)?.state?.credentialRef, credentialOwned: executions.get(plan)?.state?.credentialOwned, credentialOwnershipCleared: executions.get(plan)?.state?.credentialOwnershipCleared === true };
+    eventFor("complete", null, plan.operations.length, "completed");
+    return { applied, rolledBack, manualRemediation, operationResults, installedClients: plan.clients ? [...plan.clients] : [], credentialRef: executions.get(plan)?.state?.credentialRef, credentialOwned: executions.get(plan)?.state?.credentialOwned, credentialOwnershipCleared: executions.get(plan)?.state?.credentialOwnershipCleared === true };
   } catch (error) {
+    eventFor("rollback-start", applied[applied.length - 1] || plan.operations[applied.length], applied.length, "rolling-back");
     for (let index = inverses.length - 1; index >= 0; index -= 1) {
       const entry = inverses[index];
-      try { entry.inverse(); rolledBack.push(entry.operation); }
+      try { entry.inverse(); rolledBack.push(entry.operation); eventFor("operation-rolled-back", entry.operation, index + 1, "rolled-back"); }
       catch { manualRemediation.push(entry.operation); }
     }
     if (adapters.rollback) {
@@ -51,7 +74,8 @@ function applyChangePlan(plan, adapters = {}) {
         catch { manualRemediation.push(applied[index]); }
       }
     }
-    return { applied, rolledBack, manualRemediation, error, installedClients: plan.clients ? [...plan.clients] : [] };
+    eventFor("complete", null, applied.length, "failed");
+    return { applied, rolledBack, manualRemediation, operationResults, error, installedClients: plan.clients ? [...plan.clients] : [] };
   }
 }
 

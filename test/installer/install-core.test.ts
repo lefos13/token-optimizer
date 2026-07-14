@@ -91,7 +91,9 @@ test('successful install persists source-backed ownership manifest for lifecycle
   const manifest = require('../../../packages/installer/lib/manifest.js').readManifest(home);
   assert.ok(manifest.files.length > 0);
   const sourceBacked = manifest.files.filter((file: any) => file.kind !== 'write-file');
-  assert.ok(sourceBacked.every((file: any) => file.source && file.source.startsWith(assetsRoot)));
+  assert.equal(manifest.schemaVersion, 3);
+  assert.ok(sourceBacked.every((file: any) => file.assetPath && !path.isAbsolute(file.assetPath)));
+  assert.doesNotMatch(JSON.stringify(manifest), new RegExp(assetsRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
 test('install creates a private standard execution policy and records ownership', () => {
@@ -101,6 +103,49 @@ test('install creates a private standard execution policy and records ownership'
   assert.equal(JSON.parse(fs.readFileSync(policyPath, 'utf8')).execution.profile, 'standard');
   if (process.platform !== 'win32') assert.equal(fs.statSync(policyPath).mode & 0o777, 0o600);
   assert.ok(require('../../../packages/installer/lib/manifest.js').readManifest(home).files.some((file: any) => file.path === policyPath));
+});
+
+test('skip-client-commands still performs mandatory launcher validation', () => {
+  const home = tmpDir('to-installer-bootstrap-home-'); const assetsRoot = tmpDir('to-installer-bootstrap-assets-'); writeFixtureAssets(assetsRoot);
+  const marker = path.join(home, 'launcher-validated');
+  fs.writeFileSync(path.join(assetsRoot, 'plugin', 'opencode', 'server', 'start.js'), `require('node:fs').writeFileSync(${JSON.stringify(marker)}, process.env.TOKEN_OPTIMIZER_REPAIR_ONLY || '')\n`);
+  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'skip', skipLaunchctl: true, defaults: false, skipClientCommands: true });
+  assert.equal(fs.readFileSync(marker, 'utf8'), '1');
+});
+
+test('Claude fallback validation exercises the active skills launcher', () => {
+  const home = tmpDir('to-installer-claude-bootstrap-home-'); const assetsRoot = tmpDir('to-installer-claude-bootstrap-assets-'); writeFixtureAssets(assetsRoot);
+  const marker = path.join(home, 'claude-launcher-validated');
+  fs.writeFileSync(path.join(assetsRoot, 'plugin', 'claude', 'server', 'start.js'), `require('node:fs').writeFileSync(${JSON.stringify(marker)}, __filename)\n`);
+  installer.installSelectedClients({ home, assetsRoot, clients: ['claude'], provider: 'skip', skipLaunchctl: true, defaults: false, skipClientCommands: true });
+  assert.equal(fs.readFileSync(marker, 'utf8'), path.join(fs.realpathSync(home), '.claude', 'skills', 'token-optimizer', 'server', 'start.js'));
+});
+
+test('install converges codex, claude, and antigravity to their canonical client models', () => {
+  const home = tmpDir('to-installer-converge-home-'); const assetsRoot = tmpDir('to-installer-converge-assets-'); writeFixtureAssets(assetsRoot);
+  const codexCache = path.join(home, '.codex', 'plugins', 'cache', 'Softaware-marketplace', 'token-optimizer', '2.0.1');
+  fs.mkdirSync(path.join(codexCache, '.codex-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(codexCache, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'token-optimizer', version: '2.0.1' }));
+  const claudeOld = path.join(home, '.claude', 'plugins', 'cache', 'token-optimizer-marketplace', 'token-optimizer', '2.0.1');
+  const claudeCurrent = path.join(home, '.claude', 'plugins', 'cache', 'token-optimizer-marketplace', 'token-optimizer', '2.0.2');
+  for (const [root, version] of [[claudeOld, '2.0.1'], [claudeCurrent, '2.0.2']] as const) {
+    fs.mkdirSync(path.join(root, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'token-optimizer', version }));
+  }
+  installer.installSelectedClients({ home, assetsRoot, clients: ['codex', 'claude', 'antigravity'], provider: 'skip', version: '2.0.2', skipLaunchctl: true, defaults: false, skipClientCommands: true });
+  assert.equal(fs.existsSync(codexCache), false, 'Codex must be direct-only');
+  assert.equal(fs.existsSync(claudeOld), false, 'old Claude marketplace version must be removed');
+  assert.equal(fs.existsSync(claudeCurrent), true, 'current Claude marketplace version must remain');
+  assert.equal(fs.existsSync(path.join(home, '.gemini', 'config', 'plugins', 'token-optimizer', 'mcp_config.json')), false, 'Antigravity plugin-local MCP descriptor must not duplicate the global registration');
+});
+
+test('convergence preserves marketplace directories without the exact Token Optimizer identity', () => {
+  const home = tmpDir('to-installer-preserve-home-'); const assetsRoot = tmpDir('to-installer-preserve-assets-'); writeFixtureAssets(assetsRoot);
+  const unknown = path.join(home, '.codex', 'plugins', 'cache', 'Softaware-marketplace', 'token-optimizer', 'custom');
+  fs.mkdirSync(path.join(unknown, '.codex-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(unknown, '.codex-plugin', 'plugin.json'), JSON.stringify({ name: 'another-plugin', version: 'custom' }));
+  installer.installSelectedClients({ home, assetsRoot, clients: ['codex'], provider: 'skip', skipLaunchctl: true, defaults: false, skipClientCommands: true });
+  assert.equal(fs.existsSync(unknown), true);
 });
 
 test('execution policy preserves explicit profiles and unrelated settings', () => {
@@ -124,7 +169,7 @@ test('installer launchctl state clears stale BYOK key and model when the provide
   installer.applyGatewayConfig({
     home,
     clients: ['opencode'],
-    provider: 'byok',
+    provider: 'gateway-byok',
     byokKey: 'sk-or-v1-mykey',
     byokModel: 'openai/gpt-4o-mini',
     launchctlStatePath,
@@ -141,6 +186,13 @@ test('installer launchctl state clears stale BYOK key and model when the provide
   assert.equal(state.LLM_GATEWAY_TOKEN, 'person-token');
   assert.ok(!('OPENROUTER_BYOK_KEY' in state));
   assert.ok(!('OPENROUTER_BYOK_MODEL' in state));
+});
+
+test('an alternate --home never mutates the caller GUI session', () => {
+  const targetHome = tmpDir('to-launchctl-target-home-'); const currentHome = tmpDir('to-launchctl-current-home-');
+  assert.equal(installer.shouldApplyCurrentSessionEnv({ home: targetHome, currentHome }), false);
+  assert.equal(installer.shouldApplyCurrentSessionEnv({ home: currentHome, currentHome }), true);
+  assert.equal(installer.shouldApplyCurrentSessionEnv({ home: targetHome, currentHome, launchctlStatePath: path.join(targetHome, 'state.json') }), true);
 });
 
 /* launchctl setenv does not survive a reboot/logout, so the installer also
@@ -175,7 +227,7 @@ test('provider switch rewrites the LaunchAgent to only the current provider valu
   const launchctlStatePath = path.join(home, 'launchctl.json');
 
   installer.applyGatewayConfig({
-    home, clients: ['opencode'], provider: 'byok', byokKey: 'sk-or-v1-mykey', byokModel: 'openai/gpt-4o-mini', launchctlStatePath,
+    home, clients: ['opencode'], provider: 'gateway-byok', byokKey: 'sk-or-v1-mykey', byokModel: 'openai/gpt-4o-mini', launchctlStatePath,
   });
   installer.applyGatewayConfig({
     home, clients: ['opencode'], provider: 'gateway', gatewayToken: 'person-token', launchctlStatePath,
@@ -246,7 +298,7 @@ test('installCursor writes global MCP config and optional project rule', () => {
 
 test('buildProviderValues: gateway needs a token, byok needs ONLY a key (no token), local and skip need neither', () => {
   assert.throws(() => installer.buildProviderValues({ provider: 'gateway' }), /gatewayToken is required/);
-  assert.throws(() => installer.buildProviderValues({ provider: 'byok' }), /byokKey is required/);
+  assert.throws(() => installer.buildProviderValues({ provider: 'gateway-byok' }), /byokKey is required/);
 
   const gateway = installer.buildProviderValues({ provider: 'gateway', gatewayToken: 'tok' });
   assert.equal(gateway.LLM_GATEWAY_TOKEN, 'tok');
@@ -256,7 +308,7 @@ test('buildProviderValues: gateway needs a token, byok needs ONLY a key (no toke
   /* byok needs no gatewayToken at all: the gateway does not authenticate a
      BYOK-only caller, so writing one would be misleading. */
   const byok = installer.buildProviderValues({
-    provider: 'byok',
+    provider: 'gateway-byok',
     byokKey: 'sk-or-key',
     byokModel: ' openai/gpt-4o-mini ',
   });
@@ -264,6 +316,13 @@ test('buildProviderValues: gateway needs a token, byok needs ONLY a key (no toke
   assert.equal(byok.LLM_GATEWAY_URL, installer.DEFAULT_GATEWAY_URL);
   assert.equal(byok.OPENROUTER_BYOK_KEY, 'sk-or-key');
   assert.equal(byok.OPENROUTER_BYOK_MODEL, 'openai/gpt-4o-mini');
+
+  const direct = installer.buildProviderValues({ provider: 'openrouter-direct', byokKey: 'sk-or-direct', byokModel: 'openai/gpt-4.1-mini', openrouterUrl: 'https://openrouter.example/v1' });
+  assert.equal(direct.OPENROUTER_API_KEY, 'sk-or-direct');
+  assert.equal(direct.OPENROUTER_MODEL, 'openai/gpt-4.1-mini');
+  assert.equal(direct.OPENROUTER_API_URL, 'https://openrouter.example/v1');
+  assert.equal(direct.LLM_GATEWAY_URL, '');
+  assert.equal(direct.OPENROUTER_BYOK_MODEL, '');
 
   const local = installer.buildProviderValues({ provider: 'local' });
   assert.deepEqual(Object.keys(local).sort(), [...installer.MANAGED_ENV_KEYS].sort());
@@ -491,6 +550,15 @@ test('applyProviderConfiguration with no explicit clients resolves "detected" in
   assert.match(opencodeConfigText, /"LOCAL_LLM_MODEL":\s*"Qwen\/Qwen2\.5-Coder-7B-Instruct-GGUF:Q4_K_M"/);
 });
 
+test('provider reconfiguration updates Antigravity global registration without recreating plugin-local MCP', () => {
+  const home = tmpDir('to-config-antigravity-'); const assetsRoot = tmpDir('to-config-antigravity-assets-'); writeFixtureAssets(assetsRoot);
+  installer.installSelectedClients({ home, assetsRoot, clients: ['antigravity'], provider: 'local', localApiUrl: 'http://old/v1', skipLaunchctl: true, skipClientCommands: true, defaults: false });
+  installer.applyProviderConfiguration({ home, clients: ['antigravity'], provider: 'skip', skipLaunchctl: true });
+  const global = JSON.parse(fs.readFileSync(path.join(home, '.gemini', 'config', 'mcp_config.json'), 'utf8'));
+  assert.deepEqual(global.mcpServers.token_optimizer.env, {});
+  assert.equal(fs.existsSync(path.join(home, '.gemini', 'config', 'plugins', 'token-optimizer', 'mcp_config.json')), false);
+});
+
 test('installOpenCode with provider "local" registers the server with no token required', () => {
   const home = tmpDir('to-installer-home-');
   const assetsRoot = tmpDir('to-installer-assets-');
@@ -508,7 +576,7 @@ test('installOpenCode with provider "local" registers the server with no token r
   assert.ok(!('LLM_GATEWAY_TOKEN' in config.mcp.token_optimizer.environment));
 });
 
-test('installOpenCode with provider "byok" writes the OpenRouter key and optional model, with no gateway token', () => {
+test('installOpenCode with provider "byok" writes direct OpenRouter routing and model', () => {
   const home = tmpDir('to-installer-home-');
   const assetsRoot = tmpDir('to-installer-assets-');
   writeFixtureAssets(assetsRoot);
@@ -523,9 +591,10 @@ test('installOpenCode with provider "byok" writes the OpenRouter key and optiona
   });
 
   const config = JSON.parse(fs.readFileSync(path.join(home, '.config', 'opencode', 'opencode.jsonc'), 'utf8'));
-  assert.equal(config.mcp.token_optimizer.environment.OPENROUTER_BYOK_KEY, 'sk-or-key');
-  assert.equal(config.mcp.token_optimizer.environment.OPENROUTER_BYOK_MODEL, 'openai/gpt-4o-mini');
-  assert.equal(config.mcp.token_optimizer.environment.LLM_GATEWAY_URL, installer.DEFAULT_GATEWAY_URL);
+  assert.equal(config.mcp.token_optimizer.environment.OPENROUTER_API_KEY, 'sk-or-key');
+  assert.equal(config.mcp.token_optimizer.environment.OPENROUTER_MODEL, 'openai/gpt-4o-mini');
+  assert.equal(config.mcp.token_optimizer.environment.OPENROUTER_API_URL, 'https://openrouter.ai/api/v1');
+  assert.equal(config.mcp.token_optimizer.environment.LLM_GATEWAY_URL, undefined);
   assert.ok(!('LLM_GATEWAY_TOKEN' in config.mcp.token_optimizer.environment));
 });
 
@@ -642,9 +711,8 @@ test('installCodex writes the credential-bearing direct server after plugin CLI 
   assert.ok(codexToml.includes("LLM_GATEWAY_TOKEN = 'person-token'"));
 });
 
-/* Repeated marketplace installation must invalidate the installed Codex plugin
-   cache before adding the current staged plugin again. */
-test('installCodex refreshes an existing marketplace plugin before adding it again', () => {
+/* Codex is direct-only; installing its server must not add a marketplace MCP. */
+test('installCodex does not create a second marketplace registration', () => {
   const home = tmpDir('to-installer-home-');
   const assetsRoot = tmpDir('to-installer-assets-');
   const installRoot = path.join(home, '.token-optimizer');
@@ -673,12 +741,7 @@ test('installCodex refreshes an existing marketplace plugin before adding it aga
     process.env.PATH = originalPath;
   }
 
-  const commands = fs.readFileSync(commandLog, 'utf8').trim().split(/\r?\n/);
-  assert.deepEqual(commands, [
-    `plugin marketplace add ${installRoot}`,
-    'plugin remove token-optimizer --marketplace Softaware-marketplace',
-    'plugin add token-optimizer --marketplace Softaware-marketplace',
-  ]);
+  assert.equal(fs.existsSync(commandLog), false);
 });
 
 /* Claude owns a marketplace cache too, but its CLI offers a supported update
