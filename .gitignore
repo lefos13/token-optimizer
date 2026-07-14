@@ -19,3 +19,5 @@ plugin/cursor/
 .DS_Store
 graphify-out/
 release-artifacts/
+# Local npm pack outputs are disposable verification artifacts.
+*.tgz

@@ -12,6 +12,7 @@ const { marketplaceLocations, marketplaceManifest } = require("./marketplace-loc
 const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
 const DEFAULT_LOCAL_LLM_URL = "http://localhost:8080/v1";
 const DEFAULT_LOCAL_LLM_MODEL = "local-model";
+const DEFAULT_OPENROUTER_URL = "https://openrouter.ai/api/v1";
 /* Every env key installers may write into a client's MCP config. A provider
    mode (gateway / byok / local / skip) always yields a full values object
    across all of these keys so registering the MCP server never requires
@@ -27,6 +28,8 @@ const MANAGED_ENV_KEYS = [
   "LOCAL_LLM_API_URL",
   "LOCAL_LLM_MODEL",
   "OPENROUTER_API_KEY",
+  "OPENROUTER_API_URL",
+  "OPENROUTER_MODEL",
 ];
 
 function emptyManagedValues() {
@@ -73,7 +76,8 @@ function buildProviderValues(options) {
       throw new Error("byokKey is required for provider 'openrouter-direct'");
     }
     if (!options.credentialRef) values.OPENROUTER_API_KEY = options.openrouterKey || options.byokKey;
-    values.LLM_GATEWAY_URL = options.openrouterUrl || "https://openrouter.ai/api/v1";
+    values.OPENROUTER_MODEL = String(options.byokModel || "").trim();
+    values.OPENROUTER_API_URL = options.openrouterUrl || DEFAULT_OPENROUTER_URL;
   } else if (provider === "local") {
     values.LOCAL_LLM_API_URL = options.localApiUrl || "";
     values.LOCAL_LLM_MODEL = options.localModel || "";
@@ -86,7 +90,7 @@ function normalizeProviderChoice(provider) {
     return null;
   }
   const normalized = String(provider).trim().toLowerCase();
-  const aliases = { gateway: "gateway-token", byok: "gateway-byok", direct: "openrouter-direct" };
+  const aliases = { gateway: "gateway-token", byok: "openrouter-direct", direct: "openrouter-direct" };
   const canonical = aliases[normalized] || normalized;
   return ["gateway-token", "gateway-byok", "openrouter-direct", "local", "skip"].includes(canonical) ? canonical : null;
 }
@@ -94,7 +98,7 @@ function normalizeProviderChoice(provider) {
 /* Callers that don't pass an explicit provider get one inferred from which
    values they supplied, so existing gatewayToken-only call sites keep working. */
 function inferProvider(options) {
-  if (options.byokKey) return "gateway-byok";
+  if (options.byokKey) return "openrouter-direct";
   if (options.gatewayToken) return "gateway-token";
   if (options.localApiUrl || options.localModel) return "local";
   return "skip";
@@ -299,12 +303,12 @@ function planInstallation(options = {}) {
    stale assets are committed. The repair-only mode resolves dependencies but
    never starts a long-lived MCP process. */
 function bootstrapClientRuntime(client, options) {
-  if (options.skipClientCommands) return;
   const claudeLocation = marketplaceLocations(options.home).find((item) => item.client === "claude" && item.layout === "versioned");
   const claudeInstalled = claudeLocation && path.join(claudeLocation.root, String(options.version || require("../package.json").version));
-  const claudeLauncher = claudeInstalled && marketplaceManifest(claudeLocation, claudeInstalled)
+  const claudeFallback = path.join(options.home, ".claude", "skills", "token-optimizer", "server", "start.js");
+  const claudeLauncher = claudeInstalled && marketplaceManifest(claudeLocation, claudeInstalled) && fs.existsSync(path.join(claudeInstalled, "server", "start.js"))
     ? path.join(claudeInstalled, "server", "start.js")
-    : path.join(options.installRoot, "plugin", "claude", "server", "start.js");
+    : fs.existsSync(claudeFallback) ? claudeFallback : path.join(options.installRoot, "plugin", "claude", "server", "start.js");
   const launchers = {
     claude: claudeLauncher,
     codex: path.join(options.installRoot, "plugin", "codex", "server", "start.js"),
@@ -402,6 +406,7 @@ function persistInstallManifest(options = {}, clients = []) {
     codex: [[path.join(paths.home, ".codex", "skills", "token-optimizer"), path.join(paths.assetsRoot, "plugin", "codex", "skills", "token-optimizer")], [path.join(paths.installRoot, "plugin", "codex"), path.join(paths.assetsRoot, "plugin", "codex")]],
   }[client] || [])).filter(([root]) => fs.existsSync(root));
   const roots = mappings.map(([root]) => root);
+  roots.push(paths.installRoot, paths.backupRoot);
   const files = [];
   const walk = (directory, sourceRoot) => {
     let entries; try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch (_) { return; }
@@ -446,7 +451,11 @@ function persistInstallManifest(options = {}, clients = []) {
   const platformServices = process.platform === "darwin" && fs.existsSync(launchAgent)
     ? [{ platform: "darwin", service: LAUNCH_AGENT_LABEL, path: launchAgent, content: fs.readFileSync(launchAgent, "utf8"), managedEnv: buildProviderValues(options), ownership: "installer" }]
     : [];
-  writeManifest(paths.home, { schemaVersion: 3, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [], managedBlocks, credentials, registrations, platformServices, files });
+  const cleanupPaths = [path.join(paths.installRoot, ".agents"), path.join(paths.installRoot, ".claude-plugin"), paths.backupRoot];
+  for (const [root] of mappings) {
+    cleanupPaths.push(path.join(root, ".data"), path.join(root, "server", ".data"));
+  }
+  writeManifest(paths.home, { schemaVersion: 3, roots: [...new Set(roots.map((root) => path.resolve(root)))], assetRoots: [], cleanupPaths: [...new Set(cleanupPaths.map((entry) => path.resolve(entry)))], managedBlocks, credentials, registrations, platformServices, files });
 }
 
 function captureRegistrationTemplate(file, client) { const text = fs.readFileSync(file, "utf8"); if (client === "codex") return text.match(/^\[mcp_servers\.(?:"?token[_-]optimizer"?)\]\s*$[\s\S]*?(?=^\[(?!mcp_servers\.token_optimizer\.env)|(?![\s\S]))/m)?.[0] || null; try { const data = JSON.parse(text.replace(/\/\*[\s\S]*?\*\/|(^|[^:])\/\/.*$/gm, "$1").replace(/,\s*([}\]])/g, "$1")); const container = client === "opencode" ? data.mcp : data.mcpServers; return container?.token_optimizer || container?.["token-optimizer"] || null; } catch (_) { return null; } }
@@ -764,24 +773,8 @@ function getGatewayTargets(home) {
       },
     },
     {
-      clients: ["gemini"],
+      clients: ["gemini", "antigravity"],
       filePath: path.join(home, ".gemini", "config", "mcp_config.json"),
-      readConfig: readJsonFile,
-      writeConfig: writeJsonFile,
-      matches: matchesClient,
-      applyValues(config, values) {
-        const next = config;
-        next.mcpServers = next.mcpServers || {};
-        next.mcpServers.token_optimizer = next.mcpServers.token_optimizer || {};
-        next.mcpServers.token_optimizer.command = "node";
-        next.mcpServers.token_optimizer.args = localTesterServerArgs;
-        next.mcpServers.token_optimizer.env = mergeManagedEnvValues(next.mcpServers.token_optimizer.env || {}, values);
-        return next;
-      },
-    },
-    {
-      clients: ["antigravity"],
-      filePath: path.join(home, ".gemini", "config", "plugins", "token-optimizer", "mcp_config.json"),
       readConfig: readJsonFile,
       writeConfig: writeJsonFile,
       matches: matchesClient,
@@ -1000,14 +993,26 @@ function applyLaunchctlValues(values, options = {}) {
      stale credentials or model overrides in the GUI-session environment. The
      immediate setenv fixes the current login; the LaunchAgent makes it stick
      across reboots. */
-  for (const envKey of MANAGED_ENV_KEYS) {
-    if (values[envKey]) {
-      runLaunchctl(["setenv", envKey, values[envKey]], options);
-    } else {
-      runLaunchctl(["unsetenv", envKey], options);
+  if (shouldApplyCurrentSessionEnv(options)) {
+    for (const envKey of MANAGED_ENV_KEYS) {
+      if (values[envKey]) {
+        runLaunchctl(["setenv", envKey, values[envKey]], options);
+      } else {
+        runLaunchctl(["unsetenv", envKey], options);
+      }
     }
   }
   writePersistentLaunchAgent(values, options);
+}
+
+/* An explicit --home may target another user or an isolated fixture. Its
+   LaunchAgent belongs under that home, but the caller's live GUI environment
+   must remain untouched. State-file hooks intentionally model a GUI session. */
+function shouldApplyCurrentSessionEnv(options = {}) {
+  if (options.launchctlStatePath || process.env.LOCAL_OPTIMIZER_LAUNCHCTL_STATE_PATH) return true;
+  const targetHome = path.resolve(options.home || process.env.HOME || os.homedir());
+  const currentHome = path.resolve(options.currentHome || process.env.HOME || os.homedir());
+  return targetHome === currentHome;
 }
 
 /* Writes (or removes) the RunAtLoad LaunchAgent that re-applies the managed
@@ -1243,6 +1248,7 @@ module.exports = {
   DEFAULT_GATEWAY_URL,
   DEFAULT_LOCAL_LLM_URL,
   DEFAULT_LOCAL_LLM_MODEL,
+  DEFAULT_OPENROUTER_URL,
   MANAGED_ENV_KEYS,
   LAUNCH_AGENT_LABEL,
   emptyManagedValues,
@@ -1276,4 +1282,5 @@ module.exports = {
   configureMigratedClient,
   registerMigratedClient,
   applyLaunchctlValues,
+  shouldApplyCurrentSessionEnv,
 };

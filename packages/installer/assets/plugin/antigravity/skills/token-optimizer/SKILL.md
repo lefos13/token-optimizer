@@ -207,12 +207,19 @@ If a tool exists in the server but is not exposed in the current Codex session, 
 
 Generated launchers validate that both the MCP SDK server entry point and `zod/v3` resolve from their launcher-owned dependency cache. If the manifest matches but the cache is incomplete, the launcher removes only that cached `node_modules`, reinstalls dependencies, validates them again, and starts the server. A failed repair exits with a concise stderr diagnostic instead of starting a broken MCP process. Codex marketplace configuration forwards `OPENROUTER_BYOK_KEY` and `OPENROUTER_BYOK_MODEL` alongside the gateway variables, so BYOK-only sessions do not need `LLM_GATEWAY_TOKEN`.
 
-The installer lifecycle is reversible. Use `install --dry-run` (or `--json`)
+The installer lifecycle is reversible. A fresh install without provider flags
+always shows the provider menu; ambient legacy variables and inaccessible
+credential references do not silently choose a mode. A normal update may
+preserve a usable provider from an active canonical registration. Use
+`install --dry-run` (or `--json`)
 to inspect all writes, ownership, credential-store operations, and GUI-session
 environment changes. Its manifest stores hashes and references, never secrets
 or runtime caches/logs. Repair consumes doctor paths and operation hints into an
-exact idempotent plan; uninstall preserves user-modified files. Lifecycle
-failure rolls back earlier mutations, while unavailable reversible registration
+exact idempotent plan; uninstall removes declared runtime caches, recognized
+marketplace leftovers, and managed GUI-session values while preserving
+user-modified and unrelated client files. Launcher bootstrap remains mandatory
+even when external client commands are disabled. Lifecycle failure rolls back
+earlier mutations, while unavailable reversible registration
 or service adapters fail closed with an explicit follow-up. `status` is read-only,
 performs no network/provider request or client CLI execution, and discovers
 actual five-client MCP registrations from config/cache files plus installed

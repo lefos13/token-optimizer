@@ -22,15 +22,53 @@ function readlineWith(...answers: string[]) {
 }
 
 test('fresh install does not preserve ambient provider state without a canonical installation', () => {
-  const ambientOnly = { provider: { mode: 'gateway-token', requiresCredential: true, credentialConfigured: true }, manifest: { exists: false, valid: false }, clients: { registrations: [] } };
+  const ambientOnly = { provider: { mode: 'gateway-token', source: 'ambient', requiresCredential: true, credentialConfigured: true }, manifest: { exists: false, valid: false }, clients: { registrations: [] } };
   assert.equal(cli.shouldPreserveInstalledProvider(ambientOnly), false);
-  const installed = { provider: { mode: 'local', requiresCredential: false, credentialConfigured: true }, manifest: { exists: true, valid: true }, clients: { registrations: [{ stale: false }] } };
+  const installed = { provider: { mode: 'local', source: 'registration', requiresCredential: false, credentialConfigured: true }, manifest: { exists: true, valid: true }, clients: { registrations: [{ stale: false }] } };
   assert.equal(cli.shouldPreserveInstalledProvider(installed), true);
 });
 
 test('reinstall does not preserve an inaccessible credential reference', () => {
-  const broken = { provider: { mode: 'gateway-token', requiresCredential: true, credentialConfigured: false }, manifest: { exists: true, valid: true }, clients: { registrations: [{ stale: false }] } };
+  const broken = { provider: { mode: 'gateway-token', source: 'registration', requiresCredential: true, credentialConfigured: false }, manifest: { exists: true, valid: true }, clients: { registrations: [{ stale: false }] } };
   assert.equal(cli.shouldPreserveInstalledProvider(broken), false);
+});
+
+test('upgrade preservation retains local and BYOK model choices', () => {
+  assert.deepEqual(cli.preservedProviderOptions({ mode: 'local', url: 'http://localhost:8080/v1', model: 'local-model-name' }), { provider: 'local', credentialRef: undefined, localApiUrl: 'http://localhost:8080/v1', localModel: 'local-model-name' });
+  assert.deepEqual(cli.preservedProviderOptions({ mode: 'gateway-byok', url: 'https://gateway.example/v1', model: 'provider/model', credentialReference: { store: 'config' } }), { provider: 'gateway-byok', credentialRef: { store: 'config' }, gatewayUrl: 'https://gateway.example/v1', byokModel: 'provider/model' });
+  assert.deepEqual(cli.preservedProviderOptions({ mode: 'openrouter-direct', url: 'https://openrouter.ai/api/v1', model: 'provider/direct', credentialReference: { store: 'config' } }), { provider: 'openrouter-direct', credentialRef: { store: 'config' }, openrouterUrl: 'https://openrouter.ai/api/v1', byokModel: 'provider/direct' });
+});
+
+test('fresh spawned install prompts despite stale ambient provider variables', () => {
+  const repository = path.resolve(process.cwd(), '..');
+  const bin = path.join(repository, 'packages/installer/bin/token-optimizer.js');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-cli-fresh-prompt-'));
+  const staleRef = JSON.stringify({ store: 'macos-keychain', service: 'stale-service', account: 'stale-account' });
+  const result = spawnSync(process.execPath, [bin, 'install', '--home', home, '--clients', 'cursor', '--skip-client-commands', '--skip-launchctl', '--no-defaults'], {
+    cwd: repository,
+    encoding: 'utf8',
+    input: '4\n',
+    env: { ...process.env, HOME: home, TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK: '1', TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', TOKEN_OPTIMIZER_CREDENTIAL_REF: staleRef },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /How should the LLM provider be configured\?/);
+  assert.match(result.stdout, /Gateway access token/);
+  assert.match(result.stdout, /Your own OpenRouter key/);
+  assert.match(result.stdout, /Local LLM only/);
+  assert.match(result.stdout, /Skip for now/);
+  assert.doesNotMatch(result.stderr, /SecKeychainSearchCopyNext|Could not find service|Bad request/i);
+  const cursor = JSON.parse(fs.readFileSync(path.join(home, '.cursor', 'mcp.json'), 'utf8'));
+  assert.deepEqual(cursor.mcpServers.token_optimizer.env, {});
+});
+
+test('interactive JSON install keeps prompts on stderr and one document on stdout', () => {
+  const repository = path.resolve(process.cwd(), '..'); const bin = path.join(repository, 'packages/installer/bin/token-optimizer.js');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-cli-json-prompt-'));
+  const result = spawnSync(process.execPath, [bin, 'install', '--home', home, '--clients', 'cursor', '--skip-client-commands', '--skip-launchctl', '--no-defaults', '--json'], { cwd: repository, encoding: 'utf8', input: '4\n', env: { ...process.env, HOME: home, TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK: '1' } });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).status, 'completed');
+  assert.match(result.stderr, /How should the LLM provider be configured\?/);
+  assert.doesNotMatch(result.stdout, /How should the LLM provider/);
 });
 
 test('interactive BYOK setup asks for one optional model', async () => {
@@ -42,17 +80,30 @@ test('interactive BYOK setup asks for one optional model', async () => {
   assert.equal(options.byokModel, 'openai/gpt-4o-mini');
 });
 
-test('--byok-key and --byok-model configure BYOK without prompting', async () => {
+test('interactive secret input restores readline output without printing the value', async () => {
+  let output = ''; const original = (value: string) => { output += value; };
+  const rl: any = { output: { write: (value: string) => { output += value; } }, _writeToOutput: original, question: (_prompt: string, done: (answer: string) => void) => done('fixture-secret') };
+  const value = await cli.askSecretRequired(rl, 'Credential: ');
+  assert.equal(value, 'fixture-secret'); assert.equal(rl._writeToOutput, original); assert.equal(output, 'Credential: \n'); assert.doesNotMatch(output, /fixture-secret/);
+});
+
+test('--byok-key and --byok-model configure direct OpenRouter without prompting', async () => {
   const args = cli.parseArgs([
     '--byok-key', 'sk-or-v1-mykey',
     '--byok-model', 'openai/gpt-4o-mini'
   ]);
   const options = await cli.resolveProviderOptions(args, readlineWith());
-  assert.equal(options.provider, 'gateway-byok');
+  assert.equal(options.provider, 'openrouter-direct');
+  assert.equal(options.openrouterUrl, installer.DEFAULT_OPENROUTER_URL);
   assert.equal(options.byokModel, 'openai/gpt-4o-mini');
 });
 
-test('a BYOK key flag without a model remains non-interactive and uses gateway defaults', async () => {
+test('explicit gateway-byok remains available for migrated routing', async () => {
+  const options = await cli.resolveProviderOptions(cli.parseArgs(['--provider', 'gateway-byok', '--byok-key', 'sk-or-v1-mykey', '--byok-model', 'provider/model']), readlineWith());
+  assert.equal(options.provider, 'gateway-byok'); assert.equal(options.gatewayUrl, installer.DEFAULT_GATEWAY_URL); assert.equal(options.openrouterUrl, undefined);
+});
+
+test('a BYOK key flag without a model remains non-interactive and uses the OpenRouter default', async () => {
   const options = await cli.resolveProviderOptions(
     { byokKey: 'sk-or-v1-mykey' },
     readlineWith('must-not-be-consumed')
@@ -142,9 +193,36 @@ test('spawned CLI completes install, doctor, repair, uninstall, and repeated uni
     assert.equal(repair.status, 0, `${client} repair: ${repair.stderr}`);
     const postRepair = spawnSync(process.execPath, [bin, 'status', '--home', home, '--provider', 'local', '--json'], base);
     assert.ok([0, 1].includes(postRepair.status), `${client} post-repair status: ${postRepair.stderr}`);
-    const post = JSON.parse(postRepair.stdout); assert.ok(post.clients.configured.includes(client), `${client} not configured after repair: ${postRepair.stdout}`); assert.equal(post.expectedVersion, '2.0.3'); assert.ok(!post.findings.some((item: any) => ['STALE_REGISTRATION', 'MISSING_LAUNCHER', 'MANIFEST_ENTRY_MISSING', 'DUPLICATE_REGISTRATION'].includes(item.code))); assert.equal(post.healthy, true, `${client} post-repair not healthy: ${postRepair.stdout}`);
+    const post = JSON.parse(postRepair.stdout); assert.ok(post.clients.configured.includes(client), `${client} not configured after repair: ${postRepair.stdout}`); assert.equal(post.expectedVersion, '2.0.4'); assert.ok(!post.findings.some((item: any) => ['STALE_REGISTRATION', 'MISSING_LAUNCHER', 'MANIFEST_ENTRY_MISSING', 'DUPLICATE_REGISTRATION'].includes(item.code))); assert.equal(post.healthy, true, `${client} post-repair not healthy: ${postRepair.stdout}`);
+    /* Launchers and clients create caches after the ownership manifest is written.
+       Populate every declared and client-derived location to prove uninstall converges. */
+    const finalManifest = JSON.parse(fs.readFileSync(path.join(home, '.token-optimizer', 'manifest.json'), 'utf8'));
+    const backupRoot = path.join(home, '.token-optimizer-mcp', 'backups'); fs.mkdirSync(backupRoot, { recursive: true }); fs.writeFileSync(path.join(backupRoot, 'managed.bak'), 'generated');
+    for (const cache of finalManifest.cleanupPaths || []) { fs.mkdirSync(cache, { recursive: true }); fs.writeFileSync(path.join(cache, 'runtime-fixture'), 'generated'); }
+    const derivedCaches: string[] = [];
+    if (client === 'antigravity') {
+      derivedCaches.push(path.join(home, '.gemini', 'antigravity-ide', 'mcp', 'token_optimizer'));
+      const staleDescriptor = path.join(home, '.gemini', 'config', 'plugins', 'token-optimizer', 'mcp_config.json'); fs.writeFileSync(staleDescriptor, JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [path.join(home, '.gemini', 'config', 'plugins', 'token-optimizer', 'server', 'start.js')], env: {} } } }));
+    }
+    if (client === 'cursor') derivedCaches.push(path.join(home, '.cursor', 'projects', 'fixture-project', 'mcps', 'user-token_optimizer'));
+    for (const cache of derivedCaches) { fs.mkdirSync(cache, { recursive: true }); fs.writeFileSync(path.join(cache, 'runtime-fixture'), 'generated'); }
+    if (client === 'claude') {
+      const settingsPath = path.join(home, '.claude', 'settings.json');
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); settings.unrelatedSetting = 'keep'; settings.extraKnownMarketplaces = { ...(settings.extraKnownMarketplaces || {}), 'token-optimizer-marketplace': { source: 'managed' }, unrelated: { source: 'keep' } }; fs.writeFileSync(settingsPath, JSON.stringify(settings));
+      fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ pluginUsage: { 'token-optimizer@token-optimizer-marketplace': 1, unrelated: 2 }, keep: true }));
+      fs.mkdirSync(path.join(home, '.claude', 'plugins'), { recursive: true }); fs.writeFileSync(path.join(home, '.claude', 'plugins', 'known_marketplaces.json'), JSON.stringify({ 'token-optimizer-marketplace': {}, unrelated: {} }));
+    }
     const uninstall = spawnSync(process.execPath, [bin, 'uninstall', '--home', home, '--skip-launchctl'], base);
     assert.equal(uninstall.status, 0, `${client} uninstall: ${uninstall.stderr}`);
+    for (const cache of [...(finalManifest.cleanupPaths || []), ...derivedCaches]) assert.equal(fs.existsSync(cache), false, `${client} generated cache survived: ${cache}`);
+    assert.equal(fs.existsSync(path.join(home, '.token-optimizer')), false, `${client} installer metadata root survived`);
+    assert.equal(fs.existsSync(backupRoot), false, `${client} installer backup root survived`);
+    if (client === 'antigravity') assert.equal(fs.existsSync(path.join(home, '.gemini', 'config', 'plugins', 'token-optimizer')), false, 'Antigravity plugin-local residue survived');
+    if (client === 'claude') {
+      const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')); assert.equal(settings.unrelatedSetting, 'keep'); assert.equal(settings.extraKnownMarketplaces.unrelated.source, 'keep'); assert.equal(settings.extraKnownMarketplaces['token-optimizer-marketplace'], undefined);
+      const global = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8')); assert.equal(global.keep, true); assert.equal(global.pluginUsage.unrelated, 2); assert.equal(global.pluginUsage['token-optimizer@token-optimizer-marketplace'], undefined);
+      const known = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'plugins', 'known_marketplaces.json'), 'utf8')); assert.deepEqual(known, { unrelated: {} });
+    }
     const repeated = spawnSync(process.execPath, [bin, 'uninstall', '--home', home, '--json'], base);
     assert.equal(JSON.parse(repeated.stdout).status, 'already-uninstalled', `${client}: ${repeated.stdout} ${repeated.stderr}`);
   }
@@ -222,6 +300,18 @@ test('uninstall --json without --dry-run actually applies, not just previews', (
   assert.equal(fs.existsSync(manifestPath), false, 'uninstall --json must actually remove the manifest, not just print a plan');
 });
 
+test('uninstall reconstructs exact legacy cleanup when the ownership manifest is already missing', () => {
+  const repository = path.resolve(process.cwd(), '..'); const bin = path.join(repository, 'packages/installer/bin/token-optimizer.js');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-cli-reconstructed-uninstall-'));
+  const metadata = path.join(home, '.token-optimizer', '.agents', 'plugins', 'marketplace.json'); fs.mkdirSync(path.dirname(metadata), { recursive: true });
+  fs.writeFileSync(metadata, JSON.stringify({ name: 'Softaware-marketplace', plugins: [{ name: 'token-optimizer', source: { source: 'local', path: './plugin/codex' } }] }));
+  const base = { cwd: repository, encoding: 'utf8', env: { ...process.env, HOME: home, TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK: '1' } };
+  const cleanup = spawnSync(process.execPath, [bin, 'uninstall', '--home', home, '--skip-launchctl', '--json'], base);
+  assert.equal(cleanup.status, 0, cleanup.stderr); assert.equal(JSON.parse(cleanup.stdout).status, 'completed'); assert.equal(fs.existsSync(metadata), false);
+  const repeated = spawnSync(process.execPath, [bin, 'uninstall', '--home', home, '--skip-launchctl', '--json'], base);
+  assert.equal(JSON.parse(repeated.stdout).status, 'already-uninstalled');
+});
+
 test('install --json emits one final document and verbose progress only on stderr', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-cli-json-install-'));
   const repository = path.resolve(process.cwd(), '..'); const bin = path.join(repository, 'packages/installer/bin/token-optimizer.js');
@@ -230,7 +320,7 @@ test('install --json emits one final document and verbose progress only on stder
   const report = JSON.parse(result.stdout);
   assert.equal(report.action, 'install');
   assert.equal(report.status, 'completed');
-  assert.equal(report.installedVersion, '2.0.3');
+  assert.equal(report.installedVersion, '2.0.4');
   assert.deepEqual(report.clients, ['opencode']);
   const events = result.stderr.trim().split(/\r?\n/).filter(Boolean).map((line: string) => JSON.parse(line));
   assert.ok(events.some((event: any) => event.event === 'operation-start'));

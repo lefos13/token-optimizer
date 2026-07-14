@@ -20,15 +20,18 @@ original arguments. Skip this with `--skip-update-check` or
 `TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK=1`.
 
 The installer copies the MCP server/plugin assets into stable user-owned
-locations, prompts for how to configure the LLM provider, writes client MCP
+locations, prompts for how to configure the LLM provider on a fresh install,
+writes client MCP
 config, and turns on default-on usage where the client supports it.
 **Restart the affected client after installation.**
 
 Re-running the installer performs a transactional update to the current
-version. It preserves provider settings and user-edited files, converges each
+version. It preserves usable provider settings and user-edited files, converges each
 client to one supported registration, and removes older installer-owned
 copies. If a required step fails, the previous working installation is
-restored. Restart affected clients after a successful update.
+restored. A stale environment variable or inaccessible saved credential does
+not count as a usable installation and cannot suppress the provider menu.
+Restart affected clients after a successful update.
 
 Installation also creates `~/.config/token-optimizer/config.json` with the
 recommended `standard` execution profile when no profile is already selected.
@@ -38,8 +41,10 @@ chaining, redirection, destructive commands, and sensitive paths.
 
 ## Choosing a provider
 
-**A gateway/proxy token is not required** to use this tool. With no provider
-flags, the installer prompts for one of three providers, plus a skip option:
+**A gateway/proxy token is not required** to use this tool. On a fresh install
+with no provider flags, the installer prompts for one of three providers, plus
+a skip option. A normal update preserves a usable installed choice; run
+`config` or pass a provider flag to change it:
 
 | Mode | Token needed? | Who pays for inference? | Limit |
 | --- | --- | --- | --- |
@@ -95,6 +100,9 @@ environment (so Dock/Finder/Spotlight-launched clients see them too) and
 persisted across reboots via a LaunchAgent. Pass `--skip-launchctl` to skip
 this.
 
+`--skip-client-commands` suppresses external Claude/Codex client CLI calls but
+does not skip the installer-owned launcher bootstrap and dependency validation.
+
 Credential-bearing providers default to your OS's native credential store
 (Keychain / Windows Credential Manager / Secret Service). Use
 `--credential-store env` to reference an already-exported environment
@@ -135,7 +143,9 @@ progress to stderr.
 `status` is read-only and makes no network call. `doctor` additionally
 verifies your provider is reachable and exits non-zero on problems (`2` for
 warnings with `--strict`). `repair` fixes exactly what `doctor` flagged.
-`uninstall` removes only what this installer owns, preserves any files you've
+`uninstall` removes only what this installer owns, including generated runtime
+caches, recognized stale marketplace data, and managed macOS GUI-session
+provider values. It preserves unrelated client settings and files you've
 edited yourself, and rolls back cleanly if it can't finish. Install and repair
 use the same ownership rules: unrecognized or modified conflicts are retained
 and reported instead of being overwritten or deleted.

@@ -22,7 +22,7 @@ const CLIENT_MANAGED_PATHS = {
   opencode: [...CLIENT_CONFIG_PATHS.opencode, path.join(".config", "opencode", "AGENTS.md"), path.join(".config", "opencode", "token-optimizer-server"), path.join(".config", "opencode", "skills", "token-optimizer")],
   cursor: [...CLIENT_CONFIG_PATHS.cursor, path.join(".cursor", "token-optimizer-server")],
 };
-const LEGACY_KEYS = ["LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_BYOK_MODEL", "OPENROUTER_API_KEY", "LOCAL_LLM_API_URL", "LOCAL_LLM_MODEL"];
+const LEGACY_KEYS = ["LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_BYOK_MODEL", "OPENROUTER_API_KEY", "OPENROUTER_API_URL", "OPENROUTER_MODEL", "LOCAL_LLM_API_URL", "LOCAL_LLM_MODEL"];
 const LEGACY_SECRET_KEYS = ["LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_API_KEY"];
 
 /* Legacy inspection is intentionally bounded to the five supported client
@@ -271,7 +271,7 @@ function providerOptionsFromState(state, choices, mode) {
   const credentialRef = choices.credentialRef || env.TOKEN_OPTIMIZER_CREDENTIAL_REF;
   if (mode === "gateway-token") return { provider: mode, credentialRef, gatewayUrl: choices.gatewayUrl || env.LLM_GATEWAY_URL, gatewayToken: choices.gatewayToken || env.LLM_GATEWAY_TOKEN };
   if (mode === "gateway-byok") return { provider: mode, credentialRef, gatewayUrl: choices.gatewayUrl || env.LLM_GATEWAY_URL, byokKey: choices.byokKey || env.OPENROUTER_BYOK_KEY || env.OPENROUTER_API_KEY, byokModel: choices.byokModel || env.OPENROUTER_BYOK_MODEL };
-  if (mode === "openrouter-direct") return { provider: mode, credentialRef, openrouterUrl: choices.openrouterUrl, openrouterKey: choices.openrouterKey || choices.byokKey || env.OPENROUTER_API_KEY || env.OPENROUTER_BYOK_KEY, byokModel: choices.byokModel || env.OPENROUTER_BYOK_MODEL };
+  if (mode === "openrouter-direct") return { provider: mode, credentialRef, openrouterUrl: choices.openrouterUrl || env.OPENROUTER_API_URL, openrouterKey: choices.openrouterKey || choices.byokKey || env.OPENROUTER_API_KEY || env.OPENROUTER_BYOK_KEY, byokModel: choices.byokModel || env.OPENROUTER_MODEL || env.OPENROUTER_BYOK_MODEL };
   if (mode === "local") return { provider: mode, localApiUrl: choices.localApiUrl || env.LOCAL_LLM_API_URL, localModel: choices.localModel || env.LOCAL_LLM_MODEL };
   return { provider: "skip" };
 }

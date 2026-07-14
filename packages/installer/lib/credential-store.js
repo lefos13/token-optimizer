@@ -54,7 +54,7 @@ function protectedConfigStore(options = {}) {
       fs.chmodSync(filePath, 0o600); return { ...reference("config", value, options), path: filePath };
     },
     get(value = {}) { const id = identity(value, options); return read()[`${id.service}:${id.account}`] || null; },
-    delete(value = {}) { const data = read(); const id = identity(value, options); delete data[`${id.service}:${id.account}`]; if (fs.existsSync(filePath)) fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 }); return true; },
+    delete(value = {}) { const data = read(); const id = identity(value, options); delete data[`${id.service}:${id.account}`]; if (fs.existsSync(filePath)) { if (Object.keys(data).length) fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 }); else fs.rmSync(filePath, { force: true }); } return true; },
   };
 }
 

@@ -12,7 +12,7 @@ const { marketplaceLocations, marketplaceManifest } = require("./marketplace-loc
 const CLIENTS = ["claude", "codex", "antigravity", "opencode", "cursor"];
 const PLACEHOLDER = /^(?:none|null|undefined|placeholder|change[-_ ]?me|.*(?:your|insert|replace)[-_ ]?(?:with[-_ ]?)?(?:token|key).*|<[^>]+>|\$\{[^}]+\})$/i;
 const SECRET_KEYS = ["LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_API_KEY"];
-const MANAGED_PROVIDER_KEYS = ["TOKEN_OPTIMIZER_PROVIDER_MODE", "TOKEN_OPTIMIZER_CREDENTIAL_REF", "LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_BYOK_MODEL", "LOCAL_LLM_API_URL", "LOCAL_LLM_MODEL", "OPENROUTER_API_KEY", "OPENROUTER_API_URL"];
+const MANAGED_PROVIDER_KEYS = ["TOKEN_OPTIMIZER_PROVIDER_MODE", "TOKEN_OPTIMIZER_CREDENTIAL_REF", "LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_BYOK_MODEL", "LOCAL_LLM_API_URL", "LOCAL_LLM_MODEL", "OPENROUTER_API_KEY", "OPENROUTER_API_URL", "OPENROUTER_MODEL"];
 
 /* Diagnostics are deliberately implemented as bounded reads of known managed
    locations. Every finding has a stable code and enough machine-readable
@@ -63,19 +63,21 @@ async function inspectInstallation(options = {}) {
 
 function add(list, code, severity, message, remediation, details = {}) { list.push({ code, severity, message, remediation, ...details }); }
 function usable(value) { const text = String(value || "").trim(); return Boolean(text && !PLACEHOLDER.test(text)); }
-function canonicalProvider(value) { const normalized = String(value || "").trim().toLowerCase(); return ({ gateway: "gateway-token", byok: "gateway-byok", direct: "openrouter-direct" })[normalized] || normalized || null; }
+function canonicalProvider(value) { const normalized = String(value || "").trim().toLowerCase(); return ({ gateway: "gateway-token", byok: "openrouter-direct", direct: "openrouter-direct" })[normalized] || normalized || null; }
 function redactUrl(value) { if (!value) return null; try { const parsed = new URL(String(value)); parsed.username = ""; parsed.password = ""; parsed.search = ""; parsed.hash = ""; return parsed.toString().replace(/\/$/, ""); } catch (_) { return String(value).replace(/\?.*$/, ""); } }
 
 function inspectProviderReference(home, options = {}, registrations = []) {
   const env = options.env !== undefined ? options.env : process.env;
   /* Ambient variables are a compatibility fallback. A discovered canonical
      registration describes the environment the client will actually launch. */
-  const registrationValues = Object.assign({}, ...registrations.map((item) => item.env || {}));
+  const hasActiveClaudeRegistration = registrations.some((item) => item.client === "claude" && item.stale !== true);
+  const registrationValues = Object.assign({}, hasActiveClaudeRegistration ? readClaudeProviderEnv(home) : {}, ...registrations.map((item) => item.env || {}));
   const values = { ...env };
   if (usable(registrationValues.TOKEN_OPTIMIZER_PROVIDER_MODE)) {
     for (const key of MANAGED_PROVIDER_KEYS) delete values[key];
   }
   Object.assign(values, registrationValues);
+  const source = usable(options.providerMode || options.provider) ? "option" : usable(registrationValues.TOKEN_OPTIMIZER_PROVIDER_MODE) ? "registration" : "ambient";
   const mode = canonicalProvider(options.providerMode || options.provider || values.TOKEN_OPTIMIZER_PROVIDER_MODE || inferMode(values));
   const rawRef = options.credentialRef || values.TOKEN_OPTIMIZER_CREDENTIAL_REF;
   let ref = rawRef;
@@ -93,8 +95,10 @@ function inspectProviderReference(home, options = {}, registrations = []) {
   if (credentialValue && !usable(credentialValue)) { credentialValue = null; credentialError = "invalid"; }
   const requiresCredential = ["gateway-token", "gateway-byok", "openrouter-direct"].includes(mode);
   const url = options.providerUrl || (mode === "local" ? values.LOCAL_LLM_API_URL : mode === "openrouter-direct" ? values.OPENROUTER_API_URL : values.LLM_GATEWAY_URL) || (mode === "openrouter-direct" ? "https://openrouter.ai/api/v1" : requiresCredential ? "https://llm-proxy.lnf.gr/v1" : null);
-  return { mode, url: redactUrl(url), credentialStore: ref && typeof ref === "object" ? ref.store : credentialValue ? "environment" : "none", credentialConfigured: requiresCredential ? Boolean(credentialValue) : true, credentialError, credentialFingerprint: ref && typeof ref === "object" ? ref.fingerprint : undefined, credentialReference: ref && typeof ref === "object" ? ref : undefined, requiresCredential, credentialValue };
+  const model = mode === "local" ? values.LOCAL_LLM_MODEL : mode === "openrouter-direct" ? values.OPENROUTER_MODEL : mode === "gateway-byok" ? values.OPENROUTER_BYOK_MODEL : undefined;
+  return { mode, source, url: redactUrl(url), model: usable(model) ? String(model).trim() : undefined, credentialStore: ref && typeof ref === "object" ? ref.store : credentialValue ? "environment" : "none", credentialConfigured: requiresCredential ? Boolean(credentialValue) : true, credentialError, credentialFingerprint: ref && typeof ref === "object" ? ref.fingerprint : undefined, credentialReference: ref && typeof ref === "object" ? ref : undefined, requiresCredential, credentialValue };
 }
+function readClaudeProviderEnv(home) { try { const data = JSON.parse(fs.readFileSync(path.join(home, ".claude", "settings.json"), "utf8")); const env = data && typeof data.env === "object" && !Array.isArray(data.env) ? data.env : {}; return Object.fromEntries(MANAGED_PROVIDER_KEYS.filter((key) => Object.prototype.hasOwnProperty.call(env, key)).map((key) => [key, env[key]])); } catch (_) { return {}; } }
 function inferMode(env) { if (env.TOKEN_OPTIMIZER_PROVIDER_MODE) return env.TOKEN_OPTIMIZER_PROVIDER_MODE; if (env.LOCAL_LLM_API_URL) return "local"; if (env.LLM_GATEWAY_TOKEN) return "gateway-token"; if (env.OPENROUTER_BYOK_KEY) return "gateway-byok"; if (env.OPENROUTER_API_KEY) return "openrouter-direct"; return null; }
 
 /* Registration discovery parses only the five clients' documented config
@@ -218,7 +222,7 @@ function inspectManifest(home, options = {}) {
 }
 function positiveLimit(value, fallback) { const number = Number(value); return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback; }
 function withinRoots(target, roots) { return roots.some((root) => target === root || target.startsWith(`${root}${path.sep}`)); }
-function knownManifestRoots(home, options = {}) { const installRoot = path.resolve(options.installRoot || path.join(home, ".token-optimizer")); const assetsRoot = path.resolve(options.assetsRoot || path.join(__dirname, "..", "assets")); return [installRoot, assetsRoot, path.join(home, ".config", "token-optimizer"), path.join(home, ".config", "opencode", "token-optimizer-server"), path.join(home, ".config", "opencode", "skills", "token-optimizer"), path.join(home, ".cursor", "token-optimizer-server"), path.join(home, ".cursor", "rules"), path.join(home, ".gemini", "config", "plugins", "token-optimizer"), path.join(home, ".claude", "skills", "token-optimizer"), path.join(home, ".codex", "skills", "token-optimizer"), ...(options.cursorProjects || []).map((root) => path.join(path.resolve(root), ".cursor", "rules"))]; }
+function knownManifestRoots(home, options = {}) { const installRoot = path.resolve(options.installRoot || path.join(home, ".token-optimizer")); const assetsRoot = path.resolve(options.assetsRoot || path.join(__dirname, "..", "assets")); return [installRoot, assetsRoot, path.join(home, ".token-optimizer-mcp", "backups"), path.join(home, ".config", "token-optimizer"), path.join(home, ".config", "opencode", "token-optimizer-server"), path.join(home, ".config", "opencode", "skills", "token-optimizer"), path.join(home, ".cursor", "token-optimizer-server"), path.join(home, ".cursor", "rules"), path.join(home, ".gemini", "config", "plugins", "token-optimizer"), path.join(home, ".claude", "skills", "token-optimizer"), path.join(home, ".codex", "skills", "token-optimizer"), ...(options.cursorProjects || []).map((root) => path.join(path.resolve(root), ".cursor", "rules"))]; }
 function manifestFinding(code, message, entryPath) { return { code, severity: "error", message, remediation: "Reinstall or repair from a trusted installer source.", path: entryPath, operation: "recreate-manifest" }; }
 function canonicalPath(target) { let current = path.resolve(target); const tail = []; while (!fs.existsSync(current)) { const parent = path.dirname(current); if (parent === current) break; tail.unshift(path.basename(current)); current = parent; } let resolved = fs.realpathSync.native(current); for (const part of tail) resolved = path.join(resolved, part); return resolved; }
 

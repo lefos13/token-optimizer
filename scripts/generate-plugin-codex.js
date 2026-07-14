@@ -57,7 +57,7 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "2.0.3";
+  const VERSION = "2.0.4";
 
   const sdkVersion = require(
     path.join(
@@ -169,6 +169,8 @@ try {
           "LLM_GATEWAY_URL",
           "OPENROUTER_BYOK_KEY",
           "OPENROUTER_BYOK_MODEL",
+          "OPENROUTER_MODEL",
+          "OPENROUTER_API_URL",
         ],
         env: {
           LLM_GATEWAY_URL: "https://llm-proxy.lnf.gr/v1",

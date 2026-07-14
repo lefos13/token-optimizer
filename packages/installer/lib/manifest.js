@@ -35,6 +35,14 @@ function validateManifest(manifest, home) {
     }
     if (file.assetPath !== undefined && (typeof file.assetPath !== "string" || path.isAbsolute(file.assetPath) || file.assetPath.split(/[\\/]/).includes(".."))) throw new Error("manifest assetPath must be package-relative");
   }
+  if (manifest.cleanupPaths !== undefined) {
+    if (!Array.isArray(manifest.cleanupPaths)) throw new Error("manifest cleanupPaths must be an array");
+    for (const cleanupPath of manifest.cleanupPaths) {
+      if (typeof cleanupPath !== "string" || !path.isAbsolute(cleanupPath) || cleanupPath.includes("\0")) throw new Error("manifest cleanup path must be absolute");
+      const canonical = realpathWithMissingTail(cleanupPath);
+      if (!rootRealpaths.some((root) => canonical === root || canonical.startsWith(`${root}${path.sep}`))) throw new Error(`manifest cleanup path outside known roots: ${cleanupPath}`);
+    }
+  }
   if (manifest.credentials !== undefined && (!Array.isArray(manifest.credentials) || manifest.credentials.some((item) => !item || item.ownership !== "installer" || !item.reference || typeof item.reference.store !== "string"))) {
     throw new Error("manifest credentials require installer ownership and a store reference");
   }

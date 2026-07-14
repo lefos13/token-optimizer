@@ -69,9 +69,42 @@ test('canonical local registration clears ambient gateway URL and credential ref
   write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'local', LOCAL_LLM_API_URL: 'http://127.0.0.1:8080/v1', LOCAL_LLM_MODEL: 'fixture-model' } } } }));
   const report = await inspectInstallation({ home, env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', TOKEN_OPTIMIZER_CREDENTIAL_REF: JSON.stringify({ store: 'native', service: 'stale', account: 'stale' }), LLM_GATEWAY_URL: 'https://stale.invalid/v1' }, performHealthProbe: false });
   assert.equal(report.provider.mode, 'local');
+  assert.equal(report.provider.source, 'registration');
   assert.equal(report.provider.url, 'http://127.0.0.1:8080/v1');
+  assert.equal(report.provider.model, 'fixture-model');
   assert.equal(report.provider.credentialStore, 'none');
   assert.equal(report.provider.credentialReference, undefined);
+});
+
+test('ambient provider fallback is identified and Claude settings count as canonical configuration', async () => {
+  const ambientHome = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-ambient-'));
+  const ambient = await inspectInstallation({ home: ambientHome, env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'local', LOCAL_LLM_API_URL: 'http://ambient/v1' }, performHealthProbe: false });
+  assert.equal(ambient.provider.source, 'ambient');
+  const staleHome = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-stale-claude-provider-'));
+  const cursorLauncher = server(staleHome, 'cursor');
+  write(path.join(staleHome, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [cursorLauncher] } } }));
+  write(path.join(staleHome, '.claude', 'settings.json'), JSON.stringify({ env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'local', LOCAL_LLM_API_URL: 'http://stale/v1' } }));
+  const stale = await inspectInstallation({ home: staleHome, env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token' }, performHealthProbe: false });
+  assert.equal(stale.provider.source, 'ambient'); assert.equal(stale.provider.mode, 'gateway-token');
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-claude-provider-'));
+  const launcher = server(claudeHome, 'claude');
+  write(path.join(claudeHome, '.claude.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher] } } }));
+  write(path.join(claudeHome, '.claude', 'settings.json'), JSON.stringify({ env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'local', LOCAL_LLM_API_URL: 'http://claude/v1', LOCAL_LLM_MODEL: 'claude-model' } }));
+  const claude = await inspectInstallation({ home: claudeHome, env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token' }, performHealthProbe: false });
+  assert.equal(claude.provider.source, 'registration'); assert.equal(claude.provider.mode, 'local'); assert.equal(claude.provider.model, 'claude-model');
+});
+
+test('doctor exposes safe model metadata for gateway BYOK and direct OpenRouter', async () => {
+  for (const fixture of [
+    { mode: 'gateway-byok', key: 'OPENROUTER_BYOK_KEY', modelKey: 'OPENROUTER_BYOK_MODEL', model: 'gateway/model' },
+    { mode: 'openrouter-direct', key: 'OPENROUTER_API_KEY', modelKey: 'OPENROUTER_MODEL', model: 'direct/model' },
+  ]) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-model-')); const launcher = server(home, 'cursor');
+    write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: { TOKEN_OPTIMIZER_PROVIDER_MODE: fixture.mode, [fixture.key]: 'fixture-secret', [fixture.modelKey]: fixture.model } } } }));
+    const report = await inspectInstallation({ home, performHealthProbe: false });
+    assert.equal(report.provider.model, fixture.model);
+    assert.doesNotMatch(JSON.stringify(report), /fixture-secret/);
+  }
 });
 
 test('antigravity plugin descriptor pointing at the global launcher is one logical registration', async () => {
