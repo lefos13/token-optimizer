@@ -11,8 +11,8 @@ function createWindowsCredentialStore(options = {}) {
   const run = (script, input) => exec(bin, ["-NoProfile", "-NonInteractive", "-Command", script], { input, encoding: "utf8" });
   return {
     isAvailable: () => options.available !== undefined ? !!options.available : process.platform === "win32",
-    set(value) { const encoded = run("[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes([Console]::In.ReadToEnd()),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser))", secretOf(value)).toString().trim(); fs.mkdirSync(path.dirname(filePath), { recursive: true }); fs.writeFileSync(filePath, encoded, { mode: 0o600 }); try { fs.chmodSync(filePath, 0o600); } catch {} return { ...reference("windows-dpapi", value, options), path: filePath }; },
-    get() { if (!fs.existsSync(filePath)) return null; return run("[Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String([Console]::In.ReadToEnd()),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser))", fs.readFileSync(filePath, "utf8")).toString(); },
+    set(value) { const encoded = run("Add-Type -AssemblyName System.Security; [Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes([Console]::In.ReadToEnd()),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser))", secretOf(value)).toString().trim(); fs.mkdirSync(path.dirname(filePath), { recursive: true }); fs.writeFileSync(filePath, encoded, { mode: 0o600 }); try { fs.chmodSync(filePath, 0o600); } catch {} return { ...reference("windows-dpapi", value, options), path: filePath }; },
+    get() { if (!fs.existsSync(filePath)) return null; return run("Add-Type -AssemblyName System.Security; [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String([Console]::In.ReadToEnd()),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser))", fs.readFileSync(filePath, "utf8")).toString().replace(/\r?\n$/, ""); },
     delete() { fs.rmSync(filePath, { force: true }); return true; },
   };
 }
