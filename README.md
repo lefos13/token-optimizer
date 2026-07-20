@@ -50,7 +50,7 @@ codebase, validate a change, or diagnose a failure. The main tools are:
 - `scout_codebase` — finds likely files before broad exploration.
 - `run_changed_files_review` — checks small diffs before expensive validation.
 - `run_test_verdict` — runs build, test, lint, or smoke commands and returns a
-  compact verdict.
+  compact verdict while keeping raw command output in the workspace log.
 - `run_failure_triage`, `query_log`, and `grep_log` — investigate stored logs
   without pasting them into the conversation.
 - `run_command_digest` — summarizes noisy commands such as builds or installs.

@@ -15,7 +15,7 @@ validation began; do not report that as a test or lint failure.
 
 # Token Optimizer
 
-Execution metadata uses `signal: null` when no OS signal was observed; a value appears only for signal-terminated processes. `executionStatus: terminated` distinguishes those exits from `timed_out`. Command outcomes remain authoritative when audit-log persistence fails: inspect additive `auditStatus` and `auditFailure`, including any retained temporary evidence path.
+Execution metadata uses `signal: null` when no OS signal was observed; a value appears only for signal-terminated processes. `executionStatus: terminated` distinguishes those exits from `timed_out`. Command outcomes remain authoritative when audit-log persistence fails: inspect additive `auditStatus` and `auditFailure`, including any retained temporary evidence path. Raw command stdout, stderr, and model-facing log excerpts stay in the workspace log and are not included in verdict response metadata.
 
 Command temp-stream and final audit failures never override exit/signal truth. Active `.active.tmp` output carries a PID/run-id lease; lifecycle recovery requires both one-hour age and a dead or missing owner, protecting legitimate long-running commands. Open/write/end, fsync, close, and abort cleanup remove the lease and report `removed` or `failed`. After fsync and close, final-rename failure must first atomically mark evidence `.retained.audit.tmp`; only then is it registered and lifecycle-managed. If marking and deletion both fail, inspect the contained unregistered `orphanPath`. Treat registry, log-lifecycle, and analytics persistence entries in `warnings` as operational advisories.
 

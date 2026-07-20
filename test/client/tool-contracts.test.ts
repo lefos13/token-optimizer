@@ -23,6 +23,38 @@ test('command response compatibility preserves legacy fields and additive metada
   }
 });
 
+test('execution metadata exposes audit fields without leaking suite output', () => {
+  const suiteResult = {
+    auditStatus: 'persisted' as const,
+    results: [{ stdout: 'large raw command output', stderr: '' }],
+    trimmedLogContent: 'large model-facing excerpt',
+    rawSourceBytes: 4096
+  };
+  const metadata = buildExecutionMetadata(
+    [{ executionStatus: 'completed', autoDetected: true }],
+    'short',
+    suiteResult.rawSourceBytes,
+    [],
+    suiteResult
+  );
+
+  assert.equal(metadata.auditStatus, 'persisted');
+  assert.equal(metadata.rawSourceBytes, 4096);
+  assert.equal(metadata.rawSourceTokens, 1024);
+  assert.equal('results' in metadata, false);
+  assert.equal('trimmedLogContent' in metadata, false);
+  assert.deepEqual(Object.keys(metadata).sort(), [
+    'auditStatus',
+    'autoDetected',
+    'executionStatus',
+    'logTruncated',
+    'rawSourceBytes',
+    'rawSourceTokens',
+    'signal',
+    'warnings'
+  ]);
+});
+
 test('signal termination is distinct from timeout and retains the signal', async () => {
   const result = await import('../../src/runner').then(({ runCommand }) => runCommand(`node -e "process.kill(process.pid, 'SIGTERM')"`, process.cwd(), 5000));
   assert.equal(result.executionStatus, 'terminated');
@@ -57,6 +89,9 @@ test('run_test_verdict distinguishes a policy block from an executed failure', a
   assert.equal(payload.profileSource, 'tool');
   assert.equal(payload.providerStatus, 'not_used');
   assert.match(payload.summary, /was not run/);
+  assert.equal('results' in payload, false);
+  assert.equal('trimmedLogContent' in payload, false);
+  assert.equal(JSON.stringify(payload).includes('Command is not permitted by the active profile.'), false);
   delete process.env.TOKEN_OPTIMIZER_CONFIG_HOME;
   fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(configHome, { recursive: true, force: true });
 });
