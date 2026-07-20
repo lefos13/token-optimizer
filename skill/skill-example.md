@@ -7,8 +7,9 @@ description: Use this MCP server to scout codebases, validate code changes, revi
 Execution profiles are `safe`, `standard`, and `unrestricted`; tool/project requests may only narrow the user ceiling. This is deny-first policy, not an OS sandbox. Responses expose execution statuses, policy/auto-detection metadata, truncation, provider status, warnings, and redaction summaries. Logs default to a 7-day retention and 500 MB workspace quota, with workspace-scoped pruning.
 
 Installer-managed setups default to `standard`, which authorizes validation
-commands recognized from the workspace even when passed explicitly. Submit
-multiple checks separately because shell chaining remains blocked. When
+commands recognized from the workspace even when passed explicitly. Shell
+chaining remains blocked; use `testCommands` to batch independent checks in one
+verdict call. When
 `validationOutcome` is `not_run`, execution policy stopped the command before
 validation began; do not report that as a test or lint failure.
 
@@ -46,8 +47,8 @@ Currently implemented server tools:
 2. Identify the workspace path as an absolute path.
 3. If local model availability is unclear, call `check_local_llm_health` before spending time on LLM-backed verdicts or scouting.
 4. If files changed and the tool is exposed, call `run_changed_files_review` before slow test suites when a lightweight local-LLM review can catch obvious issues.
-5. Prefer an explicit `testCommand` for `run_test_verdict` when the correct validation command is known from the repo, package scripts, or user request.
-6. Omit `testCommand` only when automatic command detection is preferable.
+5. Prefer an explicit `testCommand` for one known validation command, or `testCommands` for several independent known commands, when the correct validation commands are known from the repo, package scripts, or user request.
+6. Omit both command fields only when automatic command detection is preferable.
 7. Pass a short `taskSummary` that describes the concrete code change or validation goal, not a broad audit request.
 8. Pass `changedFiles` when available, using repo-relative paths for tools that resolve files under `workspacePath`.
 9. Treat returned JSON as the primary signal and avoid raw logs while the summary is actionable.
@@ -82,6 +83,19 @@ Call `run_test_verdict`:
   "testCommand": "npm test",
   "maxOutputLines": 300,
   "timeoutMs": 300000,
+  "parallel": false,
+  "autoTriage": true
+}
+```
+
+For several independent checks, batch them without shell operators so the
+server can produce one combined verdict and one compact analytics record:
+
+```json
+{
+  "workspacePath": "/absolute/path/to/workspace",
+  "taskSummary": "Validate the implementation",
+  "testCommands": ["npm run typecheck", "npm test"],
   "parallel": false,
   "autoTriage": true
 }
@@ -161,7 +175,7 @@ Use commands that exercise the changed surface:
 - LLM-backed results can include `llmAvailable`, `llmProvider`, `llmModel`, `llmLatencyMs`, `llmTaskType`, and `fallbackReason`. If `llmAvailable` is `false`, treat the local model output as unavailable and fall back to deterministic command results, `grep_log`, or the smallest useful raw-log slice.
 - `run_test_verdict`: When present, `likelyRelevantToRecentChanges` is the local model's guess about whether a failure stems from the reported `changedFiles`; use it to prioritize, not as proof. Set `maxOutputLines` to bound how much log the model sees on very noisy commands, `timeoutMs` for long suites, and `parallel: true` only when the detected commands are independent. Low local-model confidence keeps the verdict uncertain and sets `needsRawLogs`.
 - Context-savings analytics are intentionally not returned in tool JSON. Inspect `.codex-local-test-runs/analytics.json` and `.codex-local-test-runs/analytics-summary.json` inside the **target workspace** (next to its raw run logs and baseline), or run `npm run analytics:ui` from the MCP server project to view a multi-workspace dashboard with pagination, when you need local LLM token use, returned MCP response size, estimated tokens saved, and savings percentages.
-- When `LLM_GATEWAY_URL` and `LLM_GATEWAY_TOKEN` are both set (this specifically requires a proxy/issued token — BYOK-only setups with no token do not share), a sanitized aggregate subset of each analytics record (tool name, token counts, savings percentage, model/task, latency — never workspace paths, commands, log content, or error text) is also shared with the gateway's public global stats, best-effort and fire-and-forget. The gateway counts only records with at least 1,000 raw-source tokens and excludes deterministic `run_regression_check` calls from public savings aggregates. Set `LLM_GATEWAY_SHARE_ANALYTICS=off` to disable sharing.
+- When `LLM_GATEWAY_URL` and `LLM_GATEWAY_TOKEN` are both set (this specifically requires a proxy/issued token — BYOK-only setups with no token do not share), a sanitized aggregate subset of each analytics record (tool name, token counts, savings percentage, model/task, latency — never workspace paths, commands, log content, or error text) is also shared with the gateway's public global stats, best-effort and fire-and-forget. The gateway counts only records with at least 1,000 raw-source tokens and excludes deterministic `run_regression_check` calls from public savings aggregates. The `/stats` tool table also shows per-tool raw-source, returned, small-model, latency, and fallback dimensions. Set `LLM_GATEWAY_SHARE_ANALYTICS=off` to disable sharing.
 - `run_changed_files_review`: Prefer `useDiff: true` in a git repo to review only changed hunks (cheaper, sharper); it falls back to whole-file content for files with no diff or outside git.
 - `run_test_verdict` `pass`: Report the commands run, the verdict, and any residual risk. Do not read or paste raw logs.
 - `run_test_verdict` `fail`: Use the LLM summary, `failures`, and inline `triage` field first. If the fix is not clear, call `run_failure_triage` with the log path before opening raw logs.

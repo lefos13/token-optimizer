@@ -50,7 +50,7 @@ const execution_metadata_1 = require("./execution-metadata");
 const log_store_1 = require("./log-store");
 const server = new index_js_1.Server({
     name: 'token-optimizer-mcp',
-    version: '2.0.7',
+    version: '2.0.8',
 }, {
     capabilities: {
         tools: {},
@@ -124,7 +124,14 @@ server.setRequestHandler(types_js_1.ListToolsRequestSchema, async () => {
                         },
                         testCommand: {
                             type: 'string',
-                            description: 'Optional manual shell command override (e.g. "npm test" or "npm run lint && npm test").'
+                            description: 'Optional manual validation command override. Shell chaining, substitution, and redirection remain blocked.'
+                        },
+                        testCommands: {
+                            type: 'array',
+                            items: { type: 'string', minLength: 1 },
+                            minItems: 1,
+                            maxItems: 20,
+                            description: 'Optional ordered list of independent validation commands to run in one verdict call. Each command is checked separately by execution policy; do not join commands with shell operators.'
                         },
                         maxOutputLines: {
                             type: 'number',
@@ -357,14 +364,21 @@ async function handleToolCall(request) {
         }
     }
     if (name === 'run_test_verdict') {
-        const { workspacePath, taskSummary, changedFiles = [], testCommand, maxOutputLines, timeoutMs, parallel, autoTriage, executionProfile, allowedCommandPrefixes } = args;
+        const { workspacePath, taskSummary, changedFiles = [], testCommand, testCommands, maxOutputLines, timeoutMs, parallel, autoTriage, executionProfile, allowedCommandPrefixes } = args;
         try {
             // 1. Determine commands to execute
             const detectedCommands = await (0, detector_1.detectCommands)(workspacePath);
-            const trustedCommands = testCommand ? await (0, detector_1.detectTrustedCommands)(workspacePath) : detectedCommands;
+            /* Batch independent validation commands through the existing suite
+               runner so each command keeps its policy/audit boundary while the
+               caller receives one verdict and one analytics record. */
+            if (Array.isArray(testCommands) && (testCommands.length === 0 || testCommands.length > 20 || testCommands.some((command) => typeof command !== 'string' || command.trim().length === 0))) {
+                throw new Error('testCommands must contain 1 to 20 non-empty command strings.');
+            }
+            const requestedCommands = Array.isArray(testCommands) && testCommands.length > 0 ? testCommands : (testCommand ? [testCommand] : undefined);
+            const trustedCommands = requestedCommands ? await (0, detector_1.detectTrustedCommands)(workspacePath) : detectedCommands;
             let commandsToRun = [];
-            if (testCommand) {
-                commandsToRun = [testCommand];
+            if (requestedCommands) {
+                commandsToRun = requestedCommands;
             }
             else {
                 commandsToRun = detectedCommands;

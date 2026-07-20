@@ -61,6 +61,24 @@ test('run_test_verdict distinguishes a policy block from an executed failure', a
   fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(configHome, { recursive: true, force: true });
 });
 
+test('run_test_verdict accepts multiple independent commands without shell chaining', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'batched-verdict-'));
+  const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'batched-config-'));
+  process.env.TOKEN_OPTIMIZER_CONFIG_HOME = configHome;
+  const result: any = await handleToolCall({ params: { name: 'run_test_verdict', arguments: {
+    workspacePath: root,
+    taskSummary: 'contract',
+    testCommands: ['npm publish', 'npm uninstall unsafe-package'],
+    executionProfile: 'safe'
+  } } });
+  const payload = JSON.parse(result.content[0].text);
+  assert.deepEqual(payload.commandsRun, ['npm publish', 'npm uninstall unsafe-package']);
+  assert.equal(payload.validationOutcome, 'not_run');
+  assert.equal(payload.executionStatus, 'blocked');
+  delete process.env.TOKEN_OPTIMIZER_CONFIG_HOME;
+  fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(configHome, { recursive: true, force: true });
+});
+
 test('MCP CallTool handler returns completed and timed-out compatibility shapes', async () => {
   const base = { workspacePath: process.cwd(), intent: 'contract', executionProfile: 'safe', allowedCommandPrefixes: ['printf', 'sleep'] };
   const completed: any = await handleToolCall({ params: { name: 'run_command_digest', arguments: { ...base, command: 'printf ok' } } });

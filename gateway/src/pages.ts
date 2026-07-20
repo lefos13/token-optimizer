@@ -18,6 +18,11 @@ function fmt(n: number): string {
   return String(n);
 }
 
+function fmtMs(n: number): string {
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}s`;
+  return `${Math.round(n)}ms`;
+}
+
 export function renderStatsPage(stats: PublicStats): string {
   const days = Object.entries(stats.days).sort(([a], [b]) => (a < b ? -1 : 1));
   const maxSaved = Math.max(1, ...days.map(([, d]) => d.tokensSaved));
@@ -27,7 +32,7 @@ export function renderStatsPage(stats: PublicStats): string {
   }).join('');
   const toolRows = Object.entries(stats.byTool)
     .sort(([, a], [, b]) => b.calls - a.calls)
-    .map(([name, t]) => `<tr><td>${escapeHtml(name)}</td><td>${fmt(t.calls)}</td><td>${fmt(t.tokensSaved)}</td><td>${(t.averageSavingsPercentage * 100).toFixed(1)}%</td></tr>`)
+    .map(([name, t]) => `<tr><td>${escapeHtml(name)}</td><td>${fmt(t.calls)}</td><td>${fmt(t.rawSourceTokens)}</td><td>${fmt(t.returnedToMainTokens)}</td><td>${fmt(t.localLlmTokens)}</td><td>${fmt(t.tokensSaved)}</td><td>${(t.averageSavingsPercentage * 100).toFixed(1)}%</td><td>${fmtMs(t.averageLatencyMs)}</td><td>${(t.fallbackRate * 100).toFixed(1)}%</td></tr>`)
     .join('');
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -35,7 +40,7 @@ export function renderStatsPage(stats: PublicStats): string {
 <style>
 :root{color-scheme:light dark}
 body{font-family:system-ui,sans-serif;margin:0;background:#0d1117;color:#e6edf3;padding:2rem 1rem;display:flex;justify-content:center}
-main{max-width:860px;width:100%}
+main{max-width:1180px;width:100%}
 h1{font-size:1.6rem;margin:0 0 .25rem}
 p.sub{color:#8b949e;margin:0 0 2rem}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;margin-bottom:2rem}
@@ -44,9 +49,11 @@ p.sub{color:#8b949e;margin:0 0 2rem}
 .card .l{color:#8b949e;font-size:.85rem;margin-top:.25rem}
 .chart{display:flex;align-items:flex-end;gap:3px;height:130px;background:#161b22;border:1px solid #30363d;border-radius:10px;padding:1rem;margin-bottom:2rem;overflow-x:auto}
 .bar{flex:0 0 6px;background:#238636;border-radius:2px 2px 0 0;min-width:6px}
-table{width:100%;border-collapse:collapse;background:#161b22;border:1px solid #30363d;border-radius:10px;overflow:hidden}
-th,td{text-align:left;padding:.5rem .75rem;border-bottom:1px solid #21262d;font-size:.9rem}
+.table-wrap{overflow-x:auto;border-radius:10px}
+table{width:100%;min-width:900px;border-collapse:collapse;background:#161b22;border:1px solid #30363d}
+th,td{text-align:left;padding:.5rem .75rem;border-bottom:1px solid #21262d;font-size:.9rem;white-space:nowrap}
 th{color:#8b949e;font-weight:600}
+caption{text-align:left;padding:.75rem;color:#8b949e;font-size:.85rem;caption-side:bottom}
 footer{color:#484f58;font-size:.8rem;margin-top:2rem}
 </style></head><body><main>
 <h1>token-optimizer</h1>
@@ -60,8 +67,8 @@ footer{color:#484f58;font-size:.8rem;margin-top:2rem}
 <h2 style="font-size:1.1rem">Tokens saved — full history (${days.length} active day${days.length === 1 ? '' : 's'})</h2>
 <div class="chart">${bars || '<span style="color:#8b949e">No data yet.</span>'}</div>
 <h2 style="font-size:1.1rem">By tool</h2>
-<table><thead><tr><th>Tool</th><th>Calls</th><th>Tokens saved</th><th>Avg savings</th></tr></thead>
-<tbody>${toolRows || '<tr><td colspan="4" style="color:#8b949e">No data yet.</td></tr>'}</tbody></table>
+<div class="table-wrap"><table><caption>Aggregate dimensions are calculated only from records with at least 1,000 raw-source tokens.</caption><thead><tr><th>Tool</th><th>Calls</th><th>Raw source</th><th>Returned</th><th>Small-model tokens</th><th>Tokens saved</th><th>Avg savings</th><th>Avg latency</th><th>Fallback rate</th></tr></thead>
+<tbody>${toolRows || '<tr><td colspan="9" style="color:#8b949e">No data yet.</td></tr>'}</tbody></table></div>
 <footer>Updated ${escapeHtml(stats.updatedAt)} · JSON at <code>/v1/stats</code></footer>
 </main></body></html>`;
 }

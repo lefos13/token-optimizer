@@ -61,9 +61,11 @@ codebase, validate a change, or diagnose a failure. The main tools are:
 The installer creates a private user policy with the `standard` execution
 profile. That profile permits workspace-detected build, typecheck, lint, and
 test commands whether they are auto-detected or supplied explicitly. Shell
-chaining and other dangerous shell syntax remain blocked, so submit lint and
-test as separate commands. A blocked verdict has `validationOutcome: not_run`;
-it means validation never started, not that the project failed.
+chaining and other dangerous shell syntax remain blocked. Use the optional
+`testCommands` array to submit several independent checks in one verdict call;
+each command is still policy-checked separately. A blocked verdict has
+`validationOutcome: not_run`; it means validation never started, not that the
+project failed.
 
 Tool run logs and private analytics are stored under
 `<workspace>/.codex-local-test-runs/`. Run `npm run analytics:ui` from a clone

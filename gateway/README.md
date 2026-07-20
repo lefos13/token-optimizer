@@ -124,9 +124,11 @@ when the gateway is configured; users opt out with
 tokens qualify for the gateway's aggregate counters. Per-day buckets are kept
 indefinitely (never trimmed) so the showcase page never loses historical
 telemetry; tool/model breakdowns are capped and numbers are clamped, and state
-is persisted in `STATE_DIR/global-stats.json`. This release resets existing
-aggregate statistics once through the v2 stats schema; issued-token records are
-not affected.
+is persisted in `STATE_DIR/global-stats.json`. The `/stats` tool table exposes
+calls, raw-source tokens, returned tokens, small-model tokens, saved tokens,
+average savings, average latency, and fallback rate. Existing aggregate
+counters remain available when these newer per-tool dimensions were not stored;
+the missing dimensions display as zero.
 Point people at `https://<gateway-host>/stats` to showcase the tool's impact.
 
 ## Deploy to the droplet

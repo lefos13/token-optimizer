@@ -69,6 +69,12 @@ test('ingest aggregates totals, per-tool, per-model, and per-day buckets', () =>
   assert.equal(stats.averageLatencyMs, 200);
   assert.equal(stats.fallbackRate, 0.5);
   assert.equal(stats.byTool.run_test_verdict.calls, 1);
+  assert.equal(stats.byTool.run_test_verdict.rawSourceTokens, 1000);
+  assert.equal(stats.byTool.run_test_verdict.returnedToMainTokens, 100);
+  assert.equal(stats.byTool.run_test_verdict.localLlmTokens, 400);
+  assert.equal(stats.byTool.run_test_verdict.averageLatencyMs, 100);
+  assert.equal(stats.byTool.run_test_verdict.fallbackRate, 0);
+  assert.equal(stats.byTool.scout_codebase.fallbackRate, 1);
   assert.equal(stats.byModel['m/one'], 2);
   assert.equal(stats.days['2026-07-09'].tokensSaved, 900);
   assert.equal(stats.days['2026-07-10'].tokensSaved, 250);
@@ -127,4 +133,21 @@ test('ingest accepts run_regression_check without adding it to public stats', ()
   const reloaded = createStatsStore(dir);
   assert.equal(reloaded.publicStats().totalCalls, 0);
   assert.equal(reloaded.publicStats().byTool.run_regression_check, undefined);
+});
+
+test('preserves old per-tool counters while defaulting new dimensions', () => {
+  const dir = tmpDir();
+  fs.writeFileSync(path.join(dir, 'global-stats.json'), JSON.stringify({
+    schemaVersion: 3,
+    totals: { calls: 1, rawSourceTokens: 1000, returnedToMainTokens: 100, tokensSaved: 900, savingsSum: 0.9 },
+    byTool: { run_test_verdict: { calls: 1, tokensSaved: 900, savingsSum: 0.9 } },
+    byModel: {},
+    days: {}
+  }));
+
+  const stats = createStatsStore(dir).publicStats();
+  assert.equal(stats.totalCalls, 1);
+  assert.equal(stats.byTool.run_test_verdict.calls, 1);
+  assert.equal(stats.byTool.run_test_verdict.rawSourceTokens, 0);
+  assert.equal(stats.byTool.run_test_verdict.averageLatencyMs, 0);
 });

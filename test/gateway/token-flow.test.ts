@@ -123,6 +123,9 @@ test('analytics ingest feeds the public stats JSON and showcase page', async () 
     assert.equal(stats.totalCalls, 1);
     assert.equal(stats.totalTokensSaved, 900);
     assert.equal(stats.byTool.run_test_verdict.calls, 1);
+    assert.equal(stats.byTool.run_test_verdict.rawSourceTokens, 1000);
+    assert.equal(stats.byTool.run_test_verdict.returnedToMainTokens, 100);
+    assert.equal(stats.byTool.run_test_verdict.localLlmTokens, 400);
 
     const page = await fetch(`${base}/stats`);
     assert.equal(page.status, 200);
@@ -130,6 +133,8 @@ test('analytics ingest feeds the public stats JSON and showcase page', async () 
     const html = await page.text();
     assert.ok(html.includes('token-optimizer'));
     assert.ok(html.includes('run_test_verdict'));
+    assert.ok(html.includes('Small-model tokens'));
+    assert.ok(html.includes('Fallback rate'));
   });
 });
 

@@ -39,9 +39,20 @@ interface StatsState {
     latencySumMs: number;
     fallbackCalls: number;
   };
-  byTool: Record<string, { calls: number; tokensSaved: number; savingsSum: number }>;
+  byTool: Record<string, ToolAggregate>;
   byModel: Record<string, number>;
   days: Record<string, DayBucket>;
+}
+
+interface ToolAggregate {
+  calls: number;
+  tokensSaved: number;
+  savingsSum: number;
+  rawSourceTokens: number;
+  returnedToMainTokens: number;
+  localLlmTokens: number;
+  latencySumMs: number;
+  fallbackCalls: number;
 }
 
 export interface PublicStats {
@@ -54,7 +65,16 @@ export interface PublicStats {
   averageSavingsPercentage: number;
   averageLatencyMs: number;
   fallbackRate: number;
-  byTool: Record<string, { calls: number; tokensSaved: number; averageSavingsPercentage: number }>;
+  byTool: Record<string, {
+    calls: number;
+    tokensSaved: number;
+    rawSourceTokens: number;
+    returnedToMainTokens: number;
+    localLlmTokens: number;
+    averageSavingsPercentage: number;
+    averageLatencyMs: number;
+    fallbackRate: number;
+  }>;
   byModel: Record<string, number>;
   days: Record<string, { calls: number; tokensSaved: number; averageSavingsPercentage: number }>;
 }
@@ -101,6 +121,44 @@ function clampNumber(value: unknown, max: number): number {
   return Math.min(Math.floor(n), max);
 }
 
+function clampDecimal(value: unknown, max: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    return 0;
+  }
+  return Math.min(n, max);
+}
+
+function emptyToolAggregate(): ToolAggregate {
+  return {
+    calls: 0,
+    tokensSaved: 0,
+    savingsSum: 0,
+    rawSourceTokens: 0,
+    returnedToMainTokens: 0,
+    localLlmTokens: 0,
+    latencySumMs: 0,
+    fallbackCalls: 0
+  };
+}
+
+/* Per-tool dimensions were added without changing the aggregate schema. Older
+   gateway files therefore load safely with zeroes for dimensions they never
+   recorded, while their established calls and savings remain visible. */
+function normalizeToolAggregate(raw: unknown): ToolAggregate {
+  const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  return {
+    calls: clampNumber(value.calls, 10_000_000),
+    tokensSaved: clampNumber(value.tokensSaved, 10_000_000_000),
+    savingsSum: clampDecimal(value.savingsSum, 10_000_000),
+    rawSourceTokens: clampNumber(value.rawSourceTokens, 10_000_000_000),
+    returnedToMainTokens: clampNumber(value.returnedToMainTokens, 10_000_000_000),
+    localLlmTokens: clampNumber(value.localLlmTokens, 10_000_000_000),
+    latencySumMs: clampNumber(value.latencySumMs, 3_600_000_000),
+    fallbackCalls: clampNumber(value.fallbackCalls, 10_000_000)
+  };
+}
+
 /* Whitelist-shaped sanitization: unknown fields are dropped, names are pattern
    checked (else bucketed as "other"), and every number is clamped to a sane
    ceiling so a hostile client cannot inflate the public counters absurdly. */
@@ -137,6 +195,12 @@ export function createStatsStore(stateDir: string, now: () => number = () => Dat
     ? emptyState()
     : { ...emptyState(), ...persisted } as StatsState;
   state.totals = { ...emptyState().totals, ...state.totals };
+  state.byTool = Object.fromEntries(
+    Object.entries(state.byTool || {})
+      .filter(([name]) => NAME_RE.test(name))
+      .slice(0, MAX_TOOLS)
+      .map(([name, tool]) => [name, normalizeToolAggregate(tool)])
+  );
 
   function persist(): void {
     try {
@@ -180,10 +244,17 @@ export function createStatsStore(stateDir: string, now: () => number = () => Dat
       }
 
       if (state.byTool[record.toolName] || Object.keys(state.byTool).length < MAX_TOOLS) {
-        const tool = state.byTool[record.toolName] || { calls: 0, tokensSaved: 0, savingsSum: 0 };
+        const tool = state.byTool[record.toolName] || emptyToolAggregate();
         tool.calls += 1;
         tool.tokensSaved += record.estimatedTokensSaved;
         tool.savingsSum += record.savingsPercentage;
+        tool.rawSourceTokens += record.rawSourceTokens;
+        tool.returnedToMainTokens += record.returnedToMainTokens;
+        tool.localLlmTokens += record.localLlmTotalTokens;
+        tool.latencySumMs += record.llmLatencyMs || 0;
+        if (record.usedFallback) {
+          tool.fallbackCalls += 1;
+        }
         state.byTool[record.toolName] = tool;
       }
       if (record.llmModel && (state.byModel[record.llmModel] !== undefined || Object.keys(state.byModel).length < MAX_MODELS)) {
@@ -208,7 +279,12 @@ export function createStatsStore(stateDir: string, now: () => number = () => Dat
         byTool[name] = {
           calls: tool.calls,
           tokensSaved: tool.tokensSaved,
-          averageSavingsPercentage: tool.calls > 0 ? Number((tool.savingsSum / tool.calls).toFixed(4)) : 0
+          rawSourceTokens: tool.rawSourceTokens,
+          returnedToMainTokens: tool.returnedToMainTokens,
+          localLlmTokens: tool.localLlmTokens,
+          averageSavingsPercentage: tool.calls > 0 ? Number((tool.savingsSum / tool.calls).toFixed(4)) : 0,
+          averageLatencyMs: tool.calls > 0 ? Math.round(tool.latencySumMs / tool.calls) : 0,
+          fallbackRate: tool.calls > 0 ? Number((tool.fallbackCalls / tool.calls).toFixed(4)) : 0
         };
       }
       const days: PublicStats['days'] = {};

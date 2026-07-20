@@ -49,6 +49,7 @@ export interface RunTestVerdictArgs {
   taskSummary: string;
   changedFiles?: string[];
   testCommand?: string;
+  testCommands?: string[];
   maxOutputLines?: number;
   timeoutMs?: number;
   parallel?: boolean;
