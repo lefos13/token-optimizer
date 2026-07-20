@@ -67,8 +67,12 @@ export interface StatsStore {
 const MAX_MODELS = 50;
 const MAX_TOOLS = 50;
 const NAME_RE = /^[a-z0-9_]{1,48}$/;
-const STATS_SCHEMA_VERSION = 2;
+/* Public stats describe context savings, so deterministic regression checks
+   are accepted as telemetry but excluded from every public aggregate. Bump the
+   schema because older totals cannot safely subtract that tool's history. */
+const STATS_SCHEMA_VERSION = 3;
 const MIN_SHARED_ANALYTICS_RAW_TOKENS = 1_000;
+const PUBLIC_STATS_EXCLUDED_TOOLS = new Set(['run_regression_check']);
 
 function emptyState(): StatsState {
   return {
@@ -154,6 +158,9 @@ export function createStatsStore(stateDir: string, now: () => number = () => Dat
       const record = sanitizeSharedRecord(raw);
       if (!record) {
         return false;
+      }
+      if (PUBLIC_STATS_EXCLUDED_TOOLS.has(record.toolName)) {
+        return true;
       }
       /* Small tool calls do not produce a meaningful context-savings signal.
          They are accepted as telemetry no-ops so clients do not retry them. */

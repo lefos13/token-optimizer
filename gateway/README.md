@@ -53,8 +53,9 @@ Writes are atomic; deleting the directory resets the registry and the stats.
 - `POST /v1/analytics` → sanitized aggregate analytics ingest from MCP clients.
   Requires a valid bearer token but never consumes a daily use. The payload is
   re-sanitized server-side (name whitelisting, numeric clamping); records with
-  fewer than 1,000 raw-source tokens are accepted but intentionally excluded
-  from public aggregates. Returns `202 {"ok":true}`.
+  fewer than 1,000 raw-source tokens, and deterministic `run_regression_check`
+  records, are accepted but intentionally excluded from public aggregates.
+  Returns `202 {"ok":true}`.
 - `GET /v1/stats` → public aggregate-only global stats JSON (no auth). Contains
   counters, percentages, model/tool breakdowns, and per-day buckets — never
   emails, tokens, workspace paths, commands, or log content.

@@ -55,7 +55,8 @@ codebase, validate a change, or diagnose a failure. The main tools are:
   without pasting them into the conversation.
 - `run_command_digest` — summarizes noisy commands such as builds or installs.
 - `run_regression_check` — compares auto-detected validation against a local
-  baseline.
+  baseline. It is deterministic and is excluded from the gateway's public
+  context-savings statistics.
 
 The installer creates a private user policy with the `standard` execution
 profile. That profile permits workspace-detected build, typecheck, lint, and

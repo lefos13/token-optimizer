@@ -100,3 +100,31 @@ test('ingest ignores sub-threshold records and resets legacy aggregate state', (
   const restarted = createStatsStore(dir);
   assert.equal(restarted.publicStats().totalCalls, 0);
 });
+
+/* Regression checks remain useful locally, but their deterministic exit-code
+   comparison is not a context-savings signal for the public aggregate page. */
+test('ingest accepts run_regression_check without adding it to public stats', () => {
+  const dir = tmpDir();
+  const store = createStatsStore(dir);
+
+  assert.equal(store.ingest({
+    toolName: 'run_regression_check', rawSourceTokens: 5000, returnedToMainTokens: 400,
+    estimatedTokensSaved: 4600, savingsPercentage: 0.92, localLlmTotalTokens: 0
+  }), true);
+
+  const stats = store.publicStats();
+  assert.equal(stats.totalCalls, 0);
+  assert.equal(stats.totalTokensSaved, 0);
+  assert.equal(stats.byTool.run_regression_check, undefined);
+
+  fs.writeFileSync(path.join(dir, 'global-stats.json'), JSON.stringify({
+    schemaVersion: 2,
+    totals: { calls: 1, rawSourceTokens: 5000, returnedToMainTokens: 400, tokensSaved: 4600, savingsSum: 0.92 },
+    byTool: { run_regression_check: { calls: 1, tokensSaved: 4600, savingsSum: 0.92 } },
+    byModel: {},
+    days: {}
+  }));
+  const reloaded = createStatsStore(dir);
+  assert.equal(reloaded.publicStats().totalCalls, 0);
+  assert.equal(reloaded.publicStats().byTool.run_regression_check, undefined);
+});
