@@ -24,5 +24,13 @@ jobs:
         run: npm test
       - if: matrix.full
         run: npm pack --dry-run && npm pack ./packages/installer --dry-run
+      # release:preflight validates `npm sbom` output against the CycloneDX 1.6 schema. npm 10
+      # (bundled with Node 20 and 22) emits a 1.5 document that can repeat an entry in
+      # `dependencies`, which fails the schema's uniqueItems constraint and reports as
+      # SBOM_SCHEMA_INVALID even though the dependency tree is fine. publish-npm.yml already
+      # pins npm 11 for the OIDC exchange, so pinning here too keeps CI validating the same
+      # toolchain that actually publishes rather than a version the release never uses.
+      - if: matrix.full
+        run: npm install -g npm@11
       - if: matrix.full
         run: npm run release:preflight -- --allow-no-tag
