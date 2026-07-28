@@ -2,6 +2,8 @@
 
 const readline = require("readline");
 const https = require("https");
+const fs = require("fs");
+const path = require("path");
 const { spawnSync } = require("child_process");
 const pkg = require("../package.json");
 const {
@@ -392,11 +394,29 @@ async function checkForUpdate(rl, args) {
   }
   console.log(`Updating to ${pkg.name}@${latest}...`);
   rl.close();
-  const npx = process.platform === "win32" ? "npx.cmd" : "npx";
-  const result = spawnSync(npx, ["--yes", `${pkg.name}@latest`, ...process.argv.slice(2)], {
-    stdio: "inherit",
-  });
+  const forwarded = ["--yes", `${pkg.name}@latest`, ...process.argv.slice(2)];
+  const result = spawnNpx(forwarded);
+  if (result.error) {
+    console.error(`Automatic update failed: ${result.error.message}`);
+    console.error(`Run \`npx --yes ${pkg.name}@latest\` manually to update.`);
+    process.exit(1);
+  }
   process.exit(result.status === null ? 1 : result.status);
+}
+
+/* Re-runs npx for the self-update hop. On Windows the npx entry point is a
+   `.cmd` shim, and Node refuses to spawn `.cmd` without a shell (the
+   CVE-2024-27980 hardening), which made the update exit silently. Prefer
+   invoking npm's `npx-cli.js` with the current Node binary so no shell is
+   involved on any platform; fall back to the shim through a shell only when
+   that file is missing. */
+function spawnNpx(argv) {
+  const npxCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npx-cli.js");
+  if (fs.existsSync(npxCli)) {
+    return spawnSync(process.execPath, [npxCli, ...argv], { stdio: "inherit" });
+  }
+  const npx = process.platform === "win32" ? "npx.cmd" : "npx";
+  return spawnSync(npx, argv, { stdio: "inherit", shell: process.platform === "win32" });
 }
 
 /* Fetches the `latest` dist-tag manifest from the npm registry and returns its
