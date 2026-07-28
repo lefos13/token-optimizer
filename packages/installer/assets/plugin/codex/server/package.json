@@ -5,6 +5,6 @@
   "description": "Bundled token_optimizer MCP server (compiled).",
   "main": "index.js",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.30.0"
   }
 }
