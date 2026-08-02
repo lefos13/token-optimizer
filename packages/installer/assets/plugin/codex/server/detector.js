@@ -55,6 +55,11 @@ async function detectCommands(workspacePath) {
             if (scripts.typecheck) {
                 commands.push('npm run typecheck');
             }
+            /* Formatting checks are deterministic validation, not arbitrary project
+             * scripts, so include the conventional name in standard-profile detection. */
+            if (scripts['format:check']) {
+                commands.push('npm run format:check');
+            }
             if (scripts.lint) {
                 commands.push('npm run lint');
             }

@@ -88,7 +88,7 @@ try {
      install (Antigravity does not document version-gated update pulls the way
      Claude Code's marketplace install does, but keeping this accurate still
      matters for users diffing or re-staging the plugin folder). */
-  const VERSION = "2.0.12";
+  const VERSION = "2.0.13";
 
   /* Read the lockfile-pinned SDK version so generated bundles are identical
      after a clean npm ci, regardless of a maintainer's local node_modules. */

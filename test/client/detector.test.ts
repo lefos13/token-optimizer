@@ -27,3 +27,12 @@ test('a project with none of the recognized markers detects nothing', async () =
   const workspace = tempWorkspace({ 'notes.txt': 'hello' });
   assert.deepEqual(await detectCommands(workspace), []);
 });
+
+/* Formatting checks are validation commands just like typechecking and builds;
+ * omitting them makes a manually batched validation run fail before any command starts. */
+test('a Node project detects format:check alongside other validation scripts', async () => {
+  const workspace = tempWorkspace({
+    'package.json': JSON.stringify({ scripts: { build: 'tsc', typecheck: 'tsc --noEmit', 'format:check': 'prettier --check .', test: 'node --test' } }),
+  });
+  assert.deepEqual(await detectCommands(workspace), ['npm run build', 'npm run typecheck', 'npm run format:check', 'npm test']);
+});

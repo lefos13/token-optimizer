@@ -36,7 +36,8 @@ Restart affected clients after a successful update.
 Installation also creates `~/.config/token-optimizer/config.json` with the
 recommended `standard` execution profile when no profile is already selected.
 Existing profile choices and unrelated settings are preserved. Standard mode
-allows detected validation commands, targeted `node --test ...` runs, and
+allows detected build, typecheck, format-check, lint, and test commands,
+targeted `node --test ...` runs, and
 read-only `git diff ...` inspection while continuing to reject arbitrary Node
 scripts, Git mutations, command chaining, redirection, destructive commands,
 and sensitive paths.

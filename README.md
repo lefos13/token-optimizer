@@ -59,8 +59,9 @@ codebase, validate a change, or diagnose a failure. The main tools are:
   context-savings statistics.
 
 The installer creates a private user policy with the `standard` execution
-profile. That profile permits workspace-detected build, typecheck, lint, and
-test commands whether they are auto-detected or supplied explicitly. It also
+profile. That profile permits workspace-detected build, typecheck, format-check,
+lint, and test commands whether they are auto-detected or supplied explicitly.
+It also
 recognizes targeted `node --test ...` commands and read-only `git diff ...`
 inspection; Git mutations and arbitrary Node scripts still require an explicit
 user allowlist or the `unrestricted` profile. Shell chaining and other dangerous
