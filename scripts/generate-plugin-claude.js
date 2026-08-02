@@ -74,18 +74,12 @@ try {
   /* Bump this on every meaningful change. Claude only pulls plugin updates
      when the version changes; keeping it static pins installs to the commit
      they were first installed from and updates become silent no-ops. */
-  const VERSION = "2.0.11";
+  const VERSION = "2.0.12";
 
   /* Pin the runtime dep to the version this repo was built and tested against. */
-  const sdkVersion = require(
-    path.join(
-      rootDir,
-      "node_modules",
-      "@modelcontextprotocol",
-      "sdk",
-      "package.json",
-    ),
-  ).version;
+  /* Read the lockfile-pinned SDK version so generated bundles are identical
+     after a clean npm ci, regardless of a maintainer's local node_modules. */
+  const sdkVersion = require(path.join(rootDir, "package-lock.json")).packages["node_modules/@modelcontextprotocol/sdk"].version;
 
   const pluginJson = {
     name: "token-optimizer",

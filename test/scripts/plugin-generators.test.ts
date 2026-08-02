@@ -8,7 +8,7 @@ const root = path.resolve(__dirname, '..', '..', '..');
 const releaseVersion = JSON.parse(
   fs.readFileSync(path.join(root, 'package.json'), 'utf8'),
 ).version;
-assert.equal(releaseVersion, '2.0.11');
+assert.equal(releaseVersion, '2.0.12');
 const generators = [
   'generate-plugin-antigravity.js',
   'generate-plugin-claude.js',
@@ -55,6 +55,25 @@ test('generated server bundles include every runtime module required by llm.js',
       const installer = path.join(root, 'packages', 'installer', 'assets', 'plugin', bundle, 'server', file);
       assert.ok(fs.existsSync(installer), `installer ${bundle} missing ${file}`);
       assert.doesNotThrow(() => require(installer), `installer ${bundle} cannot load ${file}`);
+    }
+  }
+});
+
+/*
+ * Generators must use the repository lockfile rather than whichever SDK version
+ * happens to be installed in a maintainer's local node_modules. This keeps the
+ * clean npm ci verification job byte-for-byte deterministic.
+ */
+test('generated server manifests use the lockfile-pinned SDK version', () => {
+  const lock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
+  const expected = `^${lock.packages['node_modules/@modelcontextprotocol/sdk'].version}`;
+  for (const bundle of ['antigravity', 'claude', 'codex', 'opencode', 'cursor']) {
+    for (const manifest of [
+      path.join(root, 'plugin', bundle, 'server', 'package.json'),
+      path.join(root, 'packages', 'installer', 'assets', 'plugin', bundle, 'server', 'package.json'),
+    ]) {
+      const packageJson = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+      assert.equal(packageJson.dependencies['@modelcontextprotocol/sdk'], expected, manifest);
     }
   }
 });

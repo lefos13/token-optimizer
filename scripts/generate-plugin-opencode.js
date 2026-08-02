@@ -63,11 +63,11 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "2.0.11";
+  const VERSION = "2.0.12";
 
-  const sdkVersion = require(
-    path.join(rootDir, "node_modules", "@modelcontextprotocol", "sdk", "package.json"),
-  ).version;
+  /* Read the lockfile-pinned SDK version so generated bundles are identical
+     after a clean npm ci, regardless of a maintainer's local node_modules. */
+  const sdkVersion = require(path.join(rootDir, "package-lock.json")).packages["node_modules/@modelcontextprotocol/sdk"].version;
 
   for (const file of SERVER_FILES) {
     const src = path.join(distDir, file);
