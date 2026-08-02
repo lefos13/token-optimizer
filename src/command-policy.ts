@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { ExecutionProfile } from './types';
 
 export type PolicyReasonCode =
-  | 'ALLOWLIST_MATCH' | 'AUTO_DETECTED' | 'PROFILE_UNRESTRICTED'
+  | 'ALLOWLIST_MATCH' | 'AUTO_DETECTED' | 'STANDARD_PROFILE' | 'PROFILE_UNRESTRICTED'
   | 'COMMAND_NOT_ALLOWED' | 'SENSITIVE_PATH' | 'WORKSPACE_ESCAPE'
   | 'DESTRUCTIVE_PATTERN' | 'NETWORK_EXFILTRATION' | 'NESTED_SHELL'
   | 'SHELL_METACHARACTER';
@@ -60,6 +60,32 @@ function matchesPrefix(command: string, prefixes: string[] = []): boolean {
     const candidate = prefix.trim();
     return candidate.length > 0 && (normalized === candidate || normalized.startsWith(`${candidate} `));
   });
+}
+
+/*
+ * The installer default should support common narrow validation and inspection
+ * work without turning standard into an arbitrary-command profile. Git diff
+ * options that can write output or invoke repository-configured helpers remain
+ * excluded; the deny-first checks still apply before this recognition step.
+ */
+function matchesStandardProfileCommand(command: string): boolean {
+  const args = tokens(command);
+  if ((args[0] === 'node' || args[0] === 'node.exe') && args[1] === '--test') {
+    const optionsThatLoadOrWrite = [
+      '-e', '--eval', '-p', '--print', '-r', '--require', '--import',
+      '--loader', '--experimental-loader', '--env-file', '--env-file-if-exists',
+      '--test-reporter-destination',
+    ];
+    return !args.slice(2).some((arg) => optionsThatLoadOrWrite.some((option) => arg === option || arg.startsWith(`${option}=`)));
+  }
+  if (!/^git\s+diff(?:\s|$)/.test(command.trim())) return false;
+  if (args[0] !== 'git' || args[1] !== 'diff') return false;
+  return !args.slice(2).some((arg) =>
+    arg === '--ext-diff'
+    || arg === '--textconv'
+    || arg === '--output'
+    || arg.startsWith('--output='),
+  );
 }
 
 /* runner.ts always spawns with shell:true, which resolves to cmd.exe on win32, not a POSIX
@@ -157,5 +183,6 @@ export async function evaluateCommand(input: PolicyInput): Promise<PolicyDecisio
   if (input.profile === 'unrestricted') return { allowed: true, profile: input.profile, reasonCode: 'PROFILE_UNRESTRICTED' };
   if (matchesPrefix(command, input.allowedCommandPrefixes)) return { allowed: true, profile: input.profile, reasonCode: 'ALLOWLIST_MATCH' };
   if (input.profile === 'standard' && matchesPrefix(command, input.autoDetectedCommands)) return { allowed: true, profile: input.profile, reasonCode: 'AUTO_DETECTED' };
+  if (input.profile === 'standard' && matchesStandardProfileCommand(command)) return { allowed: true, profile: input.profile, reasonCode: 'STANDARD_PROFILE' };
   return deny(input.profile, 'COMMAND_NOT_ALLOWED', 'Command is not permitted by the active profile.');
 }

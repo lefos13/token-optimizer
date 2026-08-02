@@ -58,6 +58,17 @@ function deriveSignalFromExit(code: number | null, signal: NodeJS.Signals | null
   return null;
 }
 
+/*
+ * Git enables repository-configured textconv filters for ordinary diffs. A
+ * standard-profile inspection must remain non-extensible after authorization,
+ * so execute the requested diff with both helper mechanisms disabled while
+ * retaining the caller's original command in result and audit metadata.
+ */
+function hardenStandardCommand(command: string, policyReasonCode: string): string {
+  if (policyReasonCode !== 'STANDARD_PROFILE') return command;
+  return command.replace(/^(\s*git\s+diff)(?=\s|$)/, '$1 --no-ext-diff --no-textconv');
+}
+
 /**
  * Runs a single shell command inside the workspacePath, capturing all stdout and stderr.
  */
@@ -84,7 +95,7 @@ export function runCommand(command: string, workspacePath: string, timeoutMs: nu
       resolve({ command, exitCode: -1, stdout: '', stderr: policy.message, durationMs: Date.now() - startTime, error: 'Command rejected by execution policy', policyReasonCode: policy.reasonCode, autoDetected, executionStatus: 'blocked', rawSourceBytes: Buffer.byteLength(policy.message) });
       return;
     }
-    const child = spawn(command, { cwd: workspacePath, shell: true, detached: process.platform !== 'win32' });
+    const child = spawn(hardenStandardCommand(command, policy.reasonCode), { cwd: workspacePath, shell: true, detached: process.platform !== 'win32' });
     const outCollector = new LogExcerptCollector();
     const errCollector = new LogExcerptCollector();
     const interleavedCollector = new LogExcerptCollector();

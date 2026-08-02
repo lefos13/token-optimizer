@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { evaluateCommand } from '../../src/command-policy';
 import { runCommand } from '../../src/runner';
 
@@ -33,6 +34,68 @@ test('standard allows configured auto-detected commands while safe does not', as
   const input = { command: 'npm run lint', workspacePath: root, allowedCommandPrefixes: [], autoDetectedCommands: ['npm run lint'] };
   assert.equal((await evaluateCommand({ ...input, profile: 'safe' })).allowed, false);
   assert.deepEqual(await evaluateCommand({ ...input, profile: 'standard' }), { allowed: true, profile: 'standard', reasonCode: 'AUTO_DETECTED' });
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+/*
+ * Standard is the practical installer default, so it recognizes targeted Node
+ * tests and read-only Git diffs without requiring per-project allowlist entries.
+ */
+test('standard allows targeted Node tests and read-only Git diffs while safe does not', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-standard-'));
+  const commands = [
+    'node --test src/modules/organizations/organization.service.test.js',
+    'git diff --cached --stat',
+    'git diff --cached -- src/modules/organizations/organization.service.js prisma/schema.prisma',
+  ];
+  for (const command of commands) {
+    assert.equal((await evaluateCommand({ command, workspacePath: root, profile: 'safe' })).allowed, false, command);
+    assert.deepEqual(
+      await evaluateCommand({ command, workspacePath: root, profile: 'standard' }),
+      { allowed: true, profile: 'standard', reasonCode: 'STANDARD_PROFILE' },
+      command,
+    );
+  }
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('standard does not generalize targeted allowances to arbitrary Node or mutating Git commands', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-standard-deny-'));
+  for (const command of [
+    'node src/scripts/publish.js',
+    'node --test --import=/tmp/outside-workspace.js',
+    'node --test --require=/tmp/outside-workspace.js',
+    'node --test --test-reporter-destination=review.log',
+    'git add .',
+    'git diff --output=review.patch',
+    'git diff --ext-diff',
+    'git diff --textconv',
+  ]) {
+    const decision = await evaluateCommand({ command, workspacePath: root, profile: 'standard' });
+    assert.equal(decision.allowed, false, command);
+    assert.equal(decision.reasonCode, 'COMMAND_NOT_ALLOWED', command);
+  }
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+/*
+ * Git enables textconv filters for normal diffs, so the runner must harden an
+ * accepted standard-profile diff before a repository-configured helper runs.
+ */
+test('standard Git diff does not execute repository textconv helpers', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-standard-textconv-'));
+  const marker = path.join(root, 'textconv-executed');
+  fs.writeFileSync(path.join(root, 'textconv.js'), `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed');\n`);
+  fs.writeFileSync(path.join(root, '.gitattributes'), '*.bin diff=probe\n');
+  fs.writeFileSync(path.join(root, 'fixture.bin'), 'before\n');
+  execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });
+  execFileSync('git', ['config', 'diff.probe.textconv', 'node textconv.js'], { cwd: root });
+  execFileSync('git', ['add', '.gitattributes', 'fixture.bin'], { cwd: root });
+  fs.writeFileSync(path.join(root, 'fixture.bin'), 'after\n');
+
+  const result = await runCommand('git diff -- fixture.bin', root, 5000, { profile: 'standard', allowedCommandPrefixes: [] });
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.equal(fs.existsSync(marker), false);
   fs.rmSync(root, { recursive: true, force: true });
 });
 
