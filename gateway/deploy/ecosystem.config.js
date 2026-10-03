@@ -8,6 +8,9 @@
 const fs = require('fs');
 
 const ENV_FILE = process.env.GATEWAY_ENV_FILE || '/etc/local-tester-gateway.env';
+// The root pm2 daemon runs the gateway as this unprivileged user (empty keeps the daemon's user).
+// deploy-pm2.sh gives it the .data directory; pm2 itself reads ENV_FILE and writes the logs.
+const RUN_AS = process.env.PM2_RUN_AS ?? 'apps';
 
 function loadEnvFile(filePath) {
   const env = {};
@@ -37,6 +40,7 @@ module.exports = {
       // This file is deployed to /opt/local-tester-gateway/ecosystem.config.js,
       // alongside dist/, so __dirname is the app root and script resolves correctly.
       cwd: __dirname,
+      ...(RUN_AS ? { uid: RUN_AS, gid: RUN_AS } : {}),
       env: loadEnvFile(ENV_FILE),
       autorestart: true,
       max_restarts: 10,

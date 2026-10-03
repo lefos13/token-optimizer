@@ -95,6 +95,17 @@ echo "==> Ensuring log dir $LOG_DIR exists"
 sudo mkdir -p "$LOG_DIR"
 sudo chown "$(id -un):$(id -gn)" "$LOG_DIR" 2>/dev/null || true
 
+PM2_RUN_AS="${PM2_RUN_AS-apps}"
+if [ -n "$PM2_RUN_AS" ] && id "$PM2_RUN_AS" >/dev/null 2>&1; then
+  echo "==> Giving $PM2_RUN_AS the gateway's .data directory (ecosystem.config.js runs the gateway as $PM2_RUN_AS)"
+  sudo mkdir -p "$APP_DIR/.data"
+  sudo chown -R "$PM2_RUN_AS:$PM2_RUN_AS" "$APP_DIR/.data"
+  sudo chmod 700 "$APP_DIR/.data"
+elif [ -n "$PM2_RUN_AS" ]; then
+  echo "==> User $PM2_RUN_AS does not exist; running the gateway as the pm2 daemon's user"
+  export PM2_RUN_AS=""
+fi
+
 echo "==> Starting/reloading local-tester-gateway under pm2"
 cd "$APP_DIR"
 if pm2 describe local-tester-gateway >/dev/null 2>&1; then
