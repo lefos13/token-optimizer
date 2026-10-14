@@ -12,7 +12,7 @@ const { marketplaceLocations, marketplaceManifest } = require("./marketplace-loc
 const CLIENTS = ["claude", "codex", "antigravity", "opencode", "cursor"];
 const PLACEHOLDER = /^(?:none|null|undefined|placeholder|change[-_ ]?me|.*(?:your|insert|replace)[-_ ]?(?:with[-_ ]?)?(?:token|key).*|<[^>]+>|\$\{[^}]+\})$/i;
 const SECRET_KEYS = ["LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_API_KEY"];
-const MANAGED_PROVIDER_KEYS = ["TOKEN_OPTIMIZER_PROVIDER_MODE", "TOKEN_OPTIMIZER_CREDENTIAL_REF", "LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_BYOK_MODEL", "LOCAL_LLM_API_URL", "LOCAL_LLM_MODEL", "OPENROUTER_API_KEY", "OPENROUTER_API_URL", "OPENROUTER_MODEL"];
+const MANAGED_PROVIDER_KEYS = ["TOKEN_OPTIMIZER_PROVIDER_MODE", "TOKEN_OPTIMIZER_CREDENTIAL_REF", "LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_BYOK_MODEL", "LLM_GATEWAY_SHARE_ANALYTICS", "LOCAL_LLM_API_URL", "LOCAL_LLM_MODEL", "OPENROUTER_API_KEY", "OPENROUTER_API_URL", "OPENROUTER_MODEL"];
 
 /* Diagnostics are deliberately implemented as bounded reads of known managed
    locations. Every finding has a stable code and enough machine-readable
@@ -43,10 +43,14 @@ async function inspectInstallation(options = {}) {
   for (const issue of manifest.findings) findings.push(issue);
   for (const issue of platformService) findings.push(issue);
   for (const legacy of inspectLegacySecrets(home, registrations.registrations)) add(findings, "LEGACY_RAW_CREDENTIAL", "warning", "A legacy client configuration contains a raw provider credential.", "Migrate it to a credential reference, then remove the raw value.", { path: legacy, operation: "migrate-credential" });
+  const legacyGateway = ["gateway", "gateway-token", "gateway-byok"].includes(provider.mode)
+    || registrations.registrations.some((item) => item.env && Object.keys(item.env).some((key) => ["LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_BYOK_MODEL", "LLM_GATEWAY_SHARE_ANALYTICS"].includes(key)))
+    || Object.keys(readClaudeProviderEnv(home)).some((key) => ["LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_BYOK_MODEL", "LLM_GATEWAY_SHARE_ANALYTICS"].includes(key));
+  if (legacyGateway) add(findings, "LEGACY_GATEWAY_CONFIG", "warning", "Legacy centralized gateway configuration detected.", "Run `token-optimizer config` to configure OpenRouter direct or a local endpoint.", { operation: "configure-provider" });
   if (logs.error) add(findings, logs.error.code, "error", logs.error.message, logs.error.remediation, { path: logs.directory, operation: "repair-log-store" });
   else if (logs.bytes > logs.quotaBytes) add(findings, "LOG_QUOTA_EXCEEDED", "warning", "Workspace run logs exceed the configured quota.", "Run `token-optimizer logs prune --workspace <absolute-path>`.", { path: logs.directory, operation: "prune-logs" });
 
-  if (options.performHealthProbe === true && provider.url && provider.mode !== "skip") {
+  if (options.performHealthProbe === true && provider.url && (provider.mode === "local" || provider.mode === "openrouter-direct")) {
     if (provider.requiresCredential && !provider.credentialValue) add(findings, "PROVIDER_AUTH_FAILED", "error", "Provider authentication could not be attempted with a usable credential.", "Configure a valid provider credential.", { operation: "configure-provider" });
     else {
       try {
@@ -94,7 +98,7 @@ function inspectProviderReference(home, options = {}, registrations = []) {
   } else credentialValue = usable(values[key]) ? values[key] : null;
   if (credentialValue && !usable(credentialValue)) { credentialValue = null; credentialError = "invalid"; }
   const requiresCredential = ["gateway-token", "gateway-byok", "openrouter-direct"].includes(mode);
-  const url = options.providerUrl || (mode === "local" ? values.LOCAL_LLM_API_URL : mode === "openrouter-direct" ? values.OPENROUTER_API_URL : values.LLM_GATEWAY_URL) || (mode === "openrouter-direct" ? "https://openrouter.ai/api/v1" : requiresCredential ? "https://llm-proxy.lnf.gr/v1" : null);
+  const url = options.providerUrl || (mode === "local" ? values.LOCAL_LLM_API_URL : mode === "openrouter-direct" ? values.OPENROUTER_API_URL : values.LLM_GATEWAY_URL) || (mode === "openrouter-direct" ? "https://openrouter.ai/api/v1" : null);
   const model = mode === "local" ? values.LOCAL_LLM_MODEL : mode === "openrouter-direct" ? values.OPENROUTER_MODEL : mode === "gateway-byok" ? values.OPENROUTER_BYOK_MODEL : undefined;
   return { mode, source, url: redactUrl(url), model: usable(model) ? String(model).trim() : undefined, credentialStore: ref && typeof ref === "object" ? ref.store : credentialValue ? "environment" : "none", credentialConfigured: requiresCredential ? Boolean(credentialValue) : true, credentialError, credentialFingerprint: ref && typeof ref === "object" ? ref.fingerprint : undefined, credentialReference: ref && typeof ref === "object" ? ref : undefined, requiresCredential, credentialValue };
 }
@@ -222,7 +226,7 @@ function inspectManifest(home, options = {}) {
 }
 function positiveLimit(value, fallback) { const number = Number(value); return Number.isFinite(number) && number > 0 ? Math.floor(number) : fallback; }
 function withinRoots(target, roots) { return roots.some((root) => target === root || target.startsWith(`${root}${path.sep}`)); }
-function knownManifestRoots(home, options = {}) { const installRoot = path.resolve(options.installRoot || path.join(home, ".token-optimizer")); const assetsRoot = path.resolve(options.assetsRoot || path.join(__dirname, "..", "assets")); return [installRoot, assetsRoot, path.join(home, ".token-optimizer-mcp", "backups"), path.join(home, ".config", "token-optimizer"), path.join(home, ".config", "opencode", "token-optimizer-server"), path.join(home, ".config", "opencode", "skills", "token-optimizer"), path.join(home, ".cursor", "token-optimizer-server"), path.join(home, ".cursor", "rules"), path.join(home, ".gemini", "config", "plugins", "token-optimizer"), path.join(home, ".claude", "skills", "token-optimizer"), path.join(home, ".codex", "skills", "token-optimizer"), ...(options.cursorProjects || []).map((root) => path.join(path.resolve(root), ".cursor", "rules"))]; }
+function knownManifestRoots(home, options = {}) { const installRoot = path.resolve(options.installRoot || path.join(home, ".token-optimizer")); const assetsRoot = path.resolve(options.assetsRoot || path.join(__dirname, "..", "assets")); return [installRoot, assetsRoot, path.join(home, ".token-optimizer-mcp", "backups"), path.join(home, ".config", "token-optimizer"), path.join(home, ".config", "opencode", "token-optimizer-server"), path.join(home, ".config", "opencode", "skills", "token-optimizer"), path.join(home, ".config", "opencode", "skills", "token-optimizer-setup"), path.join(home, ".cursor", "token-optimizer-server"), path.join(home, ".cursor", "rules"), path.join(home, ".gemini", "config", "plugins", "token-optimizer"), path.join(home, ".claude", "skills", "token-optimizer"), path.join(home, ".codex", "skills", "token-optimizer"), path.join(home, ".codex", "skills", "token-optimizer-setup"), ...(options.cursorProjects || []).map((root) => path.join(path.resolve(root), ".cursor", "rules"))]; }
 function manifestFinding(code, message, entryPath) { return { code, severity: "error", message, remediation: "Reinstall or repair from a trusted installer source.", path: entryPath, operation: "recreate-manifest" }; }
 function canonicalPath(target) { let current = path.resolve(target); const tail = []; while (!fs.existsSync(current)) { const parent = path.dirname(current); if (parent === current) break; tail.unshift(path.basename(current)); current = parent; } let resolved = fs.realpathSync.native(current); for (const part of tail) resolved = path.join(resolved, part); return resolved; }
 
@@ -234,6 +238,21 @@ function inspectLogState(home, options = {}) { const directory = path.resolve(op
 
 /* Doctor checks the provider's authenticated metadata endpoint. It never sends
    a prompt or completion request, so liveness verification cannot consume model quota. */
-function defaultHealthProbe({ url, mode, credential, timeoutMs = 2500 }) { const raw = String(url).replace(/\/+$/, ""); const withoutV1 = raw.replace(/\/v1$/, ""); const target = mode === "local" ? `${raw}/models` : mode === "openrouter-direct" ? `${raw}/auth/key` : mode === "gateway-byok" ? `${raw}/provider-health` : `${withoutV1}/health`; const transport = target.startsWith("https:") ? https : http; const headers = {}; if (credential) { const header = mode === "gateway-byok" ? "x-openrouter-key" : "authorization"; headers[header] = header === "authorization" ? `Bearer ${credential}` : credential; } return new Promise((resolve, reject) => { const request = transport.get(target, { timeout: timeoutMs, headers }, (response) => { response.resume(); resolve({ ok: response.statusCode >= 200 && response.statusCode < 400, statusCode: response.statusCode }); }); request.on("timeout", () => request.destroy(new Error("health probe timeout"))); request.on("error", reject); }); }
+function defaultHealthProbe({ url, mode, credential, timeoutMs = 2500 }) {
+  if (mode !== "local" && mode !== "openrouter-direct") return Promise.resolve({ ok: false, statusCode: 400 });
+  const raw = String(url).replace(/\/+$/, "");
+  const target = mode === "local" ? `${raw}/models` : `${raw}/auth/key`;
+  const transport = target.startsWith("https:") ? https : http;
+  const headers = {};
+  if (credential) headers["authorization"] = `Bearer ${credential}`;
+  return new Promise((resolve, reject) => {
+    const request = transport.get(target, { timeout: timeoutMs, headers }, (response) => {
+      response.resume();
+      resolve({ ok: response.statusCode >= 200 && response.statusCode < 400, statusCode: response.statusCode });
+    });
+    request.on("timeout", () => request.destroy(new Error("health probe timeout")));
+    request.on("error", reject);
+  });
+}
 
 module.exports = { inspectInstallation, inspectProviderReference, inspectClients, inspectLogState, defaultHealthProbe };

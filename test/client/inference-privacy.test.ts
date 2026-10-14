@@ -8,15 +8,15 @@ const valid = JSON.stringify({
 });
 
 function clearEnv(): void {
-  delete process.env.LLM_GATEWAY_URL;
-  delete process.env.LLM_GATEWAY_TOKEN;
+  delete process.env.TOKEN_OPTIMIZER_PROVIDER_MODE;
+  delete process.env.OPENROUTER_API_KEY;
   delete process.env.LOCAL_LLM_API_URL;
 }
 
 test('remote fetch never receives a recognized secret', async () => {
   clearEnv();
-  process.env.LLM_GATEWAY_URL = 'https://gateway.example/v1';
-  process.env.LLM_GATEWAY_TOKEN = 'gateway-token';
+  process.env.TOKEN_OPTIMIZER_PROVIDER_MODE = 'openrouter-direct';
+  process.env.OPENROUTER_API_KEY = 'sk-or-fixture';
   const originalFetch = globalThis.fetch;
   let outbound = '';
   globalThis.fetch = (async (_url, init) => {

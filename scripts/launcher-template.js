@@ -103,8 +103,9 @@ const child = spawn(process.execPath, [path.join(__dirname, "index.js")], {
       }
       if (secret) {
         const mode = env.TOKEN_OPTIMIZER_PROVIDER_MODE;
-        const key = mode === "gateway-token" ? "LLM_GATEWAY_TOKEN" : mode === "openrouter-direct" ? "OPENROUTER_API_KEY" : "OPENROUTER_BYOK_KEY";
-        env[key] = secret;
+        if (mode === "openrouter-direct" || mode === "gateway-byok" || !mode) {
+          env.OPENROUTER_API_KEY = secret;
+        }
       } else {
         console.error("token-optimizer launcher: credential reference could not be resolved");
         process.exit(1);

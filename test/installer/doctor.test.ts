@@ -39,7 +39,7 @@ test('detects real registrations and installed metadata for all five clients', a
 
 test('status is byte-for-byte read-only and never calls provider', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); const launcher = server(home, 'cursor');
-  write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', LLM_GATEWAY_TOKEN: 'fixture-secret' } } } }));
+  write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'openrouter-direct', OPENROUTER_API_KEY: 'fixture-secret' } } } }));
   const before = snapshot(home); let calls = 0;
   const report = await inspectInstallation({ home, performHealthProbe: false, healthProbe: async () => { calls++; return { ok: true }; } });
   assert.equal(snapshot(home), before); assert.equal(calls, 0); assert.doesNotMatch(JSON.stringify(report), /fixture-secret/);
@@ -47,21 +47,21 @@ test('status is byte-for-byte read-only and never calls provider', async () => {
 
 test('doctor resolves credential reference and performs authenticated quota-free check', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); const launcher = server(home, 'cursor');
-  const ref = { store: 'macos-keychain', service: 'token-optimizer', account: 'gateway-token', fingerprint: 'sha256:safe' };
-  write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', TOKEN_OPTIMIZER_CREDENTIAL_REF: JSON.stringify(ref) } } } }));
+  const ref = { store: 'macos-keychain', service: 'token-optimizer', account: 'openrouter-direct', fingerprint: 'sha256:safe' };
+  write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'openrouter-direct', TOKEN_OPTIMIZER_CREDENTIAL_REF: JSON.stringify(ref) } } } }));
   let request: any;
   const report = await inspectInstallation({ home, platform: 'linux', performHealthProbe: true, createCredentialStore: () => ({ get: () => 'valid-fixture-token' }), healthProbe: async (value: any) => { request = value; return { ok: true, statusCode: 200 }; } });
-  assert.equal(request.mode, 'gateway-token'); assert.equal(request.credential, 'valid-fixture-token'); assert.doesNotMatch(JSON.stringify(report), /valid-fixture-token/);
+  assert.equal(request.mode, 'openrouter-direct'); assert.equal(request.credential, 'valid-fixture-token'); assert.doesNotMatch(JSON.stringify(report), /valid-fixture-token/);
 });
 
 test('canonical registration provider overrides stale ambient process mode', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); const launcher = server(home, 'cursor');
-  const ref = { store: 'macos-keychain', service: 'token-optimizer', account: 'gateway-token', fingerprint: 'sha256:safe' };
-  write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', TOKEN_OPTIMIZER_CREDENTIAL_REF: JSON.stringify(ref), LLM_GATEWAY_URL: 'https://gateway.example/v1' } } } }));
+  const ref = { store: 'macos-keychain', service: 'token-optimizer', account: 'openrouter-direct', fingerprint: 'sha256:safe' };
+  write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'openrouter-direct', TOKEN_OPTIMIZER_CREDENTIAL_REF: JSON.stringify(ref), OPENROUTER_API_URL: 'https://openrouter.ai/api/v1' } } } }));
   let request: any;
   const report = await inspectInstallation({ home, env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'local' }, performHealthProbe: true, createCredentialStore: () => ({ get: () => 'valid-fixture-token' }), healthProbe: async (value: any) => { request = value; return { ok: true }; } });
-  assert.equal(report.provider.mode, 'gateway-token');
-  assert.equal(request.mode, 'gateway-token');
+  assert.equal(report.provider.mode, 'openrouter-direct');
+  assert.equal(request.mode, 'openrouter-direct');
 });
 
 test('canonical local registration clears ambient gateway URL and credential reference', async () => {
@@ -94,9 +94,8 @@ test('ambient provider fallback is identified and Claude settings count as canon
   assert.equal(claude.provider.source, 'registration'); assert.equal(claude.provider.mode, 'local'); assert.equal(claude.provider.model, 'claude-model');
 });
 
-test('doctor exposes safe model metadata for gateway BYOK and direct OpenRouter', async () => {
+test('doctor exposes safe model metadata for direct OpenRouter', async () => {
   for (const fixture of [
-    { mode: 'gateway-byok', key: 'OPENROUTER_BYOK_KEY', modelKey: 'OPENROUTER_BYOK_MODEL', model: 'gateway/model' },
     { mode: 'openrouter-direct', key: 'OPENROUTER_API_KEY', modelKey: 'OPENROUTER_MODEL', model: 'direct/model' },
   ]) {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-model-')); const launcher = server(home, 'cursor');
@@ -141,9 +140,9 @@ test('local doctor performs quota-free GET /v1/models and reports a dead endpoin
 
 test('invalid nonblank placeholder and inaccessible native credential fail truthfully', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-'));
-  const invalid = await inspectInstallation({ home, provider: 'gateway-token', env: { LLM_GATEWAY_TOKEN: '${TOKEN}' }, performHealthProbe: true, healthProbe: async () => ({ ok: true }) });
+  const invalid = await inspectInstallation({ home, provider: 'openrouter-direct', env: { OPENROUTER_API_KEY: '${TOKEN}' }, performHealthProbe: true, healthProbe: async () => ({ ok: true }) });
   assert.ok(invalid.findings.some((item: any) => item.code === 'PROVIDER_AUTH_FAILED'));
-  const inaccessible = await inspectInstallation({ home, provider: 'gateway-token', credentialRef: { store: 'linux-secret-service', account: 'x' }, createCredentialStore: () => ({ get: () => { throw new Error('locked'); } }), healthProbe: async () => ({ ok: true }) });
+  const inaccessible = await inspectInstallation({ home, provider: 'openrouter-direct', credentialRef: { store: 'linux-secret-service', account: 'x' }, createCredentialStore: () => ({ get: () => { throw new Error('locked'); } }), healthProbe: async () => ({ ok: true }) });
   assert.ok(inaccessible.findings.some((item: any) => item.code === 'CREDENTIAL_INACCESSIBLE'));
 });
 
@@ -170,7 +169,7 @@ test('reports bad manifest without repair source and macOS launchctl mismatch', 
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); const managed = path.join(home, '.token-optimizer', 'managed.txt'); write(managed, 'changed');
   write(path.join(home, '.token-optimizer', 'manifest.json'), JSON.stringify({ schemaVersion: 2, roots: [path.join(home, '.token-optimizer')], assetRoots: [path.join(home, 'missing-cache')], files: [{ path: managed, sha256: 'bad', ownership: 'installer' }] }));
   write(path.join(home, 'Library', 'LaunchAgents', 'com.softawarest.token-optimizer.env.plist'), '<plist/>');
-  const report = await inspectInstallation({ home, platform: 'darwin', provider: 'gateway-token', env: { LLM_GATEWAY_TOKEN: 'valid-token' }, execFileSync: () => { throw new Error('not loaded'); }, healthProbe: async () => ({ ok: true }) });
+  const report = await inspectInstallation({ home, platform: 'darwin', provider: 'openrouter-direct', env: { OPENROUTER_API_KEY: 'valid-token' }, execFileSync: () => { throw new Error('not loaded'); }, healthProbe: async () => ({ ok: true }) });
   for (const code of ['MANIFEST_HASH_MISMATCH', 'MANIFEST_SOURCE_UNAVAILABLE', 'LAUNCHCTL_MISMATCH']) assert.ok(report.findings.some((item: any) => item.code === code), code);
 });
 
@@ -227,8 +226,8 @@ test('explicit installed version alone controls mismatch while discoveries remai
 });
 
 test('launchctl read diagnostics compare loaded service and exact managed values', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); write(path.join(home, 'Library', 'LaunchAgents', 'com.softawarest.token-optimizer.env.plist'), '<plist/>'); const launcher = server(home, 'cursor'); const ref = JSON.stringify({ store: 'macos-keychain', account: 'x' }); write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', TOKEN_OPTIMIZER_CREDENTIAL_REF: ref } } } }));
-  const calls: string[][] = []; const exec = (_command: string, args: string[]) => { calls.push(args); if (args[0] === 'print') return 'loaded'; if (args[1] === 'TOKEN_OPTIMIZER_PROVIDER_MODE') return 'gateway-token\n'; return 'wrong\n'; };
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-')); write(path.join(home, 'Library', 'LaunchAgents', 'com.softawarest.token-optimizer.env.plist'), '<plist/>'); const launcher = server(home, 'cursor'); const ref = JSON.stringify({ store: 'macos-keychain', account: 'x' }); write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'openrouter-direct', TOKEN_OPTIMIZER_CREDENTIAL_REF: ref } } } }));
+  const calls: string[][] = []; const exec = (_command: string, args: string[]) => { calls.push(args); if (args[0] === 'print') return 'loaded'; if (args[1] === 'TOKEN_OPTIMIZER_PROVIDER_MODE') return 'openrouter-direct\n'; return 'wrong\n'; };
   const report = await inspectInstallation({ home, platform: 'darwin', createCredentialStore: () => ({ get: () => 'token' }), execFileSync: exec });
   assert.ok(calls.some((args) => args[0] === 'print')); assert.ok(calls.some((args) => args[0] === 'getenv')); assert.ok(report.findings.some((item: any) => item.code === 'LAUNCHCTL_ENV_MISMATCH'));
 });
@@ -240,4 +239,22 @@ test('workspace log diagnostics enforce quota and reject symlink roots', async (
   fs.rmSync(path.join(workspace, '.codex-local-test-runs'), { recursive: true }); fs.symlinkSync(home, path.join(workspace, '.codex-local-test-runs'));
   const unsafe = await inspectInstallation({ home, workspace, provider: 'local' });
   assert.ok(unsafe.findings.some((item: any) => item.code === 'LOG_PATH_UNSAFE'));
+});
+
+test('doctor reports legacy gateway configuration as a warning with fix command and does not probe gateway', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-doctor-legacy-')); const launcher = server(home, 'cursor');
+  write(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { token_optimizer: { command: 'node', args: [launcher], env: { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', LLM_GATEWAY_TOKEN: 'fixture-token', LLM_GATEWAY_URL: 'https://gateway.example/v1' } } } }));
+  let probeCalled = false;
+  const report = await inspectInstallation({ home, performHealthProbe: true, healthProbe: async () => { probeCalled = true; return { ok: true, statusCode: 200 }; } });
+  assert.equal(probeCalled, false, 'gateway provider must never be probed');
+  const legacyFinding = report.findings.find((item: any) => item.code === 'LEGACY_GATEWAY_CONFIG');
+  assert.ok(legacyFinding, 'LEGACY_GATEWAY_CONFIG warning must be present');
+  assert.equal(legacyFinding.severity, 'warning');
+  assert.match(legacyFinding.remediation, /token-optimizer config/);
+});
+
+test('defaultHealthProbe rejects gateway mode immediately without network probe', async () => {
+  const result = await doctor.defaultHealthProbe({ url: 'https://gateway.example/v1', mode: 'gateway-token', credential: 'some-token' });
+  assert.equal(result.ok, false);
+  assert.equal(result.statusCode, 400);
 });

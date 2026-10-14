@@ -87,7 +87,7 @@ async function productMeasure(spec) {
   const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'token-optimizer-benchmark-'));
   fs.writeFileSync(path.join(configHome, 'config.json'), JSON.stringify({ execution: { profile: 'unrestricted' } }), { mode: 0o600 });
   const transport = new StdioClientTransport({ command: 'node', args: ['dist/index.js'], cwd: root, stderr: 'pipe', env: {
-    PATH: process.env.PATH || '', HOME: process.env.HOME || '', TOKEN_OPTIMIZER_CONFIG_HOME: configHome, LLM_GATEWAY_URL: mock.url, LLM_GATEWAY_TOKEN: 'benchmark-token', LOCAL_LLM_MODEL: 'unused-local'
+    PATH: process.env.PATH || '', HOME: process.env.HOME || '', TOKEN_OPTIMIZER_CONFIG_HOME: configHome, TOKEN_OPTIMIZER_PROVIDER_MODE: 'openrouter-direct', OPENROUTER_API_KEY: 'benchmark-token', OPENROUTER_API_URL: mock.url, OPENROUTER_MODEL: model, LOCAL_LLM_MODEL: 'unused-local'
   }});
   const client = new Client({ name: 'release-benchmark', version: '1.0.0' });
   const state = { peakKb: 0, available: false }; const started = process.hrtime.bigint(); let timer; let callDeadline;

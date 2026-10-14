@@ -7,7 +7,6 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 const pkg = require("../package.json");
 const {
-  DEFAULT_GATEWAY_URL,
   DEFAULT_LOCAL_LLM_URL,
   DEFAULT_LOCAL_LLM_MODEL,
   DEFAULT_OPENROUTER_URL,
@@ -17,7 +16,7 @@ const {
   formatChangePlan,
   installSelectedClients,
   persistInstallManifest,
-  applyGatewayConfig,
+  applyProviderConfig,
   prepareCredentialOptions,
   applyProviderConfiguration,
   persistProviderCredentialOwnership,
@@ -101,7 +100,7 @@ async function main() {
     await checkForUpdate(rl, args);
     const clients = parseList(args.clients || args.client || "detected");
     if (command === "install" && args.migrate === true) {
-      const explicitProvider = args.provider !== undefined || args.local === true || args.token !== undefined || args["byok-key"] !== undefined;
+      const explicitProvider = args.provider !== undefined || args.local === true || args.token !== undefined || args["byok-key"] !== undefined || args["openrouter-key"] !== undefined;
       const providerOptions = explicitProvider ? await resolveProviderOptions(args, rl) : {};
       const migrationOptions = {
         home: args.home,
@@ -128,7 +127,7 @@ async function main() {
       return;
     }
     const existing = command === "install" ? await inspectInstallation({ home: args.home, performHealthProbe: false }) : null;
-    const explicitProvider = args.provider !== undefined || args.local === true || args.token !== undefined || args["byok-key"] !== undefined;
+    const explicitProvider = args.provider !== undefined || args.local === true || args.token !== undefined || args["byok-key"] !== undefined || args["openrouter-key"] !== undefined;
     const providerOptions = command === "install" && !explicitProvider && shouldPreserveInstalledProvider(existing)
       ? preservedProviderOptions(existing.provider)
       : await resolveProviderOptions(args, rl);
@@ -185,8 +184,8 @@ async function main() {
       }
       if (options.provider === "local") {
         console.log(`No token used. Point an OpenAI-compatible endpoint at ${options.localApiUrl || DEFAULT_LOCAL_LLM_URL} before using the tools.`);
-      } else if (options.provider === "byok") {
-        console.log("No proxy token used: calls are billed to your own OpenRouter account, unlimited.");
+      } else if (options.provider === "openrouter-direct" || options.provider === "byok" || options.provider === "openrouter") {
+        console.log("Calls are billed to your own OpenRouter account, unlimited.");
       } else if (options.provider === "skip") {
         console.log("No provider configured yet. Run `token-optimizer config` later to add a provider.");
       }
@@ -214,7 +213,7 @@ function preservedProviderOptions(provider) {
   const options = { provider: provider.mode, credentialRef: provider.credentialReference };
   if (provider.mode === "local") { options.localApiUrl = provider.url; options.localModel = provider.model; }
   else if (provider.mode === "openrouter-direct") { options.openrouterUrl = provider.url; options.byokModel = provider.model; }
-  else { options.gatewayUrl = provider.url; if (provider.mode === "gateway-byok") options.byokModel = provider.model; }
+  else { return { provider: "skip" }; }
   return options;
 }
 
@@ -222,6 +221,7 @@ function preservedProviderOptions(provider) {
    Ambient legacy variables cannot prove that a client has a usable installation. */
 function shouldPreserveInstalledProvider(report) {
   if (!report?.provider?.mode || report.provider.mode === "skip") return false;
+  if (!["local", "openrouter-direct"].includes(report.provider.mode)) return false;
   if (report.provider.source !== "registration") return false;
   const active = (report.clients?.registrations || []).some((registration) => registration.stale !== true);
   if (!active) return false;
@@ -232,10 +232,10 @@ function shouldPreserveInstalledProvider(report) {
    failures are advisory so a temporary outage cannot strand a valid upgrade. */
 async function validateProviderBeforeMutation(options) {
   const mode = normalizeProviderChoice(options.provider);
-  if (!mode || !["gateway-token", "gateway-byok", "openrouter-direct"].includes(mode)) return [];
-  let credential = options.gatewayToken || options.byokKey || options.openrouterKey;
+  if (mode !== "openrouter-direct") return [];
+  let credential = options.openrouterKey || options.byokKey;
   if (!credential && options.credentialRef) {
-    const report = await inspectInstallation({ provider: mode, credentialRef: options.credentialRef, providerUrl: options.gatewayUrl || options.openrouterUrl, performHealthProbe: false });
+    const report = await inspectInstallation({ provider: mode, credentialRef: options.credentialRef, providerUrl: options.openrouterUrl, performHealthProbe: false });
     if (report.provider.credentialConfigured) {
       const kind = options.credentialRef.store === "config" || options.credentialRef.store === "protected-config"
         ? "config"
@@ -245,7 +245,7 @@ async function validateProviderBeforeMutation(options) {
     }
   }
   try {
-    const url = mode === "openrouter-direct" ? (options.openrouterUrl || DEFAULT_OPENROUTER_URL) : (options.gatewayUrl || DEFAULT_GATEWAY_URL);
+    const url = options.openrouterUrl || DEFAULT_OPENROUTER_URL;
     const probe = await defaultHealthProbe({ url, mode, credential });
     if (probe.statusCode === 401 || probe.statusCode === 403) throw new Error("Provider rejected the configured credential.");
     if (!probe.ok) return [{ code: "PROVIDER_UNREACHABLE", severity: "warning", message: "Provider validation was unavailable; the structurally valid installation was retained." }];
@@ -273,18 +273,18 @@ function createProgressReporter(args = {}) {
 /* Resolves which LLM provider to configure from flags first (for scripted/CI
    use), falling back to an interactive menu only when nothing on the command
    line already decided it.
-   - "gateway" needs a token (shared infrastructure, daily-limited).
-   - "byok" needs ONLY your own OpenRouter key — no proxy token is asked for
-     or written, because a BYOK caller doesn't use the operator's OpenRouter
-     setup at all.
-   - "local" needs nothing (your own endpoint, no gateway involved).
-   - "skip" installs the MCP server with no provider configured at all, to be
+   - "openrouter-direct" (aliases "byok", "openrouter", "direct"): your own OpenRouter key.
+   - "local": your own OpenAI-compatible endpoint.
+   - "skip": installs the MCP server with no provider configured at all, to be
      finished later with `token-optimizer config`. */
 async function resolveProviderOptions(args, rl) {
+  if (args.token !== undefined || (args.provider && ["gateway", "gateway-token", "gateway-byok"].includes(String(args.provider).toLowerCase()))) {
+    throw new Error("Gateway support was removed; use --provider openrouter or --provider local.");
+  }
   const credentialStore = normalizeCredentialStore(args["credential-store"]);
   const explicit = normalizeProviderChoice(args.provider);
   if (args.provider !== undefined && !explicit) {
-    throw new Error(`Unsupported provider mode: ${args.provider}. Choose local, gateway-token, gateway-byok, openrouter-direct, or skip.`);
+    throw new Error(`Unsupported provider mode: ${args.provider}. Choose local, openrouter-direct, or skip.`);
   }
   if (explicit === "skip") {
     return { provider: "skip" };
@@ -296,31 +296,23 @@ async function resolveProviderOptions(args, rl) {
       localModel: args["local-model"] || args.localModel || "",
     };
   }
-  const byokKeyFlag = args["byok-key"] || args.byokKey;
-  if (explicit === "gateway-byok" || explicit === "openrouter-direct" || byokKeyFlag) {
-    const byokKey = byokKeyFlag || await askSecretRequired(rl, "Your OpenRouter API key (sk-or-...): ");
-    const modelFlag = args["byok-model"] ?? args.byokModel;
+  const openrouterKeyFlag = args["openrouter-key"] || args.openrouterKey || args["byok-key"] || args.byokKey;
+  if (explicit === "openrouter-direct" || openrouterKeyFlag) {
+    const byokKey = openrouterKeyFlag || await askSecretRequired(rl, "Your OpenRouter API key (sk-or-...): ");
+    const modelFlag = args["openrouter-model"] ?? args.openrouterModel ?? args["byok-model"] ?? args.byokModel;
     const byokModel = modelFlag !== undefined
       ? String(modelFlag).trim()
-      : byokKeyFlag
+      : openrouterKeyFlag
         ? ""
-        : await askOptional(rl, explicit === "gateway-byok" ? "OpenRouter model ID (optional; Enter for gateway default): " : "OpenRouter model ID (optional; Enter for OpenRouter default): ");
-    const provider = explicit === "gateway-byok" ? "gateway-byok" : "openrouter-direct";
+        : await askOptional(rl, "OpenRouter model ID (optional; Enter for OpenRouter default): ");
     return {
-      provider,
+      provider: "openrouter-direct",
       credentialStore,
-      ...(provider === "gateway-byok" ? { gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL } : { openrouterUrl: args["openrouter-url"] || args.openrouterUrl || DEFAULT_OPENROUTER_URL }),
+      openrouterUrl: args["openrouter-url"] || args.openrouterUrl || DEFAULT_OPENROUTER_URL,
       byokKey,
       byokModel,
-    };
-  }
-  if (explicit === "gateway-token" || args.token) {
-    const gatewayToken = args.token || process.env.LLM_GATEWAY_TOKEN || await askSecretRequired(rl, "Gateway access token: ");
-    return {
-      provider: args.provider === "gateway" ? "gateway" : "gateway-token",
-      credentialStore,
-      gatewayToken,
-      gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL,
+      openrouterKey: byokKey,
+      openrouterModel: byokModel,
     };
   }
   return promptForProviderInteractive({ ...args, credentialStore }, rl);
@@ -334,36 +326,36 @@ function normalizeCredentialStore(value) {
 
 async function promptForProviderInteractive(args, rl) {
   writePromptLine(rl, "How should the LLM provider be configured?");
-  writePromptLine(rl, "  1. Gateway access token - shared infrastructure, requires an approved token, 20 calls/day by default");
-  writePromptLine(rl, "  2. Your own OpenRouter key - unlimited usage, billed to your account, NO token needed at all");
-  writePromptLine(rl, "  3. Local LLM only - your own OpenAI-compatible endpoint, no token, nothing leaves your machine");
-  writePromptLine(rl, "  4. Skip for now (configure later with `token-optimizer config`)");
-  const answer = (await ask(rl, "Choice [1-4]: ")).trim();
+  writePromptLine(rl, "  1. Your own OpenRouter key - unlimited usage, billed to your account, NO token needed at all");
+  writePromptLine(rl, "  2. Local LLM only - your own OpenAI-compatible endpoint, no token, nothing leaves your machine");
+  writePromptLine(rl, "  3. Skip for now (configure later with `token-optimizer config`)");
+  const answer = (await ask(rl, "Choice [1-3]: ")).trim();
 
-  if (answer === "2") {
+  if (answer === "1") {
     const byokKey = await askSecretRequired(rl, "Your OpenRouter API key (sk-or-...): ");
     const byokModel = await askOptional(rl, "OpenRouter model ID (optional; Enter for OpenRouter default): ");
-    writePromptLine(rl, "No proxy token needed: calls are billed to your OpenRouter account, unlimited.");
+    writePromptLine(rl, "Calls are billed to your OpenRouter account, unlimited.");
     return {
       provider: "openrouter-direct",
       openrouterUrl: args["openrouter-url"] || args.openrouterUrl || DEFAULT_OPENROUTER_URL,
-      gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL,
       byokKey,
+      openrouterKey: byokKey,
       credentialStore: args.credentialStore || "native",
       byokModel,
+      openrouterModel: byokModel,
     };
   }
-  if (answer === "3") {
+  if (answer === "2") {
     const localApiUrl = (await ask(rl, `Local LLM endpoint [${DEFAULT_LOCAL_LLM_URL}]: `)).trim() || DEFAULT_LOCAL_LLM_URL;
     const localModel = (await ask(rl, `Local LLM model name [${DEFAULT_LOCAL_LLM_MODEL}]: `)).trim() || DEFAULT_LOCAL_LLM_MODEL;
     writePromptLine(rl, "No token needed. Make sure an OpenAI-compatible endpoint is running and reachable at that URL.");
     return { provider: "local", localApiUrl, localModel };
   }
-  if (answer === "4") {
+  if (answer === "3") {
     return { provider: "skip" };
   }
-  const gatewayToken = await askSecretRequired(rl, "Gateway access token: ");
-  return { provider: "gateway", gatewayToken, credentialStore: args.credentialStore || "native", gatewayUrl: args.url || process.env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL };
+  writePromptLine(rl, "Invalid choice. Skipping provider configuration for now.");
+  return { provider: "skip" };
 }
 
 /* Checks npm for a newer installer version and, when the session is
@@ -547,7 +539,7 @@ function printHelp() {
   token-optimizer install --dry-run [--json] [--verbose|--quiet]
   token-optimizer install --migrate [--dry-run --json]
   token-optimizer install --local
-  token-optimizer config --token <token>
+  token-optimizer config --openrouter-key <key>
   token-optimizer defaults --clients claude,codex,opencode
   token-optimizer status [--json] [--strict] [--workspace <absolute-path>]
   token-optimizer doctor [--json] [--strict] [--workspace <absolute-path>]
@@ -557,31 +549,24 @@ function printHelp() {
   token-optimizer logs status|prune|purge --workspace <absolute-path>
 
 No token is required to use this tool. With no provider flags, the installer
-prompts for one of three providers, plus a skip option:
+prompts for one of two providers, plus a skip option:
 
-  gateway  Shared infrastructure. Requires an approved gateway access token
-           (request one, then get approved). Limited to 20 calls/day by
-           default (operator-adjustable).
-  byok     Your own OpenRouter key. NO gateway token is used or needed at
-           all — you are not using the operator's OpenRouter setup, so the
-           gateway does not authenticate you, only proxies the request.
-           Unlimited usage; billed to your own account.
-  local    Your own OpenAI-compatible endpoint (llama.cpp, LM Studio, Ollama,
-           etc.). No token, no gateway involved, nothing leaves your machine.
-  skip     Install the MCP server with no provider configured; finish later
-           with \`token-optimizer config\`.
+  openrouter   Your own OpenRouter key. Direct OpenRouter connection; unlimited
+               usage billed to your own account.
+  local        Your own OpenAI-compatible endpoint (llama.cpp, LM Studio, Ollama,
+               etc.). No key involved, nothing leaves your machine.
+  skip         Install the MCP server with no provider configured; finish later
+               with \`token-optimizer config\`.
 
 Options:
-  --provider <mode>            gateway, byok (direct OpenRouter), local, or skip. Overrides prompting.
+  --provider <mode>            openrouter (or openrouter-direct, byok), local, or skip. Overrides prompting.
   --migrate                    Detect v1 state, back it up privately, and migrate transactionally.
   --credential-store <kind>    native (default), env, or config. env/config are explicit plaintext opt-ins.
-  --token <token>               Gateway access token. Defaults to LLM_GATEWAY_TOKEN. Implies --provider gateway.
-  --url <url>                  Gateway URL. Defaults to ${DEFAULT_GATEWAY_URL}. Used by both gateway and byok modes.
-  --byok-key <key>              Your own OpenRouter API key (sk-or-...). Implies --provider byok. No --token needed.
-  --byok-model <model-id>       Optional OpenRouter model ID for every task. Defaults to the gateway-selected model.
+  --openrouter-key <key>       Your OpenRouter API key (sk-or-...). Alias: --byok-key. Implies --provider openrouter.
+  --openrouter-model <model>   Optional OpenRouter model ID for every task. Alias: --byok-model.
   --local                      Use a local LLM only; no token required. Implies --provider local.
-  --local-url <url>             Local OpenAI-compatible endpoint. Defaults to ${DEFAULT_LOCAL_LLM_URL}.
-  --local-model <name>          Local model name. Defaults to ${DEFAULT_LOCAL_LLM_MODEL}.
+  --local-url <url>            Local OpenAI-compatible endpoint. Defaults to ${DEFAULT_LOCAL_LLM_URL}.
+  --local-model <name>         Local model name. Defaults to ${DEFAULT_LOCAL_LLM_MODEL}.
   --clients <list>             detected, all, claude, codex, antigravity, opencode, cursor.
   --cursor-project <path>      Copy Cursor default-on rule into a project.
   --no-defaults                Skip global default-on instruction writes.

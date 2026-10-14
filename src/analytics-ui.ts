@@ -498,7 +498,6 @@ function renderHtml(): string {
       border: 1px solid #f3c7c1;
     }
     .provider-local { background: #ecfdf5; color: var(--accent); }
-    .provider-gateway { background: #eff6ff; color: var(--accent-2); }
     .model-tag {
       background: var(--surface-2);
       border: 1px solid var(--border);
@@ -877,14 +876,13 @@ function renderHtml(): string {
 
     function providerLabel(key) {
       if (key === 'local-openai-compatible') return 'Token Optimizer';
-      if (key === 'gateway') return 'Gateway';
+      if (key === 'openrouter') return 'OpenRouter';
       if (key === 'none') return 'No LLM (fallback)';
       return key;
     }
 
     function providerClass(key) {
       if (key === 'local-openai-compatible') return 'provider-local';
-      if (key === 'gateway') return 'provider-gateway';
       return '';
     }
 

@@ -48,42 +48,53 @@ function credential(config: ProviderConfig, fallbackEnv: string): string {
   return process.env[envName] || '';
 }
 
-/* Each mode owns its authentication semantics. In particular, BYOK is deliberately
-   visible to callers because the user's key crosses the gateway boundary. */
+/* Each mode owns its authentication semantics. Local endpoints require no credentials,
+   while openrouter-direct sends the API key directly to OpenRouter. */
 export function resolveProvider(config: ProviderConfig, taskType: LLMTaskType): LLMProvider;
 export function resolveProvider(taskType: LLMTaskType): LLMProvider;
 export function resolveProvider(configOrTask: ProviderConfig | LLMTaskType, taskTypeArg?: LLMTaskType): LLMProvider {
   if (typeof configOrTask === 'string') {
     const taskType = configOrTask;
     const env = process.env;
-    const gatewayUrl = env.LLM_GATEWAY_URL;
-    const token = env.LLM_GATEWAY_TOKEN;
-    const byok = env.OPENROUTER_BYOK_KEY;
-    if (gatewayUrl && (token || byok)) {
-      return resolveProvider({ mode: token ? 'gateway-token' : 'gateway-byok', apiUrl: gatewayUrl, model: 'gateway-managed', credentialEnv: token ? 'LLM_GATEWAY_TOKEN' : 'OPENROUTER_BYOK_KEY', credential: token || byok, byokCredential: token ? byok : undefined, byokModel: byok ? env.OPENROUTER_BYOK_MODEL?.trim() || undefined : undefined }, taskType);
+    if (env.OPENROUTER_API_KEY) {
+      return resolveProvider({
+        mode: 'openrouter-direct',
+        apiUrl: env.OPENROUTER_API_URL || DEFAULT_OPENROUTER_URL,
+        model: env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL,
+        credentialEnv: 'OPENROUTER_API_KEY',
+        credential: env.OPENROUTER_API_KEY
+      }, taskType);
     }
-    return resolveProvider({ mode: 'local', apiUrl: env.LOCAL_LLM_API_URL || DEFAULT_LOCAL_URL, model: modelFor(taskType, DEFAULT_LOCAL_MODEL) }, taskType);
+    return resolveProvider({
+      mode: 'local',
+      apiUrl: env.LOCAL_LLM_API_URL || DEFAULT_LOCAL_URL,
+      model: modelFor(taskType, DEFAULT_LOCAL_MODEL)
+    }, taskType);
   }
   const config = configOrTask;
   const taskType = taskTypeArg!;
-  const warnings = [...(config.mode === 'gateway-byok' ? ['BYOK key is sent through the gateway; the gateway can observe and proxy the key.'] : [])];
+  const warnings: string[] = [];
   switch (config.mode) {
     case 'openrouter-direct':
-      return { mode: config.mode, taskType, providerName: 'openrouter', apiUrl: normalizeUrl(config.apiUrl || DEFAULT_OPENROUTER_URL), model: config.model || DEFAULT_OPENROUTER_MODEL, authHeaders: { Authorization: `Bearer ${credential(config, 'OPENROUTER_API_KEY')}` }, warnings };
-    case 'gateway-token':
-      return { mode: config.mode, taskType, providerName: 'gateway', apiUrl: normalizeUrl(config.apiUrl), model: config.model || 'gateway-managed', authHeaders: {
-        Authorization: `Bearer ${credential(config, 'LLM_GATEWAY_TOKEN')}`, 'X-Task-Type': taskType,
-        ...(config.byokCredential ? { 'X-OpenRouter-Key': config.byokCredential } : {}),
-        ...(config.byokModel ? { 'X-OpenRouter-Model': config.byokModel } : {})
-      }, warnings };
-    case 'gateway-byok': {
-      const headers: Record<string, string> = { 'X-Task-Type': taskType, 'X-OpenRouter-Key': credential(config, 'OPENROUTER_BYOK_KEY') };
-      const byokModel = config.byokModel;
-      if (byokModel) headers['X-OpenRouter-Model'] = byokModel;
-      return { mode: config.mode, taskType, providerName: 'gateway', apiUrl: normalizeUrl(config.apiUrl), model: config.model || 'gateway-managed', authHeaders: headers, warnings };
-    }
+      return {
+        mode: config.mode,
+        taskType,
+        providerName: 'openrouter',
+        apiUrl: normalizeUrl(config.apiUrl || DEFAULT_OPENROUTER_URL),
+        model: config.model || DEFAULT_OPENROUTER_MODEL,
+        authHeaders: { Authorization: `Bearer ${credential(config, 'OPENROUTER_API_KEY')}` },
+        warnings
+      };
     case 'local':
-      return { mode: config.mode, taskType, providerName: 'local-openai-compatible', apiUrl: normalizeUrl(config.apiUrl || DEFAULT_LOCAL_URL), model: config.model || modelFor(taskType, DEFAULT_LOCAL_MODEL), authHeaders: {}, warnings };
+      return {
+        mode: config.mode,
+        taskType,
+        providerName: 'local-openai-compatible',
+        apiUrl: normalizeUrl(config.apiUrl || DEFAULT_LOCAL_URL),
+        model: config.model || modelFor(taskType, DEFAULT_LOCAL_MODEL),
+        authHeaders: {},
+        warnings
+      };
   }
 }
 
@@ -94,7 +105,7 @@ function redactApiBase(apiUrl: string): string {
 export async function providerHealth(provider: LLMProvider): Promise<LLMHealthResponse> {
   const start = Date.now();
   const base = redactApiBase(provider.apiUrl);
-  const healthUrl = provider.mode === 'local' ? `${provider.apiUrl}/models` : `${provider.apiUrl.replace(/\/v1$/, '')}/health`;
+  const healthUrl = `${provider.apiUrl}/models`;
   try {
     const response = await fetch(healthUrl, { headers: provider.authHeaders });
     if (!response.ok) throw new Error(`Provider health ${response.status} ${response.statusText}`);

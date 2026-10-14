@@ -40,7 +40,7 @@ const DEFAULT_LOCAL_URL = 'http://localhost:8080/v1';
 const DEFAULT_LOCAL_MODEL = 'local-model';
 const DEFAULT_OPENROUTER_URL = 'https://openrouter.ai/api/v1';
 const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4o-mini';
-const providerModes = ['local', 'gateway-token', 'gateway-byok', 'openrouter-direct'];
+const providerModes = ['local', 'openrouter-direct'];
 function parseConfig(value, source) {
     const parsed = configSchema.safeParse(value);
     if (!parsed.success)
@@ -122,45 +122,86 @@ function resolveProviderConfig(input, warnings) {
         warnings.push('lower-trust provider configuration ignored; provider destination and routing require user approval');
     const explicitMode = userProvider?.mode;
     const configuredMode = explicitMode || env.TOKEN_OPTIMIZER_PROVIDER_MODE;
-    let explicit;
+    const configuredUrl = userProvider?.apiUrl;
+    const model = userProvider?.model;
+    const metadata = { taskRouting: userProvider?.taskRouting };
+    const ALL_KNOWN_MODES = ['local', 'openrouter-direct', 'gateway-token', 'gateway-byok'];
     let invalidExplicit = false;
     if (configuredMode) {
-        if (providerModes.includes(configuredMode))
-            explicit = configuredMode;
-        else {
+        if (!ALL_KNOWN_MODES.includes(configuredMode)) {
             invalidExplicit = true;
             warnings.push(`invalid provider mode TOKEN_OPTIMIZER_PROVIDER_MODE="${configuredMode}"; using local provider`);
         }
     }
-    const configuredUrl = userProvider?.apiUrl;
-    const url = configuredUrl || env.LLM_GATEWAY_URL;
-    const model = userProvider?.model;
-    const byok = env.OPENROUTER_BYOK_KEY;
-    const gatewayToken = env.LLM_GATEWAY_TOKEN;
-    const directKey = env.OPENROUTER_API_KEY;
-    let mode = explicit || (invalidExplicit ? 'local' : (url && gatewayToken ? 'gateway-token' : url && byok ? 'gateway-byok' : 'local'));
-    if (mode === 'openrouter-direct' && !directKey) {
-        warnings.push('openrouter-direct requested without OPENROUTER_API_KEY; using local provider');
-        mode = 'local';
+    if (invalidExplicit) {
+        return {
+            mode: 'local',
+            apiUrl: configuredUrl || env.LOCAL_LLM_API_URL || DEFAULT_LOCAL_URL,
+            model: model || env.LOCAL_LLM_MODEL || DEFAULT_LOCAL_MODEL,
+            ...metadata
+        };
     }
-    if (mode === 'gateway-token' && (!url || !gatewayToken)) {
-        warnings.push('gateway-token requested without gateway URL and token; using local provider');
-        mode = 'local';
+    const isLegacyMode = configuredMode === 'gateway-token' || configuredMode === 'gateway-byok';
+    const hasLegacyEnv = Boolean(env.LLM_GATEWAY_URL || env.LLM_GATEWAY_TOKEN || env.OPENROUTER_BYOK_KEY);
+    const shouldMigrate = isLegacyMode || (!configuredMode && hasLegacyEnv);
+    if (shouldMigrate) {
+        /* A legacy user config carries the gateway URL and a gateway-managed model
+           name; neither is valid for OpenRouter or a local endpoint, so drop them. */
+        const legacyUrl = isLegacyMode ? undefined : configuredUrl;
+        const legacyModel = isLegacyMode ? undefined : model;
+        const openrouterKey = env.OPENROUTER_API_KEY || env.OPENROUTER_BYOK_KEY;
+        if (openrouterKey) {
+            warnings.push('Gateway support was removed; your key is now used directly with OpenRouter.');
+            const resolvedModel = legacyModel || env.OPENROUTER_MODEL || env.OPENROUTER_BYOK_MODEL?.trim() || DEFAULT_OPENROUTER_MODEL;
+            return {
+                mode: 'openrouter-direct',
+                apiUrl: legacyUrl || env.OPENROUTER_API_URL || DEFAULT_OPENROUTER_URL,
+                model: resolvedModel,
+                credentialEnv: env.OPENROUTER_API_KEY ? 'OPENROUTER_API_KEY' : 'OPENROUTER_BYOK_KEY',
+                credential: openrouterKey,
+                ...metadata
+            };
+        }
+        else {
+            warnings.push('Gateway support was removed; run `token-optimizer config` to choose openrouter or local.');
+            return {
+                mode: 'local',
+                apiUrl: legacyUrl || env.LOCAL_LLM_API_URL || DEFAULT_LOCAL_URL,
+                model: legacyModel || env.LOCAL_LLM_MODEL || DEFAULT_LOCAL_MODEL,
+                ...metadata
+            };
+        }
     }
-    if (mode === 'gateway-byok' && (!url || !byok)) {
-        warnings.push('gateway-byok requested without gateway URL and BYOK key; using local provider');
-        mode = 'local';
+    /* With no explicit mode, an OpenRouter key in the environment is enough to
+       select openrouter-direct; otherwise inference stays on the local endpoint. */
+    let mode = configuredMode || (env.OPENROUTER_API_KEY ? 'openrouter-direct' : 'local');
+    if (mode === 'openrouter-direct') {
+        const key = env.OPENROUTER_API_KEY || env.OPENROUTER_BYOK_KEY;
+        if (!key) {
+            warnings.push('openrouter-direct requested without OPENROUTER_API_KEY; using local provider');
+            return {
+                mode: 'local',
+                apiUrl: configuredUrl || env.LOCAL_LLM_API_URL || DEFAULT_LOCAL_URL,
+                model: model || env.LOCAL_LLM_MODEL || DEFAULT_LOCAL_MODEL,
+                ...metadata
+            };
+        }
+        const resolvedModel = model || env.OPENROUTER_MODEL || env.OPENROUTER_BYOK_MODEL?.trim() || DEFAULT_OPENROUTER_MODEL;
+        return {
+            mode: 'openrouter-direct',
+            apiUrl: configuredUrl || env.OPENROUTER_API_URL || DEFAULT_OPENROUTER_URL,
+            model: resolvedModel,
+            credentialEnv: env.OPENROUTER_API_KEY ? 'OPENROUTER_API_KEY' : 'OPENROUTER_BYOK_KEY',
+            credential: key,
+            ...metadata
+        };
     }
-    if (mode === 'gateway-token' && !explicit)
-        warnings.push('gateway environment variables are a legacy compatibility configuration');
-    if (mode === 'gateway-byok' && !explicit)
-        warnings.push('OPENROUTER_BYOK_KEY is a legacy gateway-byok credential');
-    const metadata = { taskRouting: userProvider?.taskRouting };
-    if (mode === 'local')
-        return { mode, apiUrl: configuredUrl || env.LOCAL_LLM_API_URL || DEFAULT_LOCAL_URL, model: model || env.LOCAL_LLM_MODEL || DEFAULT_LOCAL_MODEL, ...metadata };
-    if (mode === 'openrouter-direct')
-        return { mode, apiUrl: configuredUrl || DEFAULT_OPENROUTER_URL, model: model || env.OPENROUTER_MODEL || DEFAULT_OPENROUTER_MODEL, ...metadata, credentialEnv: 'OPENROUTER_API_KEY', credential: directKey };
-    return { mode, apiUrl: url, model: model || DEFAULT_LOCAL_MODEL, ...metadata, credentialEnv: mode === 'gateway-token' ? 'LLM_GATEWAY_TOKEN' : 'OPENROUTER_BYOK_KEY', credential: mode === 'gateway-token' ? gatewayToken : byok, byokCredential: mode === 'gateway-token' ? byok : undefined, byokModel: env.OPENROUTER_BYOK_MODEL?.trim() || undefined };
+    return {
+        mode: 'local',
+        apiUrl: configuredUrl || env.LOCAL_LLM_API_URL || DEFAULT_LOCAL_URL,
+        model: model || env.LOCAL_LLM_MODEL || DEFAULT_LOCAL_MODEL,
+        ...metadata
+    };
 }
 function resolveAllowlist(input) {
     const user = input.user?.execution?.allowedCommandPrefixes;

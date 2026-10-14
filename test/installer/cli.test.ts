@@ -22,20 +22,23 @@ function readlineWith(...answers: string[]) {
 }
 
 test('fresh install does not preserve ambient provider state without a canonical installation', () => {
-  const ambientOnly = { provider: { mode: 'gateway-token', source: 'ambient', requiresCredential: true, credentialConfigured: true }, manifest: { exists: false, valid: false }, clients: { registrations: [] } };
+  const ambientOnly = { provider: { mode: 'openrouter-direct', source: 'ambient', requiresCredential: true, credentialConfigured: true }, manifest: { exists: false, valid: false }, clients: { registrations: [] } };
   assert.equal(cli.shouldPreserveInstalledProvider(ambientOnly), false);
   const installed = { provider: { mode: 'local', source: 'registration', requiresCredential: false, credentialConfigured: true }, manifest: { exists: true, valid: true }, clients: { registrations: [{ stale: false }] } };
   assert.equal(cli.shouldPreserveInstalledProvider(installed), true);
+  const legacyGateway = { provider: { mode: 'gateway-token', source: 'registration', requiresCredential: true, credentialConfigured: true }, manifest: { exists: true, valid: true }, clients: { registrations: [{ stale: false }] } };
+  assert.equal(cli.shouldPreserveInstalledProvider(legacyGateway), false);
 });
 
 test('reinstall does not preserve an inaccessible credential reference', () => {
-  const broken = { provider: { mode: 'gateway-token', source: 'registration', requiresCredential: true, credentialConfigured: false }, manifest: { exists: true, valid: true }, clients: { registrations: [{ stale: false }] } };
+  const broken = { provider: { mode: 'openrouter-direct', source: 'registration', requiresCredential: true, credentialConfigured: false }, manifest: { exists: true, valid: true }, clients: { registrations: [{ stale: false }] } };
   assert.equal(cli.shouldPreserveInstalledProvider(broken), false);
 });
 
-test('upgrade preservation retains local and BYOK model choices', () => {
+test('upgrade preservation retains local and OpenRouter model choices, never gateway', () => {
   assert.deepEqual(cli.preservedProviderOptions({ mode: 'local', url: 'http://localhost:8080/v1', model: 'local-model-name' }), { provider: 'local', credentialRef: undefined, localApiUrl: 'http://localhost:8080/v1', localModel: 'local-model-name' });
-  assert.deepEqual(cli.preservedProviderOptions({ mode: 'gateway-byok', url: 'https://gateway.example/v1', model: 'provider/model', credentialReference: { store: 'config' } }), { provider: 'gateway-byok', credentialRef: { store: 'config' }, gatewayUrl: 'https://gateway.example/v1', byokModel: 'provider/model' });
+  assert.deepEqual(cli.preservedProviderOptions({ mode: 'gateway-byok', url: 'https://gateway.example/v1', model: 'provider/model', credentialReference: { store: 'config' } }), { provider: 'skip' });
+  assert.deepEqual(cli.preservedProviderOptions({ mode: 'gateway-token', credentialReference: { store: 'config' } }), { provider: 'skip' });
   assert.deepEqual(cli.preservedProviderOptions({ mode: 'openrouter-direct', url: 'https://openrouter.ai/api/v1', model: 'provider/direct', credentialReference: { store: 'config' } }), { provider: 'openrouter-direct', credentialRef: { store: 'config' }, openrouterUrl: 'https://openrouter.ai/api/v1', byokModel: 'provider/direct' });
 });
 
@@ -47,12 +50,12 @@ test('fresh spawned install prompts despite stale ambient provider variables', (
   const result = spawnSync(process.execPath, [bin, 'install', '--home', home, '--clients', 'cursor', '--skip-client-commands', '--skip-launchctl', '--no-defaults'], {
     cwd: repository,
     encoding: 'utf8',
-    input: '4\n',
+    input: '3\n',
     env: { ...process.env, HOME: home, TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK: '1', TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', TOKEN_OPTIMIZER_CREDENTIAL_REF: staleRef },
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /How should the LLM provider be configured\?/);
-  assert.match(result.stdout, /Gateway access token/);
+  assert.doesNotMatch(result.stdout, /Gateway access token/);
   assert.match(result.stdout, /Your own OpenRouter key/);
   assert.match(result.stdout, /Local LLM only/);
   assert.match(result.stdout, /Skip for now/);
@@ -64,7 +67,7 @@ test('fresh spawned install prompts despite stale ambient provider variables', (
 test('interactive JSON install keeps prompts on stderr and one document on stdout', () => {
   const repository = path.resolve(process.cwd(), '..'); const bin = path.join(repository, 'packages/installer/bin/token-optimizer.js');
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-cli-json-prompt-'));
-  const result = spawnSync(process.execPath, [bin, 'install', '--home', home, '--clients', 'cursor', '--skip-client-commands', '--skip-launchctl', '--no-defaults', '--json'], { cwd: repository, encoding: 'utf8', input: '4\n', env: { ...process.env, HOME: home, TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK: '1' } });
+  const result = spawnSync(process.execPath, [bin, 'install', '--home', home, '--clients', 'cursor', '--skip-client-commands', '--skip-launchctl', '--no-defaults', '--json'], { cwd: repository, encoding: 'utf8', input: '3\n', env: { ...process.env, HOME: home, TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK: '1' } });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).status, 'completed');
   assert.match(result.stderr, /How should the LLM provider be configured\?/);
@@ -98,9 +101,11 @@ test('--byok-key and --byok-model configure direct OpenRouter without prompting'
   assert.equal(options.byokModel, 'openai/gpt-4o-mini');
 });
 
-test('explicit gateway-byok remains available for migrated routing', async () => {
-  const options = await cli.resolveProviderOptions(cli.parseArgs(['--provider', 'gateway-byok', '--byok-key', 'sk-or-v1-mykey', '--byok-model', 'provider/model']), readlineWith());
-  assert.equal(options.provider, 'gateway-byok'); assert.equal(options.gatewayUrl, installer.DEFAULT_GATEWAY_URL); assert.equal(options.openrouterUrl, undefined);
+test('passing gateway provider or token fails with clear message', async () => {
+  await assert.rejects(() => cli.resolveProviderOptions(cli.parseArgs(['--provider', 'gateway']), readlineWith()), /Gateway support was removed; use --provider openrouter or --provider local/);
+  await assert.rejects(() => cli.resolveProviderOptions(cli.parseArgs(['--token', 'some-tok']), readlineWith()), /Gateway support was removed; use --provider openrouter or --provider local/);
+  await assert.rejects(() => cli.resolveProviderOptions(cli.parseArgs(['--provider', 'gateway-byok']), readlineWith()), /Gateway support was removed; use --provider openrouter or --provider local/);
+  await assert.rejects(() => cli.resolveProviderOptions(cli.parseArgs(['--provider', 'gateway-token']), readlineWith()), /Gateway support was removed; use --provider openrouter or --provider local/);
 });
 
 test('a BYOK key flag without a model remains non-interactive and uses the OpenRouter default', async () => {
@@ -112,19 +117,19 @@ test('a BYOK key flag without a model remains non-interactive and uses the OpenR
 });
 
 test('--credential-store env is an explicit working plaintext opt-in', async () => {
-  const options = await cli.resolveProviderOptions(cli.parseArgs(['--provider', 'gateway-token', '--token', 'fixture-value', '--credential-store', 'env']), readlineWith());
-  const credentialEnv: Record<string, string> = { LLM_GATEWAY_TOKEN: 'parent-value' };
+  const options = await cli.resolveProviderOptions(cli.parseArgs(['--provider', 'openrouter-direct', '--openrouter-key', 'fixture-value', '--credential-store', 'env']), readlineWith());
+  const credentialEnv: Record<string, string> = { OPENROUTER_API_KEY: 'parent-value' };
   const prepared = installer.prepareCredentialOptions({ ...options, credentialStoreOptions: { env: credentialEnv } });
   const values = installer.buildProviderValues(prepared);
   assert.equal(prepared.credentialRef.store, 'env');
-  assert.equal(prepared.credentialRef.variable, 'LLM_GATEWAY_TOKEN');
-  assert.equal(credentialEnv.LLM_GATEWAY_TOKEN, 'parent-value');
-  assert.equal(values.LLM_GATEWAY_TOKEN, '');
+  assert.equal(prepared.credentialRef.variable, 'OPENROUTER_API_KEY');
+  assert.equal(credentialEnv.OPENROUTER_API_KEY, 'parent-value');
+  assert.equal(values.OPENROUTER_API_KEY, '');
 });
 
 test('--credential-store env fails when the parent/client credential variable is absent', async () => {
-  const options = await cli.resolveProviderOptions(cli.parseArgs(['--provider', 'gateway-token', '--token', 'fixture-value', '--credential-store', 'env']), readlineWith());
-  assert.throws(() => installer.prepareCredentialOptions({ ...options, credentialStoreOptions: { env: {} } }), /requires LLM_GATEWAY_TOKEN.*parent\/client environment/i);
+  const options = await cli.resolveProviderOptions(cli.parseArgs(['--provider', 'openrouter-direct', '--openrouter-key', 'fixture-value', '--credential-store', 'env']), readlineWith());
+  assert.throws(() => installer.prepareCredentialOptions({ ...options, credentialStoreOptions: { env: {} } }), /requires OPENROUTER_API_KEY.*parent\/client environment/i);
 });
 
 test('status --installed-version reports mismatch without a discovered registration', () => {
@@ -193,7 +198,7 @@ test('spawned CLI completes install, doctor, repair, uninstall, and repeated uni
     assert.equal(repair.status, 0, `${client} repair: ${repair.stderr}`);
     const postRepair = spawnSync(process.execPath, [bin, 'status', '--home', home, '--provider', 'local', '--json'], base);
     assert.ok([0, 1].includes(postRepair.status), `${client} post-repair status: ${postRepair.stderr}`);
-    const post = JSON.parse(postRepair.stdout); assert.ok(post.clients.configured.includes(client), `${client} not configured after repair: ${postRepair.stdout}`); assert.equal(post.expectedVersion, '2.0.13'); assert.ok(!post.findings.some((item: any) => ['STALE_REGISTRATION', 'MISSING_LAUNCHER', 'MANIFEST_ENTRY_MISSING', 'DUPLICATE_REGISTRATION'].includes(item.code))); assert.equal(post.healthy, true, `${client} post-repair not healthy: ${postRepair.stdout}`);
+    const post = JSON.parse(postRepair.stdout); assert.ok(post.clients.configured.includes(client), `${client} not configured after repair: ${postRepair.stdout}`); assert.equal(post.expectedVersion, '3.0.0'); assert.ok(!post.findings.some((item: any) => ['STALE_REGISTRATION', 'MISSING_LAUNCHER', 'MANIFEST_ENTRY_MISSING', 'DUPLICATE_REGISTRATION'].includes(item.code))); assert.equal(post.healthy, true, `${client} post-repair not healthy: ${postRepair.stdout}`);
     /* Launchers and clients create caches after the ownership manifest is written.
        Populate every declared and client-derived location to prove uninstall converges. */
     const finalManifest = JSON.parse(fs.readFileSync(path.join(home, '.token-optimizer', 'manifest.json'), 'utf8'));
@@ -320,7 +325,7 @@ test('install --json emits one final document and verbose progress only on stder
   const report = JSON.parse(result.stdout);
   assert.equal(report.action, 'install');
   assert.equal(report.status, 'completed');
-  assert.equal(report.installedVersion, '2.0.13');
+  assert.equal(report.installedVersion, '3.0.0');
   assert.deepEqual(report.clients, ['opencode']);
   const events = result.stderr.trim().split(/\r?\n/).filter(Boolean).map((line: string) => JSON.parse(line));
   assert.ok(events.some((event: any) => event.event === 'operation-start'));
@@ -331,7 +336,7 @@ test('install --json emits one final document and verbose progress only on stder
 test('CLI provider switch persists cleared credential ownership in the manifest', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'to-cli-clear-credential-'));
   const repository = path.resolve(process.cwd(), '..'); const bin = path.join(repository, 'packages/installer/bin/token-optimizer.js');
-  installer.installSelectedClients({ home, assetsRoot: path.join(repository, 'packages/installer/assets'), clients: ['cursor'], provider: 'gateway-token', gatewayToken: 'fixture-owned-token', credentialStore: 'config', skipClientCommands: true, skipLaunchctl: true, defaults: false });
+  installer.installSelectedClients({ home, assetsRoot: path.join(repository, 'packages/installer/assets'), clients: ['cursor'], provider: 'openrouter-direct', openrouterKey: 'fixture-owned-token', credentialStore: 'config', skipClientCommands: true, skipLaunchctl: true, defaults: false });
   const result = spawnSync(process.execPath, [bin, 'install', '--home', home, '--clients', 'cursor', '--provider', 'local', '--skip-client-commands', '--skip-launchctl', '--no-defaults', '--quiet'], { cwd: repository, encoding: 'utf8', env: { ...process.env, TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK: '1' } });
   assert.equal(result.status, 0, result.stderr);
   const manifest = JSON.parse(fs.readFileSync(path.join(home, '.token-optimizer', 'manifest.json'), 'utf8'));

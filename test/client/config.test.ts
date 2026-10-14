@@ -14,12 +14,45 @@ test('project config cannot elevate a safe user ceiling', () => {
   assert.match(config.warnings.join('\n'), /cannot elevate/i);
 });
 
-test('legacy BYOK maps to gateway-byok without changing destination', () => {
+test('legacy BYOK maps to openrouter-direct with warning', () => {
   const config = resolveEffectiveConfig({
     env: { LLM_GATEWAY_URL: 'https://gateway.example/v1', OPENROUTER_BYOK_KEY: 'secret-ref' },
   });
-  assert.equal(config.provider.mode, 'gateway-byok');
-  assert.match(config.warnings.join('\n'), /legacy/i);
+  assert.equal(config.provider.mode, 'openrouter-direct');
+  assert.equal(config.provider.credential, 'secret-ref');
+  assert.match(config.warnings.join('\n'), /Gateway support was removed.*OpenRouter/i);
+});
+
+test('legacy mode string in config does not throw and migrates', () => {
+  const configByok = resolveEffectiveConfig({
+    user: { provider: { mode: 'gateway-byok' } },
+    env: { OPENROUTER_BYOK_KEY: 'sk-or-test' }
+  });
+  assert.equal(configByok.provider.mode, 'openrouter-direct');
+  assert.match(configByok.warnings.join('\n'), /Gateway support was removed.*OpenRouter/i);
+
+  const configToken = resolveEffectiveConfig({
+    user: { provider: { mode: 'gateway-token' } },
+    env: { LLM_GATEWAY_TOKEN: 'legacy-token' }
+  });
+  assert.equal(configToken.provider.mode, 'local');
+  assert.match(configToken.warnings.join('\n'), /Gateway support was removed.*token-optimizer config/i);
+});
+
+test('legacy gateway config never keeps the gateway URL or managed model', () => {
+  const direct = resolveEffectiveConfig({
+    user: { provider: { mode: 'gateway-byok', apiUrl: 'https://llm-proxy.lnf.gr/v1', model: 'gateway-managed' } },
+    env: { OPENROUTER_BYOK_KEY: 'sk-or-test' }
+  });
+  assert.equal(direct.provider.apiUrl, 'https://openrouter.ai/api/v1');
+  assert.notEqual(direct.provider.model, 'gateway-managed');
+
+  const local = resolveEffectiveConfig({
+    user: { provider: { mode: 'gateway-token', apiUrl: 'https://llm-proxy.lnf.gr/v1', model: 'gateway-managed' } },
+    env: { LLM_GATEWAY_TOKEN: 'legacy-token' }
+  });
+  assert.equal(local.provider.apiUrl, 'http://localhost:8080/v1');
+  assert.equal(local.provider.model, 'local-model');
 });
 
 test('user config loads without a workspace path', () => {
@@ -37,10 +70,10 @@ test('invalid provider mode falls back conservatively with a warning', () => {
   assert.match(config.warnings.join('\n'), /invalid.*provider mode/i);
 });
 
-test('gateway token environment infers legacy gateway-token when mode is absent', () => {
+test('gateway token environment migrates to local with warning when mode is absent', () => {
   const config = resolveEffectiveConfig({ env: { LLM_GATEWAY_URL: 'https://gateway.example/v1', LLM_GATEWAY_TOKEN: 'token' } });
-  assert.equal(config.provider.mode, 'gateway-token');
-  assert.match(config.warnings.join('\n'), /legacy/i);
+  assert.equal(config.provider.mode, 'local');
+  assert.match(config.warnings.join('\n'), /Gateway support was removed.*token-optimizer config/i);
 });
 
 test('lower-trust allowlists cannot widen the user allowlist', () => {
@@ -54,9 +87,10 @@ test('lower-trust allowlists cannot widen the user allowlist', () => {
 test('effective provider configuration selects each documented destination', () => {
   const cases = [
     [{ TOKEN_OPTIMIZER_PROVIDER_MODE: 'local', LOCAL_LLM_API_URL: 'http://local/v1' }, 'local', 'http://local/v1'],
-    [{ TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', LLM_GATEWAY_URL: 'https://gateway/v1', LLM_GATEWAY_TOKEN: 'token' }, 'gateway-token', 'https://gateway/v1'],
-    [{ TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-byok', LLM_GATEWAY_URL: 'https://gateway/v1', OPENROUTER_BYOK_KEY: 'byok' }, 'gateway-byok', 'https://gateway/v1'],
     [{ TOKEN_OPTIMIZER_PROVIDER_MODE: 'openrouter-direct', OPENROUTER_API_KEY: 'direct' }, 'openrouter-direct', 'https://openrouter.ai/api/v1'],
+    [{ OPENROUTER_API_KEY: 'direct' }, 'openrouter-direct', 'https://openrouter.ai/api/v1'],
+    [{ TOKEN_OPTIMIZER_PROVIDER_MODE: 'local', OPENROUTER_API_KEY: 'direct' }, 'local', 'http://localhost:8080/v1'],
+    [{}, 'local', 'http://localhost:8080/v1'],
   ] as const;
   for (const [env, mode, apiUrl] of cases) {
     const config = resolveEffectiveConfig({ env });
@@ -67,12 +101,12 @@ test('effective provider configuration selects each documented destination', () 
 
 test('user provider policy binds credential-bearing destination against lower-trust redirects', () => {
   const config = resolveEffectiveConfig({
-    env: { LLM_GATEWAY_TOKEN: 'runtime-secret', OPENROUTER_API_KEY: 'other-secret' },
-    user: { provider: { mode: 'gateway-token', apiUrl: 'https://approved/v1', model: 'approved-model' }, execution: { profile: 'standard' }, logs: { retentionDays: 3, maxDiskMb: 100, storageMode: 'redacted-local' } },
+    env: { OPENROUTER_API_KEY: 'runtime-secret' },
+    user: { provider: { mode: 'openrouter-direct', apiUrl: 'https://approved/v1', model: 'approved-model' }, execution: { profile: 'standard' }, logs: { retentionDays: 3, maxDiskMb: 100, storageMode: 'redacted-local' } },
     project: { provider: { mode: 'openrouter-direct', apiUrl: 'https://project/v1' }, execution: { profile: 'unrestricted' }, logs: { retentionDays: 2, maxDiskMb: 1000, storageMode: 'raw-local' } },
     tool: { provider: { mode: 'openrouter-direct', apiUrl: 'https://tool/v1', model: 'tool-model' }, execution: { profile: 'safe' }, logs: { retentionDays: 30, maxDiskMb: 50 } },
   });
-  assert.equal(config.provider.mode, 'gateway-token');
+  assert.equal(config.provider.mode, 'openrouter-direct');
   assert.equal(config.provider.apiUrl, 'https://approved/v1');
   assert.equal(config.provider.model, 'approved-model');
   assert.equal(config.execution.profile, 'safe');

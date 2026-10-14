@@ -25,15 +25,11 @@ Command temp-stream and final audit failures never override exit/signal truth. A
 
 Use the `mcp__token_optimizer` tools as the first validation path after code changes. Let the MCP server run validation commands, persist full logs under the target workspace, and ask Token Optimizer for compact verdicts, changed-file review, failure triage, or regression checks before deciding whether raw logs are needed.
 
-When a shared gateway token is needed, request it through
-`https://llm-proxy.lnf.gr/`; the operator approves the request in the gateway's
-`/admin` dashboard before the token is issued. The public request portal is
-rate-limited and uses a honeypot plus completion-time check; accepted requests
-send the configured gateway operator (`GMAIL_USER`) a best-effort email alert.
+To install, reconfigure, switch provider, or troubleshoot the server itself, use the companion `token-optimizer-setup` skill; it runs read-only checks, proposes installer commands for consent, and never handles API keys in the conversation.
 
 Currently implemented server tools:
 
-- `check_local_llm_health`: verifies the configured LLM provider (local, gateway, or direct OpenRouter) and returns availability metadata.
+- `check_local_llm_health`: verifies the configured LLM provider (local or direct OpenRouter) and returns availability metadata.
 - `run_test_verdict`: runs build/lint/test/smoke commands in a workspace and returns a compact local-LLM verdict.
 - `run_failure_triage`: analyzes an existing log file and returns compact root-cause/fix guidance.
 - `run_changed_files_review`: reads changed files under 500 KB and asks the local LLM for likely issues before expensive validation.
@@ -177,7 +173,6 @@ Use commands that exercise the changed surface:
 - LLM-backed results can include `llmAvailable`, `llmProvider`, `llmModel`, `llmLatencyMs`, `llmTaskType`, and `fallbackReason`. If `llmAvailable` is `false`, treat the local model output as unavailable and fall back to deterministic command results, `grep_log`, or the smallest useful raw-log slice.
 - `run_test_verdict`: When present, `likelyRelevantToRecentChanges` is the local model's guess about whether a failure stems from the reported `changedFiles`; use it to prioritize, not as proof. Set `maxOutputLines` to bound how much log the model sees on very noisy commands, `timeoutMs` for long suites, and `parallel: true` only when the detected commands are independent. Low local-model confidence keeps the verdict uncertain and sets `needsRawLogs`.
 - Context-savings analytics are intentionally not returned in tool JSON. Inspect `.codex-local-test-runs/analytics.json` and `.codex-local-test-runs/analytics-summary.json` inside the **target workspace** (next to its raw run logs and baseline), or run `npm run analytics:ui` from the MCP server project to view a multi-workspace dashboard with pagination, when you need local LLM token use, returned MCP response size, estimated tokens saved, and savings percentages.
-- When `LLM_GATEWAY_URL` and `LLM_GATEWAY_TOKEN` are both set (this specifically requires a proxy/issued token — BYOK-only setups with no token do not share), a sanitized aggregate subset of each analytics record (tool name, token counts, savings percentage, model/task, latency — never workspace paths, commands, log content, or error text) is also shared with the gateway's public global stats, best-effort and fire-and-forget. The gateway counts only records with at least 1,000 raw-source tokens and excludes deterministic `run_regression_check` calls from public savings aggregates. The `/stats` tool table also shows per-tool raw-source, returned, small-model, latency, and fallback dimensions. Set `LLM_GATEWAY_SHARE_ANALYTICS=off` to disable sharing.
 - `run_changed_files_review`: Prefer `useDiff: true` in a git repo to review only changed hunks (cheaper, sharper); it falls back to whole-file content for files with no diff or outside git.
 - `run_test_verdict` `pass`: Report the commands run, the verdict, and any residual risk. Do not read or paste raw logs.
 - `run_test_verdict` `fail`: Use the LLM summary, `failures`, and inline `triage` field first. If the fix is not clear, call `run_failure_triage` with the log path before opening raw logs.
@@ -221,7 +216,7 @@ Use `run_regression_check` for baseline-aware checks only when baseline churn is
 
 If a tool exists in the server but is not exposed in the current Codex session, check plugin-provided MCP policy in `~/.codex/config.toml`, such as `[plugins."token-optimizer@token-optimizer-marketplace".mcp_servers.token_optimizer]` and its `enabled_tools` / `disabled_tools` settings, then start a new thread or restart Codex so the tool surface refreshes.
 
-Generated launchers validate that both the MCP SDK server entry point and `zod/v3` resolve from their launcher-owned dependency cache. If the manifest matches but the cache is incomplete, the launcher removes only that cached `node_modules`, reinstalls dependencies, validates them again, and starts the server. A failed repair exits with a concise stderr diagnostic instead of starting a broken MCP process. Codex marketplace configuration forwards `OPENROUTER_BYOK_KEY` and `OPENROUTER_BYOK_MODEL` alongside the gateway variables, so BYOK-only sessions do not need `LLM_GATEWAY_TOKEN`.
+Generated launchers validate that both the MCP SDK server entry point and `zod/v3` resolve from their launcher-owned dependency cache. If the manifest matches but the cache is incomplete, the launcher removes only that cached `node_modules`, reinstalls dependencies, validates them again, and starts the server. A failed repair exits with a concise stderr diagnostic instead of starting a broken MCP process. Codex marketplace configuration forwards `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENROUTER_API_URL`, and `TOKEN_OPTIMIZER_PROVIDER_MODE` from the session.
 
 The installer lifecycle is reversible. A fresh install without provider flags
 always shows the provider menu; ambient legacy variables and inaccessible
@@ -240,15 +235,13 @@ or service adapters fail closed with an explicit follow-up. `status` is read-onl
 performs no network/provider request or client CLI execution, and discovers
 actual five-client MCP registrations from config/cache files plus installed
 launcher metadata. `doctor --strict` additionally resolves the credential
-reference and performs a quota-free local `/models`, direct OpenRouter
-`/auth/key`, or gateway BYOK metadata validation. Use `--workspace <absolute-path>`
+reference and performs a quota-free local `/models` or direct OpenRouter
+`/auth/key` validation. Use `--workspace <absolute-path>`
 to include safe log-directory/quota diagnostics. Reports expose stable finding
 codes and repair hints but never secret values; errors exit `1` and warning-only
 strict reports exit `2`. `repair --dry-run` previews
 targeted fixes. Rollback snapshots cover only selected client roots and never
-scan unrelated protected home folders. Provider-health probes are bounded by
-socket IP, key fingerprint, and global concurrency before upstream access;
-forwarded IPs require explicit trusted-proxy configuration. Doctor constrains untrusted manifest roots and hashing
+scan unrelated protected home folders. Doctor constrains untrusted manifest roots and hashing
 work to installer-known locations and fixed size/count budgets; an explicit
 `--installed-version` still drives mismatch reporting without a registration.
 `logs status|prune|purge --workspace <absolute-path>` manages
@@ -257,7 +250,8 @@ requested for deletion.
 
 For v1, preview `token-optimizer install --migrate --dry-run --json`, then
 remove the preview flags to apply. Migration scans only supported client roots,
-preserves gateway routing for legacy BYOK unless direct OpenRouter is explicit,
+converts legacy gateway BYOK keys to direct OpenRouter and drops gateway-only
+tokens with a warning,
 creates a private backup, and cleans plaintext only after authenticated doctor
 validation. The operation is transactional and idempotent.
 The preview itself is registered for execution, so apply does not recompute a
@@ -299,10 +293,10 @@ anchors, and exact repetitions whose aggregate expanded match width is at most 6
 across all custom rules. User rules consume the budget first; excess lower-trust
 rules fail configuration rather than replacing mandatory rules.
 
-**LLM provider:** Configure one of four explicit modes: `local` keeps inference on your endpoint; `openrouter-direct` sends the redacted excerpt and credential directly to OpenRouter; `gateway-token` sends redacted excerpts through the Softaware gateway using its access token; and `gateway-byok` sends both the redacted excerpt and BYOK key through that gateway. The v1 `LLM_GATEWAY_URL` + `OPENROUTER_BYOK_KEY` environment pairing maps to `gateway-byok` with a compatibility warning, preserving its destination. Remote responses include `redactionSummary` (counts/categories only) and may include `providerWarnings`; neither field contains secret values. Raw-local logs may contain secrets printed by commands. If a provider is unavailable or structured output fails schema validation, command exit codes remain authoritative and the tool returns `uncertain` with conservative metadata. `OPENROUTER_BYOK_MODEL` is optional for BYOK routing. Generated plugins intentionally omit blank gateway placeholders so inherited host values keep working after reinstalls. `check_local_llm_health` verifies the selected provider.
+**LLM provider:** Configure one of two modes: `local` keeps inference on your endpoint; `openrouter-direct` sends the redacted excerpt and credential directly to OpenRouter. With no explicit mode, `OPENROUTER_API_KEY` selects `openrouter-direct`; otherwise `local` is used. Gateway support was removed in 3.0.0: legacy `gateway-token` / `gateway-byok` settings migrate with a configuration warning — a legacy `OPENROUTER_BYOK_KEY` is used directly with OpenRouter, and a gateway token alone falls back to `local`. Remote responses include `redactionSummary` (counts/categories only) and may include `providerWarnings`; neither field contains secret values. Raw-local logs may contain secrets printed by commands. If a provider is unavailable or structured output fails schema validation, command exit codes remain authoritative and the tool returns `uncertain` with conservative metadata. `OPENROUTER_MODEL` optionally overrides the default OpenRouter model. `check_local_llm_health` verifies the selected provider.
 
 Installer credentials default to the native OS credential store for
-`gateway-token`, `gateway-byok`, and `openrouter-direct`. Client configs retain
+`openrouter-direct`. Client configs retain
 only `TOKEN_OPTIMIZER_CREDENTIAL_REF`; the launcher resolves it for the MCP
 child. Native-store errors fail closed. `--credential-store env` only references
 an already-exported provider credential variable and fails when it is absent;

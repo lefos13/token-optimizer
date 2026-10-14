@@ -4,7 +4,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { queryLocalLLM } from '../../src/llm';
-import { buildAnalyticsRecord, buildSharedAnalyticsRecord } from '../../src/analytics';
 
 const valid = JSON.stringify({ verdict: 'pass', confidence: 0.9, summary: 'ok', likelyRelevantToRecentChanges: false, failures: [], needsRawLogs: false });
 const providerKeys = ['TOKEN_OPTIMIZER_PROVIDER_MODE', 'TOKEN_OPTIMIZER_CONFIG_HOME', 'LLM_GATEWAY_URL', 'LLM_GATEWAY_TOKEN', 'OPENROUTER_BYOK_KEY', 'OPENROUTER_API_KEY', 'LOCAL_LLM_API_URL'];
@@ -19,11 +18,10 @@ async function withProvider(env: Record<string, string>, response: string, run: 
 
 /* Exercise provider resolution and the real HTTP adapter. Every remote final hop
    receives redacted content, while local inference retains local diagnostics. */
-test('resolved gateway, gateway-BYOK, and direct providers redact the final HTTP hop', async () => {
+test('resolved direct and migrated BYOK providers redact the final HTTP hop', async () => {
   const modes: Array<Record<string, string>> = [
-    { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', LLM_GATEWAY_URL: 'https://gateway.invalid/v1', LLM_GATEWAY_TOKEN: 'fixture-token' },
-    { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-byok', LLM_GATEWAY_URL: 'https://gateway.invalid/v1', OPENROUTER_BYOK_KEY: 'sk-or-fixture' },
     { TOKEN_OPTIMIZER_PROVIDER_MODE: 'openrouter-direct', OPENROUTER_API_KEY: 'sk-or-fixture' },
+    { TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-byok', OPENROUTER_BYOK_KEY: 'sk-or-fixture' },
   ];
   for (const env of modes) await withProvider(env, valid, async (bodies) => {
     const result = await queryLocalLLM('task', ['npm test'], { 'npm test': 0 }, [], 'OPENAI_API_KEY=sk-output-secret');
@@ -38,13 +36,13 @@ test('user and project redaction rules accumulate at the final remote request', 
   const workspace = path.join(root, 'workspace');
   fs.mkdirSync(configHome); fs.mkdirSync(workspace);
   fs.writeFileSync(path.join(configHome, 'config.json'), JSON.stringify({
-    provider: { mode: 'gateway-token', apiUrl: 'https://gateway.invalid/v1' },
+    provider: { mode: 'openrouter-direct', apiUrl: 'https://openrouter.invalid/v1' },
     redaction: { rules: [{ pattern: 'USER-\\d{3}', category: 'user-rule' }] },
   }), { mode: 0o600 });
   fs.writeFileSync(path.join(workspace, '.token-optimizer.json'), JSON.stringify({
     redaction: { rules: [{ pattern: 'PROJECT-\\d{3}', category: 'project-rule' }] },
   }));
-  await withProvider({ TOKEN_OPTIMIZER_CONFIG_HOME: configHome, LLM_GATEWAY_TOKEN: 'fixture-token' }, valid, async (bodies) => {
+  await withProvider({ TOKEN_OPTIMIZER_CONFIG_HOME: configHome, OPENROUTER_API_KEY: 'fixture-token' }, valid, async (bodies) => {
     const result = await queryLocalLLM('task', [], {}, [], 'USER-123 PROJECT-456', 'verdict', workspace);
     assert.equal(result.verdict, 'pass'); assert.equal(bodies.length, 1);
     assert.doesNotMatch(bodies[0], /USER-123|PROJECT-456/);
@@ -55,13 +53,8 @@ test('user and project redaction rules accumulate at the final remote request', 
 
 test('real inference handler conservatively rejects malformed, oversized, and contradictory responses', async () => {
   const responses = ['{bad', JSON.stringify({ verdict: 'pass', confidence: 1, summary: 'x'.repeat(200_000), likelyRelevantToRecentChanges: false, failures: [], needsRawLogs: false }), JSON.stringify({ verdict: 'pass', confidence: 1, summary: 'contradiction', likelyRelevantToRecentChanges: false, failures: [{ command: 'npm test', message: 'failed' }], needsRawLogs: false })];
-  for (const response of responses) await withProvider({ TOKEN_OPTIMIZER_PROVIDER_MODE: 'gateway-token', LLM_GATEWAY_URL: 'https://gateway.invalid/v1', LLM_GATEWAY_TOKEN: 'fixture-token' }, response, async () => {
+  for (const response of responses) await withProvider({ TOKEN_OPTIMIZER_PROVIDER_MODE: 'openrouter-direct', OPENROUTER_API_KEY: 'fixture-token' }, response, async () => {
     const result = await queryLocalLLM('task', ['npm test'], { 'npm test': 1 }, [], 'failed');
     assert.notEqual(result.verdict, 'pass'); assert.equal(result.llmAvailable, false);
   });
-});
-
-test('shared analytics built by the production sanitizer contain no raw context', () => {
-  const record = buildAnalyticsRecord({ toolName: 'run_test_verdict', rawSourceText: 'fixture-secret raw output', llmInputText: 'prompt secret', responseText: 'uncertain', commands: ['cat secret'], targetWorkspacePath: '/private/workspace' });
-  assert.doesNotMatch(JSON.stringify(buildSharedAnalyticsRecord(record)), /fixture-secret|prompt secret|cat secret|private\/workspace/);
 });

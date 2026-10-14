@@ -18,12 +18,8 @@ npx --yes @softawarest/token-optimizer-installer
 On a fresh installation, choose one provider when prompted. Environment
 variables left by an older installation do not suppress this menu:
 
-1. **Gateway token** — request an access token at
-   [https://llm-proxy.lnf.gr/](https://llm-proxy.lnf.gr/), then use the emailed
-   token after approval.
-2. **Your own OpenRouter key** — unlimited usage billed to your account; no
-   gateway token is needed.
-3. **Local LLM** — point the tools at your OpenAI-compatible local endpoint.
+1. **Your own OpenRouter key** — usage is billed to your OpenRouter account.
+2. **Local LLM** — point the tools at your OpenAI-compatible local endpoint.
 
 The installer detects your coding client(s) (Claude Code, Codex, Antigravity,
 OpenCode, Cursor), installs the right plugin/server assets, writes provider
@@ -37,6 +33,10 @@ A missing or inaccessible saved credential is not treated as usable, so the
 provider menu is shown again.
 Restart affected clients after a successful update so they discard cached MCP
 state.
+
+Already have the plugin or skill but not a working server? Ask your agent to
+run the `token-optimizer-setup` skill: it checks your machine, proposes the
+installer commands, and tells you what is left to do.
 
 See the [installer guide](packages/installer/README.md) for non-interactive
 flags, managing an existing install (`status`, `doctor`, `repair`,
@@ -55,8 +55,7 @@ codebase, validate a change, or diagnose a failure. The main tools are:
   without pasting them into the conversation.
 - `run_command_digest` — summarizes noisy commands such as builds or installs.
 - `run_regression_check` — compares auto-detected validation against a local
-  baseline. It is deterministic and is excluded from the gateway's public
-  context-savings statistics.
+  baseline.
 
 The installer creates a private user policy with the `standard` execution
 profile. That profile permits workspace-detected build, typecheck, format-check,
@@ -77,11 +76,10 @@ of this repository if you want a local multi-workspace analytics dashboard.
 
 ## Choosing a provider
 
-| Provider mode | Inference runs on | Data sent remotely | Token needed? |
+| Provider mode | Inference runs on | Data sent remotely | Credential |
 | --- | --- | --- | --- |
-| Local LLM | Your own machine/endpoint | Nothing | No |
-| Your OpenRouter key (BYOK) | OpenRouter | Redacted, bounded excerpts | No — your own key, unlimited usage |
-| Gateway token | Softaware's gateway | Redacted, bounded excerpts | Yes — request one, operator-approved |
+| Local LLM | Your own machine/endpoint | Nothing | None |
+| Your OpenRouter key | OpenRouter | Redacted, bounded excerpts | Your OpenRouter API key |
 
 Remote requests are always redacted before they leave your machine — secret
 values are stripped, never transmitted. Raw local logs under
@@ -96,7 +94,10 @@ the tool reports an honest "uncertain" verdict instead.
 ## Troubleshooting
 
 - Restart your client after installing or changing provider settings.
-- Run `check_local_llm_health` to verify the selected LLM provider (local, gateway, or direct OpenRouter).
+- **Upgrading from 2.x with a gateway token:** the shared gateway was retired in
+  3.0.0. Re-run the installer and choose OpenRouter or a local LLM. An existing
+  OpenRouter (BYOK) key is migrated automatically to direct OpenRouter.
+- Run `check_local_llm_health` to verify the selected LLM provider (local or OpenRouter).
 - If tools are missing after an interrupted dependency install, just restart
   the client — the launcher detects and repairs an incomplete runtime cache
   automatically before registering its MCP tools.
@@ -121,8 +122,6 @@ actors, controls, and residual risks.
 
 - [Installer guide](packages/installer/README.md) — client installation,
   provider choices, and managing an existing install.
-- [Gateway operator guide](gateway/README.md) — deployment, token approvals,
-  email delivery, analytics, and portal administration.
 - [Skill instructions](skill/skill-example.md) — agent-facing tool workflow.
 - [Threat model](docs/security/threat-model.md) — security design, controls,
   and residual risk.

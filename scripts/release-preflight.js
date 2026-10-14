@@ -34,7 +34,7 @@ function runPreflight(root, injected = {}) {
   if (rootPackage.version !== installerPackage.version) fail("VERSION_MISMATCH", [rootPackage.version, installerPackage.version]);
   const lock = readJson("package-lock.json");
   if (lock.version !== rootPackage.version || lock.packages?.[""]?.version !== rootPackage.version) fail("VERSION_MISMATCH", "package-lock.json");
-  for (const file of ["src/index.ts", ...["antigravity", "claude", "codex", "opencode", "cursor"].map(name => `scripts/generate-plugin-${name}.js`)]) {
+  for (const file of ["src/index.ts", ...["antigravity", "claude", "codex", "opencode", "cursor", "agensi"].map(name => `scripts/generate-plugin-${name}.js`)]) {
     if (!io.readFileSync(path.join(root, file), "utf8").includes(rootPackage.version)) fail("VERSION_MISMATCH", file);
   }
   for (const directory of ["plugin/claude", "plugin/codex", "packages/installer/assets", ".claude-plugin", ".agents/plugins"]) {

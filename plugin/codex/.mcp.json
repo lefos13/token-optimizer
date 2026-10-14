@@ -7,15 +7,12 @@
       ],
       "cwd": ".",
       "env_vars": [
-        "LLM_GATEWAY_TOKEN",
-        "LLM_GATEWAY_URL",
-        "OPENROUTER_BYOK_KEY",
-        "OPENROUTER_BYOK_MODEL",
+        "OPENROUTER_API_KEY",
         "OPENROUTER_MODEL",
-        "OPENROUTER_API_URL"
+        "OPENROUTER_API_URL",
+        "TOKEN_OPTIMIZER_PROVIDER_MODE"
       ],
       "env": {
-        "LLM_GATEWAY_URL": "https://llm-proxy.lnf.gr/v1",
         "LOCAL_LLM_API_URL": "http://localhost:8080/v1",
         "LOCAL_LLM_MODEL": "local-model"
       }

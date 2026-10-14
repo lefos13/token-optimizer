@@ -62,7 +62,7 @@ function cleanupInstallerMetadata(file) {
   let next = text;
   if (file.endsWith('config.toml')) next = text.replace(/^\[marketplaces\.Softaware-marketplace\]\s*$[\s\S]*?(?=^\[|(?![\s\S]))/gm, '');
   if (file.endsWith('settings.json')) {
-    next = removeJsonPropertyInContainer(next, 'env', ['TOKEN_OPTIMIZER_PROVIDER_MODE', 'TOKEN_OPTIMIZER_CREDENTIAL_REF', 'LLM_GATEWAY_URL', 'LLM_GATEWAY_TOKEN', 'OPENROUTER_BYOK_KEY', 'OPENROUTER_BYOK_MODEL', 'OPENROUTER_API_KEY', 'OPENROUTER_API_URL', 'OPENROUTER_MODEL', 'LOCAL_LLM_API_URL', 'LOCAL_LLM_MODEL']);
+    next = removeJsonPropertyInContainer(next, 'env', ['TOKEN_OPTIMIZER_PROVIDER_MODE', 'TOKEN_OPTIMIZER_CREDENTIAL_REF', 'LLM_GATEWAY_URL', 'LLM_GATEWAY_TOKEN', 'OPENROUTER_BYOK_KEY', 'OPENROUTER_BYOK_MODEL', 'LLM_GATEWAY_SHARE_ANALYTICS', 'OPENROUTER_API_KEY', 'OPENROUTER_API_URL', 'OPENROUTER_MODEL', 'LOCAL_LLM_API_URL', 'LOCAL_LLM_MODEL']);
     if (next !== null) next = removeJsonPropertyInContainer(next, 'extraKnownMarketplaces', ['token-optimizer-marketplace']);
   } else if (file.endsWith('known_marketplaces.json')) next = removeJsonProperty(next, ['token-optimizer-marketplace']);
   else if (file.endsWith('.claude.json')) {

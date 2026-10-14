@@ -107,6 +107,8 @@ function emptyCleanupRoots(home) {
     path.join(root, '.gemini', 'config', 'plugins', 'token-optimizer'),
     path.join(root, '.config', 'opencode', 'token-optimizer-server'),
     path.join(root, '.config', 'opencode', 'skills', 'token-optimizer'),
+    path.join(root, '.config', 'opencode', 'skills', 'token-optimizer-setup'),
+    path.join(root, '.codex', 'skills', 'token-optimizer-setup'),
     path.join(root, '.cursor', 'token-optimizer-server'),
   ];
 }

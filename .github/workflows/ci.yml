@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-node@v6
         with: { node-version: '${{ matrix.node }}', cache: npm }
       - run: npm ci
-      - run: npm run build && npm run build:gateway
+      - run: npm run build
       - run: npm run test:security
       - run: npm run verify:generated
       - if: matrix.full

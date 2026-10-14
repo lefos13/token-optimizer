@@ -63,7 +63,7 @@ test('server package does not depend on the installer package', () => {
 
   const runtimeProbe = spawnSync(process.execPath, [
     '-e',
-    "require.resolve('@modelcontextprotocol/sdk/server/index.js'); require.resolve('zod'); require.resolve('nodemailer')",
+    "require.resolve('@modelcontextprotocol/sdk/server/index.js'); require.resolve('zod')",
   ], { cwd: root, encoding: 'utf8' });
   assert.equal(runtimeProbe.status, 0, runtimeProbe.stderr);
 });

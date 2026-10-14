@@ -15,13 +15,14 @@ This repository contains the `token-optimizer-mcp` server used by the `token-opt
 
 ## Plugin Generators
 
-Five generators package the same `token-optimizer` skill for different clients. `npm run build:plugin` runs all of them; each also has a dedicated script.
+Six generators package the `token-optimizer` skill for different clients. `npm run build:plugin` runs all of them; each also has a dedicated script.
 
 - `scripts/generate-plugin-antigravity.js` (`npm run build:plugin:antigravity`) → `plugin/antigravity/`. Gitignored — Antigravity loads plugins from a local folder; copy/symlink the generated folder into Antigravity's plugin directory.
 - `scripts/generate-plugin-claude.js` (`npm run build:plugin:claude`) → `plugin/claude/` plus repo-root `.claude-plugin/marketplace.json`. Both committed for git-based marketplace installs.
 - `scripts/generate-plugin-codex.js` (`npm run build:plugin:codex`) → `plugin/codex/` plus repo-root `.agents/plugins/marketplace.json`. Both committed for marketplace installs.
 - `scripts/generate-plugin-opencode.js` (`npm run build:plugin:opencode`) → `plugin/opencode/`. Gitignored — opencode has no plugin/marketplace mechanism; copy the server + skill and merge the MCP snippet by hand (see the generated README).
 - `scripts/generate-plugin-cursor.js` (`npm run build:plugin:cursor`) → `plugin/cursor/`. Gitignored — Cursor has no plugin/marketplace mechanism; copy the server, merge the MCP snippet, and copy the `.mdc` rule per project by hand (see the generated README).
+- `scripts/generate-plugin-agensi.js` (`npm run build:plugin:agensi`) → `plugin/agensi/token-optimizer.zip`: one skill package whose root `SKILL.md` (from `skill/marketplace/SKILL.md`) routes to `references/setup.md` (the setup skill body). Gitignored — upload the zip by hand to the Agensi creator dashboard. Ships no server; keep the root skill short and free of implementation detail.
 
 **All generators:**
 
@@ -29,7 +30,7 @@ Five generators package the same `token-optimizer` skill for different clients. 
 - Launchers (`server/start.sh`) self-locate at runtime. Do not hardcode absolute paths in config files.
 - `node_modules` is not committed. The bundled `server/` carries only compiled JS plus a minimal `package.json`; `start.sh` installs the single runtime dependency on first run.
 - **Bump `VERSION` in the generator script for every change that touches that plugin's output — including wording-only edits to `skill/skill-example.md`.** Run `npm run build:plugin` and commit the regenerated output (Claude and Codex only; Antigravity, opencode, and Cursor are gitignored).
-- **Release-version rule:** Any change that affects an installable final product — MCP server behavior, installer behavior, gateway behavior, plugin output, skill instructions, or user-facing documentation shipped in an installer/plugin — must receive a new aligned release version before regeneration. Keep the root `package.json`, `packages/installer/package.json`, `src/index.ts` MCP server metadata, and all five generator `VERSION` values identical. Run `npm run build:installer` so `packages/installer/assets/` carries the same version; do not publish until `npm pack ./packages/installer --dry-run` and the full suite pass.
+- **Release-version rule:** Any change that affects an installable final product — MCP server behavior, installer behavior, plugin output, skill instructions, or user-facing documentation shipped in an installer/plugin — must receive a new aligned release version before regeneration. Keep the root `package.json`, `packages/installer/package.json`, `src/index.ts` MCP server metadata, and all six generator `VERSION` values identical. Run `npm run build:installer` so `packages/installer/assets/` carries the same version; do not publish until `npm pack ./packages/installer --dry-run` and the full suite pass.
 
 **Per-generator differences:**
 
@@ -85,7 +86,9 @@ reported as `NO_RELEASE_TAG` and is never used by the publishing workflow.
 - `src/types.ts`: shared TypeScript contracts for tool arguments and verdict payloads.
 - `README.md`: user-facing setup, tool descriptions, configuration, and troubleshooting instructions.
 - `skill/skill-example.md`: skill-facing usage instructions.
-- `scripts/manage-gateway-config.js`: CLI to configure the LLM gateway token; `enable-defaults` / `disable-defaults` write or remove a standing default-on usage directive in Claude/Codex/Antigravity's global instructions files.
+- `skill/setup/SKILL.md`: the `token-optimizer-setup` skill (guided install/verify/repair). `scripts/skill-sources.js` lists extra skills; every generator ships them (Cursor renders them as agent-requested `.mdc` rules) and the installer copies them for Codex, opencode, and Cursor projects.
+- `skill/marketplace/SKILL.md`: short Agensi root skill; it must link `references/setup.md`.
+- `scripts/manage-defaults.js` (`npm run defaults:config`): `enable-defaults` / `disable-defaults` write or remove a standing default-on usage directive in Claude/Codex/Antigravity's global instructions files.
 
 ## MCP Tool Contract
 
@@ -107,10 +110,10 @@ When changing a tool:
 
 ## Token Optimizer Behavior
 
-- The server prefers the centralized gateway (`LLM_GATEWAY_URL` + `LLM_GATEWAY_TOKEN`) and falls back to a local OpenAI-compatible model (`LOCAL_LLM_API_URL` / `LOCAL_LLM_MODEL`, defaulting to `http://localhost:8080/v1` and `local-model`) when the gateway is unset or unreachable. Models are pinned server-side on the gateway per task type; clients do not select a model.
+- Two provider modes exist: `openrouter-direct` (`OPENROUTER_API_KEY`, optional `OPENROUTER_MODEL`) and `local` (`LOCAL_LLM_API_URL` / `LOCAL_LLM_MODEL`, defaulting to `http://localhost:8080/v1` and `local-model`). With no explicit mode, `OPENROUTER_API_KEY` selects OpenRouter; a failed OpenRouter call retries once against the local endpoint. The centralized gateway was removed in 3.0.0; legacy `gateway-token` / `gateway-byok` settings are migrated with a warning and must never route traffic.
 - Keep prompts strict about JSON-only responses.
 - Keep fallback behavior conservative. If neither provider is reachable, returns invalid JSON, or cannot classify the result, return `uncertain` or an advisory review issue instead of pretending confidence.
-- The gateway is a remote hop the maintainer controls and is the approved primary LLM path; do not add ad-hoc third-party LLM dependencies or other external network calls unless the user explicitly requests that architecture change.
+- OpenRouter is the only approved remote LLM destination; do not add other third-party LLM dependencies or external network calls unless the user explicitly requests that architecture change.
 
 ## Command Execution and Logs
 

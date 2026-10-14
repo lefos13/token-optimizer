@@ -9,12 +9,11 @@ const crypto = require("crypto");
 const { createCredentialStore } = require("./credential-store");
 const { marketplaceLocations, marketplaceManifest } = require("./marketplace-locations");
 
-const DEFAULT_GATEWAY_URL = "https://llm-proxy.lnf.gr/v1";
 const DEFAULT_LOCAL_LLM_URL = "http://localhost:8080/v1";
 const DEFAULT_LOCAL_LLM_MODEL = "local-model";
 const DEFAULT_OPENROUTER_URL = "https://openrouter.ai/api/v1";
 /* Every env key installers may write into a client's MCP config. A provider
-   mode (gateway / byok / local / skip) always yields a full values object
+   mode (openrouter-direct / local / skip) always yields a full values object
    across all of these keys so registering the MCP server never requires
    picking a provider, and switching providers later cleanly clears whatever
    the previous choice left behind. */
@@ -25,6 +24,7 @@ const MANAGED_ENV_KEYS = [
   "LLM_GATEWAY_TOKEN",
   "OPENROUTER_BYOK_KEY",
   "OPENROUTER_BYOK_MODEL",
+  "LLM_GATEWAY_SHARE_ANALYTICS",
   "LOCAL_LLM_API_URL",
   "LOCAL_LLM_MODEL",
   "OPENROUTER_API_KEY",
@@ -38,19 +38,18 @@ function emptyManagedValues() {
 
 /* Resolves an install/config options object into the full managed values to
    write.
-   - "gateway": shared infrastructure; requires gatewayToken.
-   - "byok": your own OpenRouter key via the gateway. Requires byokKey only —
-     NO gatewayToken is written or needed, because a BYOK caller isn't using
-     the operator's OpenRouter setup and the gateway does not authenticate a
-     BYOK-only request at all.
+   - "openrouter-direct": your own OpenRouter key; direct to OpenRouter API.
    - "local": your own OpenAI-compatible endpoint; needs nothing.
    - "skip"/unset provider: writes nothing but still returns the empty object
      shape, so callers can still register the MCP server entry itself without
      ever requiring a token. */
 function buildProviderValues(options) {
   const requested = options.provider;
-  if (requested !== undefined && !normalizeProviderChoice(requested)) {
-    throw new Error(`Unsupported provider mode: ${requested}`);
+  if (requested !== undefined) {
+    const normalized = normalizeProviderChoice(requested);
+    if (!normalized) {
+      throw new Error(`Unsupported provider mode: ${requested}`);
+    }
   }
   const provider = normalizeProviderChoice(requested) || inferProvider(options);
   const values = emptyManagedValues();
@@ -58,25 +57,12 @@ function buildProviderValues(options) {
   values.TOKEN_OPTIMIZER_CREDENTIAL_REF = options.credentialRef
     ? (typeof options.credentialRef === "string" ? options.credentialRef : JSON.stringify(options.credentialRef))
     : "";
-  if (provider === "gateway-token") {
-    if (!options.gatewayToken && !options.credentialRef) {
-      throw new Error("gatewayToken is required for provider 'gateway'");
-    }
-    values.LLM_GATEWAY_URL = options.gatewayUrl || DEFAULT_GATEWAY_URL;
-    if (!options.credentialRef) values.LLM_GATEWAY_TOKEN = options.gatewayToken;
-  } else if (provider === "gateway-byok") {
-    if (!options.byokKey && !options.credentialRef) {
-      throw new Error("byokKey is required for provider 'byok'");
-    }
-    values.LLM_GATEWAY_URL = options.gatewayUrl || DEFAULT_GATEWAY_URL;
-    if (!options.credentialRef) values.OPENROUTER_BYOK_KEY = options.byokKey;
-    values.OPENROUTER_BYOK_MODEL = String(options.byokModel || "").trim();
-  } else if (provider === "openrouter-direct") {
+  if (provider === "openrouter-direct") {
     if (!options.byokKey && !options.openrouterKey && !options.credentialRef) {
-      throw new Error("byokKey is required for provider 'openrouter-direct'");
+      throw new Error("openrouterKey is required for provider 'openrouter-direct'");
     }
     if (!options.credentialRef) values.OPENROUTER_API_KEY = options.openrouterKey || options.byokKey;
-    values.OPENROUTER_MODEL = String(options.byokModel || "").trim();
+    values.OPENROUTER_MODEL = String(options.openrouterModel || options.byokModel || "").trim();
     values.OPENROUTER_API_URL = options.openrouterUrl || DEFAULT_OPENROUTER_URL;
   } else if (provider === "local") {
     values.LOCAL_LLM_API_URL = options.localApiUrl || "";
@@ -90,16 +76,21 @@ function normalizeProviderChoice(provider) {
     return null;
   }
   const normalized = String(provider).trim().toLowerCase();
-  const aliases = { gateway: "gateway-token", byok: "openrouter-direct", direct: "openrouter-direct" };
+  if (["gateway", "gateway-token", "gateway-byok"].includes(normalized)) {
+    throw new Error("Gateway support was removed; use --provider openrouter or --provider local.");
+  }
+  const aliases = { byok: "openrouter-direct", openrouter: "openrouter-direct", direct: "openrouter-direct" };
   const canonical = aliases[normalized] || normalized;
-  return ["gateway-token", "gateway-byok", "openrouter-direct", "local", "skip"].includes(canonical) ? canonical : null;
+  return ["openrouter-direct", "local", "skip"].includes(canonical) ? canonical : null;
 }
 
 /* Callers that don't pass an explicit provider get one inferred from which
-   values they supplied, so existing gatewayToken-only call sites keep working. */
+   values they supplied. Gateway token options fail with a clear removal message. */
 function inferProvider(options) {
-  if (options.byokKey) return "openrouter-direct";
-  if (options.gatewayToken) return "gateway-token";
+  if (options.gatewayToken) {
+    throw new Error("Gateway support was removed; use --provider openrouter or --provider local.");
+  }
+  if (options.openrouterKey || options.byokKey) return "openrouter-direct";
   if (options.localApiUrl || options.localModel) return "local";
   return "skip";
 }
@@ -109,11 +100,11 @@ function inferProvider(options) {
    available only when the caller explicitly selects those plaintext stores. */
 function prepareCredentialOptions(options = {}) {
   const provider = normalizeProviderChoice(options.provider) || inferProvider(options);
-  if (!["gateway-token", "gateway-byok", "openrouter-direct"].includes(provider) || options.credentialRef) return { ...options };
+  if (provider !== "openrouter-direct" || options.credentialRef) return { ...options };
   const kind = options.credentialStore || "native";
   if (!["native", "env", "config"].includes(kind)) throw new Error(`Unsupported credential store: ${kind}. Choose native, env, or config.`);
   if (kind !== "env") return { ...options, provider, credentialStore: kind };
-  const variable = provider === "gateway-token" ? "LLM_GATEWAY_TOKEN" : provider === "openrouter-direct" ? "OPENROUTER_API_KEY" : "OPENROUTER_BYOK_KEY";
+  const variable = "OPENROUTER_API_KEY";
   const store = createCredentialStore(kind, { home: options.home, service: "token-optimizer", account: provider, envVar: variable, ...(options.credentialStoreOptions || {}) });
   const credentialRef = store.set();
   const prepared = { ...options, provider, credentialStore: kind, credentialRef };
@@ -124,28 +115,80 @@ function prepareCredentialOptions(options = {}) {
   return prepared;
 }
 
-/* Translate legacy v1 environment state into an explicit provider without
-   changing its inference destination. Secrets remain represented by a
-   credential reference in the returned plan. */
+/* Translate legacy v1/gateway environment state into an explicit provider without
+   centralized gateway support. Secrets remain represented by a credential reference
+   in the returned plan. */
 function planMigration(v1State = {}, choices = {}) {
   const env = v1State.env || v1State.environment || v1State;
-  const selected = normalizeProviderChoice(choices.provider);
-  const gatewayUrl = env.LLM_GATEWAY_URL || DEFAULT_GATEWAY_URL;
-  const hasByok = Boolean(env.OPENROUTER_BYOK_KEY || env.OPENROUTER_API_KEY || choices.byokKey);
-  const inferred = selected || (env.LOCAL_LLM_API_URL ? "local" : env.LLM_GATEWAY_TOKEN ? "gateway-token" : hasByok ? "gateway-byok" : "skip");
-  const mode = inferred;
-  const effectiveProvider = { mode, apiUrl: mode === "openrouter-direct" ? (choices.openrouterUrl || "https://openrouter.ai/api/v1") : mode === "local" ? (env.LOCAL_LLM_API_URL || DEFAULT_LOCAL_LLM_URL) : gatewayUrl };
-  if (env.OPENROUTER_BYOK_MODEL || choices.byokModel) effectiveProvider.model = env.OPENROUTER_BYOK_MODEL || choices.byokModel;
-  if (env.TOKEN_OPTIMIZER_CREDENTIAL_REF || choices.credentialRef) effectiveProvider.credentialRef = env.TOKEN_OPTIMIZER_CREDENTIAL_REF || choices.credentialRef;
+  const selected = choices.provider ? normalizeProviderChoice(choices.provider) : null;
+  const hasByok = Boolean(env.OPENROUTER_BYOK_KEY || env.OPENROUTER_API_KEY || choices.byokKey || choices.openrouterKey);
+  const rawCredRef = env.TOKEN_OPTIMIZER_CREDENTIAL_REF || choices.credentialRef;
+  let parsedCredRef = null;
+  if (rawCredRef && typeof rawCredRef === "object") {
+    parsedCredRef = { ...rawCredRef };
+  } else if (typeof rawCredRef === "string" && rawCredRef.trim().startsWith("{")) {
+    try { parsedCredRef = JSON.parse(rawCredRef); } catch (_) { parsedCredRef = null; }
+  }
+  const isGatewayByokRef = parsedCredRef && parsedCredRef.account === "gateway-byok";
+  const isGatewayTokenRef = parsedCredRef && parsedCredRef.account === "gateway-token";
+
+  let mode;
   const warnings = [];
-  if (!selected && hasByok && env.LLM_GATEWAY_URL) warnings.push("Legacy BYOK credentials remain routed through the gateway; key is stored as a gateway credential reference.");
-  if (env.LLM_GATEWAY_TOKEN && !selected) warnings.push("Legacy gateway token migrated to gateway-token; review credential storage before cleanup.");
+  if (selected) {
+    mode = selected;
+  } else if (hasByok || isGatewayByokRef) {
+    mode = "openrouter-direct";
+    warnings.push("Migrated legacy OpenRouter BYOK configuration to direct OpenRouter (openrouter-direct).");
+  } else if (env.LLM_GATEWAY_TOKEN || isGatewayTokenRef) {
+    mode = env.LOCAL_LLM_API_URL ? "local" : "skip";
+    warnings.push("Gateway support was removed; run `token-optimizer config` to configure a provider.");
+  } else if (env.LOCAL_LLM_API_URL) {
+    mode = "local";
+  } else {
+    mode = "skip";
+  }
+
+  let migratedRef = parsedCredRef;
+  if (migratedRef) {
+    if (migratedRef.account === "gateway-byok" || mode === "openrouter-direct") {
+      migratedRef.account = "openrouter-direct";
+      if (migratedRef.variable === "OPENROUTER_BYOK_KEY") migratedRef.variable = "OPENROUTER_API_KEY";
+    }
+  }
+
+  const effectiveProvider = {
+    mode,
+    apiUrl: mode === "openrouter-direct" ? (choices.openrouterUrl || env.OPENROUTER_API_URL || DEFAULT_OPENROUTER_URL) : mode === "local" ? (env.LOCAL_LLM_API_URL || DEFAULT_LOCAL_LLM_URL) : "",
+  };
+  const effectiveModel = env.OPENROUTER_MODEL || env.OPENROUTER_BYOK_MODEL || choices.byokModel || choices.openrouterModel;
+  if (effectiveModel) effectiveProvider.model = effectiveModel;
+  if (migratedRef) effectiveProvider.credentialRef = migratedRef;
+
   const operations = [{ id: "migrate:provider", kind: "credential", phase: "credentials", provider: mode, reference: effectiveProvider.credentialRef || "provider-env" }];
-  if (env.LLM_GATEWAY_TOKEN || env.OPENROUTER_BYOK_KEY || env.OPENROUTER_API_KEY) {
+  if (env.LLM_GATEWAY_TOKEN || env.LLM_GATEWAY_URL || env.OPENROUTER_BYOK_KEY || env.OPENROUTER_API_KEY || env.OPENROUTER_BYOK_MODEL || env.LLM_GATEWAY_SHARE_ANALYTICS || isGatewayTokenRef || isGatewayByokRef) {
     operations.push({ id: "cleanup:legacy-provider-env", kind: "managed-block", phase: "cleanup", path: "provider-env", marker: "TOKEN_OPTIMIZER_PROVIDER_MODE" });
   }
   return createChangePlan({ action: "migration", effectiveProvider, warnings }, operations);
 }
+/* Skill directories shipped in the codex/opencode asset trees and the matching
+   Cursor rules. Claude and Antigravity copy whole plugin folders instead. */
+const SKILL_NAMES = ["token-optimizer", "token-optimizer-setup"];
+const CURSOR_RULES = ["token-optimizer.mdc", "token-optimizer-setup.mdc"];
+
+function copySkills(sourceRoot, destRoot) {
+  for (const name of SKILL_NAMES) {
+    const source = path.join(sourceRoot, name);
+    if (fs.existsSync(source)) copyDirectory(source, path.join(destRoot, name));
+  }
+}
+
+function copyCursorRules(options, project) {
+  for (const rule of CURSOR_RULES) {
+    const source = path.join(options.assetsRoot, "plugin", "cursor", "rules", rule);
+    if (fs.existsSync(source)) copyFile(source, path.join(path.resolve(project), ".cursor", "rules", rule));
+  }
+}
+
 const CLAUDE_MARKETPLACE_NAME = "token-optimizer-marketplace";
 const CODEX_MARKETPLACE_NAME = "Softaware-marketplace";
 /* macOS GUI-session env is delivered two ways: an immediate `launchctl setenv`
@@ -213,7 +256,7 @@ function createCredentialTransaction(options, paths) {
   const requestedStoreKind = options.credentialStore || "native";
   runtime.superseded = priorOwned && (priorOwned.account !== provider || priorStoreKind !== requestedStoreKind) ? priorOwned : null;
   runtime.provider = provider;
-  runtime.needsCredential = ["gateway-token", "gateway-byok", "openrouter-direct"].includes(provider) && !options.credentialRef;
+  runtime.needsCredential = provider === "openrouter-direct" && !options.credentialRef;
   runtime.optionsSource = options;
   runtime.paths = paths;
   return runtime;
@@ -227,7 +270,7 @@ function executeCredentialOperation(runtime, operation) {
   }
   if (runtime.options.credentialRef) return;
   const source = runtime.optionsSource;
-  const secret = runtime.provider === "gateway-token" ? source.gatewayToken : (source.openrouterKey || source.byokKey);
+  const secret = source.openrouterKey || source.byokKey;
   runtime.credentialRef = runtime.store.set(secret);
   runtime.credentialOwned = !runtime.priorCredential;
   runtime.options = { ...runtime.options, credentialRef: runtime.credentialRef };
@@ -244,7 +287,7 @@ function prepareCredentialOperation(runtime, operation) {
     return { inverse: () => { if (runtime.supersededSecret) runtime.supersededStore.set(runtime.supersededSecret); } };
   }
   const kind = options.credentialStore || "native";
-  const variable = runtime.provider === "gateway-token" ? "LLM_GATEWAY_TOKEN" : runtime.provider === "openrouter-direct" ? "OPENROUTER_API_KEY" : "OPENROUTER_BYOK_KEY";
+  const variable = runtime.provider === "openrouter-direct" ? "OPENROUTER_API_KEY" : "TOKEN_OPTIMIZER_CREDENTIAL";
   runtime.store = createCredentialStore(kind, { home: runtime.paths.home, service: "token-optimizer", account: runtime.provider, envVar: variable, ...(options.credentialStoreOptions || {}) });
   runtime.priorCredential = runtime.store.get({ service: "token-optimizer", account: runtime.provider });
   return { inverse: () => runtime.priorCredential ? runtime.store.set(runtime.priorCredential) : runtime.store.delete({ service: "token-optimizer", account: runtime.provider }) };
@@ -361,12 +404,12 @@ function planProviderConfiguration(options = {}) {
   registerPlan(operations, (operation) => {
     if (operation.kind === "credential") {
       executeCredentialOperation(runtime, operation);
-    } else applyGatewayConfig(runtime.options);
+    } else applyProviderConfig(runtime.options);
   }, (operation) => {
     if (operation.kind === "credential") {
       return prepareCredentialOperation(runtime, operation);
     }
-    const targets = getGatewayTargets(paths.home).filter((target) => target.matches(options.clients)).map((target) => target.filePath);
+    const targets = getProviderTargets(paths.home).filter((target) => target.matches(options.clients)).map((target) => target.filePath);
     targets.push(path.join(paths.home, "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`));
     const before = snapshotTargets(targets, [paths.home]);
     return { inverse: () => restoreTargets(before), commit: () => discardSnapshot(before) };
@@ -399,11 +442,11 @@ function persistProviderCredentialOwnership(options = {}, result = {}) {
 function persistInstallManifest(options = {}, clients = []) {
   const paths = installerPaths(options);
   const mappings = clients.flatMap((client) => ({
-    opencode: [[path.join(paths.home, ".config", "opencode", "token-optimizer-server"), path.join(paths.assetsRoot, "plugin", "opencode", "server")], [path.join(paths.home, ".config", "opencode", "skills", "token-optimizer"), path.join(paths.assetsRoot, "plugin", "opencode", "skills", "token-optimizer")]],
+    opencode: [[path.join(paths.home, ".config", "opencode", "token-optimizer-server"), path.join(paths.assetsRoot, "plugin", "opencode", "server")], ...SKILL_NAMES.map((name) => [path.join(paths.home, ".config", "opencode", "skills", name), path.join(paths.assetsRoot, "plugin", "opencode", "skills", name)])],
     cursor: [[path.join(paths.home, ".cursor", "token-optimizer-server"), path.join(paths.assetsRoot, "plugin", "cursor", "server")]],
     antigravity: [[path.join(paths.home, ".gemini", "config", "plugins", "token-optimizer"), path.join(paths.assetsRoot, "plugin", "antigravity")]],
     claude: [[path.join(paths.home, ".claude", "skills", "token-optimizer"), path.join(paths.assetsRoot, "plugin", "claude")], [path.join(paths.installRoot, "plugin", "claude"), path.join(paths.assetsRoot, "plugin", "claude")]],
-    codex: [[path.join(paths.home, ".codex", "skills", "token-optimizer"), path.join(paths.assetsRoot, "plugin", "codex", "skills", "token-optimizer")], [path.join(paths.installRoot, "plugin", "codex"), path.join(paths.assetsRoot, "plugin", "codex")]],
+    codex: [...SKILL_NAMES.map((name) => [path.join(paths.home, ".codex", "skills", name), path.join(paths.assetsRoot, "plugin", "codex", "skills", name)]), [path.join(paths.installRoot, "plugin", "codex"), path.join(paths.assetsRoot, "plugin", "codex")]],
   }[client] || [])).filter(([root]) => fs.existsSync(root));
   const roots = mappings.map(([root]) => root);
   roots.push(paths.installRoot, paths.backupRoot);
@@ -462,15 +505,15 @@ function captureRegistrationTemplate(file, client) { const text = fs.readFileSyn
 
 function clientTargets(client, paths, options = {}) {
   const roots = {
-    opencode: [path.join(paths.home, ".config", "opencode", "token-optimizer-server"), path.join(paths.home, ".config", "opencode", "skills", "token-optimizer"), path.join(paths.home, ".config", "opencode", "opencode.jsonc"), path.join(paths.home, ".config", "opencode", "AGENTS.md")],
+    opencode: [path.join(paths.home, ".config", "opencode", "token-optimizer-server"), ...SKILL_NAMES.map((name) => path.join(paths.home, ".config", "opencode", "skills", name)), path.join(paths.home, ".config", "opencode", "opencode.jsonc"), path.join(paths.home, ".config", "opencode", "AGENTS.md")],
     cursor: [
       path.join(paths.home, ".cursor", "token-optimizer-server"),
       path.join(paths.home, ".cursor", "mcp.json"),
-      ...(options.cursorProjects || []).map((project) => path.join(path.resolve(project), ".cursor", "rules", "token-optimizer.mdc")),
+      ...(options.cursorProjects || []).flatMap((project) => CURSOR_RULES.map((rule) => path.join(path.resolve(project), ".cursor", "rules", rule))),
     ],
     antigravity: [path.join(paths.home, ".gemini", "config", "plugins", "token-optimizer"), path.join(paths.home, ".gemini", "config", "mcp_config.json"), path.join(paths.home, ".gemini", "GEMINI.md")],
     claude: [path.join(paths.home, ".claude", "skills", "token-optimizer"), path.join(paths.home, ".claude", "settings.json"), path.join(paths.home, ".claude", "CLAUDE.md"), paths.installRoot],
-    codex: [path.join(paths.home, ".codex", "skills", "token-optimizer"), path.join(paths.home, ".codex", "config.toml"), path.join(paths.home, ".codex", "AGENTS.md"), paths.installRoot],
+    codex: [...SKILL_NAMES.map((name) => path.join(paths.home, ".codex", "skills", name)), path.join(paths.home, ".codex", "config.toml"), path.join(paths.home, ".codex", "AGENTS.md"), paths.installRoot],
   };
   return roots[client] || [];
 }
@@ -564,10 +607,9 @@ function detectClients(home = process.env.HOME || os.homedir()) {
 
 function installOpenCode(options) {
   const serverDest = path.join(options.home, ".config", "opencode", "token-optimizer-server");
-  const skillDest = path.join(options.home, ".config", "opencode", "skills", "token-optimizer");
   copyDirectory(path.join(options.assetsRoot, "plugin", "opencode", "server"), serverDest);
-  copyDirectory(path.join(options.assetsRoot, "plugin", "opencode", "skills", "token-optimizer"), skillDest);
-  applyGatewayConfig({ ...options, clients: ["opencode"] });
+  copySkills(path.join(options.assetsRoot, "plugin", "opencode", "skills"), path.join(options.home, ".config", "opencode", "skills"));
+  applyProviderConfig({ ...options, clients: ["opencode"] });
   if (options.defaults !== false) {
     applyDefaultDirectives({ ...options, clients: ["opencode"] });
   }
@@ -576,18 +618,15 @@ function installOpenCode(options) {
 function installCursor(options) {
   const serverDest = path.join(options.home, ".cursor", "token-optimizer-server");
   copyDirectory(path.join(options.assetsRoot, "plugin", "cursor", "server"), serverDest);
-  applyGatewayConfig({ ...options, clients: ["cursor"] });
+  applyProviderConfig({ ...options, clients: ["cursor"] });
   const projects = options.cursorProjects || [];
-  for (const project of projects) {
-    const ruleDest = path.join(path.resolve(project), ".cursor", "rules", "token-optimizer.mdc");
-    copyFile(path.join(options.assetsRoot, "plugin", "cursor", "rules", "token-optimizer.mdc"), ruleDest);
-  }
+  for (const project of projects) copyCursorRules(options, project);
 }
 
 function installAntigravity(options) {
   const pluginDest = path.join(options.home, ".gemini", "config", "plugins", "token-optimizer");
   copyDirectory(path.join(options.assetsRoot, "plugin", "antigravity"), pluginDest);
-  applyGatewayConfig({ ...options, clients: ["gemini", "antigravity"] });
+  applyProviderConfig({ ...options, clients: ["gemini", "antigravity"] });
   if (options.defaults !== false) {
     applyDefaultDirectives({ ...options, clients: ["gemini"] });
   }
@@ -617,7 +656,7 @@ function installClaude(options) {
   if (!pluginInstalled) {
     copyDirectory(path.join(options.assetsRoot, "plugin", "claude"), path.join(options.home, ".claude", "skills", "token-optimizer"));
   }
-  applyGatewayConfig({ ...options, clients: ["claude"] });
+  applyProviderConfig({ ...options, clients: ["claude"] });
   if (options.defaults !== false) {
     applyDefaultDirectives({ ...options, clients: ["claude"] });
   }
@@ -641,11 +680,8 @@ function installCodex(options) {
     backupFile(configPath, installerPaths(options).backupRoot);
   }
   fs.writeFileSync(configPath, upsertCodexTomlServer(existing, startJs, buildProviderValues(options)));
-  const skillSrc = path.join(options.assetsRoot, "plugin", "codex", "skills", "token-optimizer");
-  if (fs.existsSync(skillSrc)) {
-    copyDirectory(skillSrc, path.join(options.home, ".codex", "skills", "token-optimizer"));
-  }
-  applyGatewayConfig({ ...options, clients: ["codex"] });
+  copySkills(path.join(options.assetsRoot, "plugin", "codex", "skills"), path.join(options.home, ".codex", "skills"));
+  applyProviderConfig({ ...options, clients: ["codex"] });
   if (options.defaults !== false) {
     applyDefaultDirectives({ ...options, clients: ["codex"] });
   }
@@ -695,14 +731,14 @@ function convergeClientInstallations(client, options) {
   return { removedStale, preserved };
 }
 
-function applyGatewayConfig(options) {
+function applyProviderConfig(options) {
   const paths = installerPaths(options);
   const values = options.providerValues || buildProviderValues(options);
   /* Defensive: callers are expected to normalize "detected"/empty client lists before reaching
      here (see planProviderConfiguration), but normalizeClients is idempotent on an already-real
      list, so re-running it here costs nothing and guards any future caller that forgets to. */
   const clients = normalizeClients(options.clients, paths.home);
-  for (const target of getGatewayTargets(paths.home)) {
+  for (const target of getProviderTargets(paths.home)) {
     if (!target.matches(clients)) {
       continue;
     }
@@ -716,6 +752,7 @@ function applyGatewayConfig(options) {
   }
   applyLaunchctlValues(values, options);
 }
+const applyGatewayConfig = applyProviderConfig;
 
 function applyDefaultDirectives(options) {
   const paths = installerPaths(options);
@@ -732,7 +769,7 @@ function applyDefaultDirectives(options) {
   }
 }
 
-function getGatewayTargets(home) {
+function getProviderTargets(home) {
   /* All launch commands use `node` + the cross-platform start.js launcher —
      Windows has no usable bash on PATH (System32 bash.exe is WSL). Command and
      args are overwritten on every write so stale bash/start.sh entries from
@@ -824,6 +861,7 @@ function getGatewayTargets(home) {
     },
   ];
 }
+const getGatewayTargets = getProviderTargets;
 
 function getDirectiveTargets(home) {
   return [
@@ -1143,10 +1181,10 @@ function tryClientCommand(command, args, options) {
 function copyClientAssets(client, options) {
   if (client === "opencode") {
     copyDirectory(path.join(options.assetsRoot, "plugin", "opencode", "server"), path.join(options.home, ".config", "opencode", "token-optimizer-server"));
-    copyDirectory(path.join(options.assetsRoot, "plugin", "opencode", "skills", "token-optimizer"), path.join(options.home, ".config", "opencode", "skills", "token-optimizer"));
+    copySkills(path.join(options.assetsRoot, "plugin", "opencode", "skills"), path.join(options.home, ".config", "opencode", "skills"));
   } else if (client === "cursor") {
     copyDirectory(path.join(options.assetsRoot, "plugin", "cursor", "server"), path.join(options.home, ".cursor", "token-optimizer-server"));
-    for (const project of options.cursorProjects || []) copyFile(path.join(options.assetsRoot, "plugin", "cursor", "rules", "token-optimizer.mdc"), path.join(path.resolve(project), ".cursor", "rules", "token-optimizer.mdc"));
+    for (const project of options.cursorProjects || []) copyCursorRules(options, project);
   } else if (client === "antigravity") copyDirectory(path.join(options.assetsRoot, "plugin", "antigravity"), path.join(options.home, ".gemini", "config", "plugins", "token-optimizer"));
   else if (client === "claude" || client === "codex") copyDirectory(path.join(options.assetsRoot, "plugin", client), path.join(options.installRoot, "plugin", client));
   else throw new Error(`Unsupported client: ${client}`);
@@ -1158,9 +1196,8 @@ function configureMigratedClient(client, options) {
     ensureDirectory(path.dirname(file));
     const existing = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
     fs.writeFileSync(file, upsertCodexTomlServer(existing, path.join(options.installRoot, "plugin", "codex", "server", "start.js"), options.providerValues));
-    const skill = path.join(options.assetsRoot, "plugin", "codex", "skills", "token-optimizer");
-    if (fs.existsSync(skill)) copyDirectory(skill, path.join(options.home, ".codex", "skills", "token-optimizer"));
-  } else applyGatewayConfig({ ...options, clients: client === "antigravity" ? ["gemini", "antigravity"] : [client], skipLaunchctl: true });
+    copySkills(path.join(options.assetsRoot, "plugin", "codex", "skills"), path.join(options.home, ".codex", "skills"));
+  } else applyProviderConfig({ ...options, clients: client === "antigravity" ? ["gemini", "antigravity"] : [client], skipLaunchctl: true });
   if (options.defaults !== false && client !== "cursor") applyDefaultDirectives({ ...options, clients: client === "antigravity" ? ["gemini"] : [client] });
 }
 
@@ -1245,7 +1282,6 @@ function ensureDirectory(dirPath) {
 }
 
 module.exports = {
-  DEFAULT_GATEWAY_URL,
   DEFAULT_LOCAL_LLM_URL,
   DEFAULT_LOCAL_LLM_MODEL,
   DEFAULT_OPENROUTER_URL,
@@ -1273,7 +1309,10 @@ module.exports = {
   installAntigravity,
   installClaude,
   installCodex,
+  applyProviderConfig,
   applyGatewayConfig,
+  getProviderTargets,
+  getGatewayTargets,
   applyDefaultDirectives,
   applyDirectiveBlock,
   stripJsonCommentsAndTrailingCommas,
