@@ -31,7 +31,7 @@ const sourcePath = path.join(rootDir, "skill", "marketplace", "SKILL.md");
 /* Extra skill name -> reference file the root SKILL.md links to. */
 const REFERENCE_FILES = { "token-optimizer-setup": "setup.md" };
 
-const VERSION = "3.0.0";
+const VERSION = "3.1.0";
 
 console.log("Generating Agensi skill package...");
 

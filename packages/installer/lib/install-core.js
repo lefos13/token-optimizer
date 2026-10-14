@@ -227,8 +227,9 @@ function installerPaths(options = {}) {
 }
 
 /* The installer establishes a usable user-authoritative ceiling while
-   preserving explicit profile choices and unrelated configuration keys. */
-function writeExecutionPolicy(home) {
+   preserving existing profile choices and unrelated configuration keys. A
+   profile the user picked during this install (prompt or --profile) wins. */
+function writeExecutionPolicy(home, profile) {
   const filePath = path.join(path.resolve(home), ".config", "token-optimizer", "config.json");
   let config = {};
   if (fs.existsSync(filePath)) {
@@ -238,7 +239,10 @@ function writeExecutionPolicy(home) {
   }
   config.execution ||= {};
   if (!config.execution || Array.isArray(config.execution) || typeof config.execution !== "object") throw new Error(`Invalid Token Optimizer execution configuration at ${filePath}; expected a JSON object`);
-  if (config.execution.profile === undefined) config.execution.profile = "standard";
+  if (profile !== undefined) {
+    if (!["safe", "standard", "unrestricted"].includes(profile)) throw new Error(`Unsupported execution profile: ${profile}. Choose safe, standard, or unrestricted.`);
+    config.execution.profile = profile;
+  } else if (config.execution.profile === undefined) config.execution.profile = "standard";
   else if (!["safe", "standard", "unrestricted"].includes(config.execution.profile)) throw new Error(`Invalid Token Optimizer execution profile at ${filePath}`);
   ensureDirectory(path.dirname(filePath));
   fs.writeFileSync(filePath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
@@ -320,7 +324,7 @@ function planInstallation(options = {}) {
     if (operation.phase === "service") { applyLaunchctlValues(buildProviderValues(runtime.options), runtime.options); return; }
     if (operation.phase === "cleanup") return { details: convergeClientInstallations(operation.client, { ...runtime.options, ...paths, version: plan.version }) };
     if (operation.phase !== "copy") return;
-    if (operation.id === "install:execution-policy") { writeExecutionPolicy(paths.home); return; }
+    if (operation.id === "install:execution-policy") { writeExecutionPolicy(paths.home, runtime.options.profile); return; }
     /* Client copy/configuration is staged without mutating GUI-session state;
        the explicit service phase owns that external state and its rollback. */
     const installOptions = { ...runtime.options, ...paths, skipLaunchctl: true };

@@ -6,14 +6,29 @@ description: Use this MCP server to scout codebases, validate code changes, revi
 
 Execution profiles are `safe`, `standard`, and `unrestricted`; tool/project requests may only narrow the user ceiling. This is deny-first policy, not an OS sandbox. Responses expose execution statuses, policy/auto-detection metadata, truncation, provider status, warnings, and redaction summaries. Logs default to a 7-day retention and 500 MB workspace quota, with workspace-scoped pruning.
 
-Installer-managed setups default to `standard`, which authorizes validation
-commands recognized from the workspace—even conventional format checks such as
-`npm run format:check`—even when passed explicitly, targeted
-`node --test ...` runs, and read-only `git diff ...` inspection. Arbitrary Node
-scripts, Git mutations, shell chaining, substitution, and redirection remain
-blocked; use `testCommands` to batch independent checks in one verdict call. When
-`validationOutcome` is `not_run`, execution policy stopped the command before
-validation began; do not report that as a test or lint failure.
+Installer-managed setups default to `standard` unless the user chose another
+profile. `standard` authorizes validation commands recognized from the
+workspace (including conventional format checks such as `npm run format:check`),
+common runners invoked directly (`tsc`, `vitest`, `jest`, `mocha`,
+`playwright test`, `eslint`, `prettier --check`, `biome check`, `pytest`,
+`python -m pytest|mypy|ruff|unittest`, `mypy`, `pyright`, `ruff check`,
+`cargo test|check|clippy|build`, `go test|vet|build`, `dotnet test|build`,
+`mvn`/`gradle` test targets), the same JS tools through `npx`, `pnpm exec`, or
+`bunx` when already installed in `node_modules/.bin`, targeted `node --test`,
+and read-only inspection (`git status|log|show|diff|blame|ls-files|grep`,
+branch listing, `ls`, `cat`, `head`, `tail`, `wc`, `grep`, `rg`, `find`).
+In-place fixers (`--fix`, `--write`), package installs, Git mutations, and
+arbitrary scripts are not included; users can add prefixes with
+`npx @softawarest/token-optimizer-installer allow "<prefix>"`. Every profile
+blocks shell chaining, pipes, substitution, redirection, network tools, secret
+files such as `.env` or keys, environment variables, and paths outside the
+workspace; use `testCommands` to batch independent checks in one verdict call.
+When `validationOutcome` is `not_run` or `executionStatus` is `blocked`,
+execution policy stopped the command before it ran; do not report that as a
+test or lint failure. Read `policyHint`: for `COMMAND_NOT_ALLOWED` it carries
+an `allowCommand`; ask the user before running it, because it widens their
+security policy. Other reason codes hold in every profile, so rewrite the
+command instead.
 
 # Token Optimizer
 

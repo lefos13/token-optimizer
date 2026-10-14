@@ -135,3 +135,64 @@ test('runner rejects blocked commands before execution', async () => {
   assert.equal(fs.existsSync(marker), false);
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+/*
+ * The broadened standard profile recognizes common runners and read-only
+ * inspection, but never the write/helper/download variants of those tools.
+ */
+test('standard recognizes common validation runners and read-only inspection', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-standard-tools-'));
+  fs.mkdirSync(path.join(root, 'node_modules', '.bin'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'node_modules', '.bin', 'vitest'), '');
+  fs.writeFileSync(path.join(root, 'node_modules', '.bin', 'tsc'), '');
+  for (const command of [
+    'npx tsc --noEmit', 'npx vitest run src/a.test.ts', 'pnpm exec tsc', 'pytest tests/test_api.py -k login',
+    'python3 -m pytest -q', 'cargo test -p core', 'cargo fmt --check', 'go test ./pkg/...', 'ruff check src',
+    'prettier --check .', 'git status', 'git log --oneline -20', 'git show HEAD --stat', 'git branch -a',
+    'ls -la src', 'grep -rn TODO src', "grep -n 'end$' src/a.ts", "find . -name '*.ts'",
+  ]) {
+    assert.equal((await evaluateCommand({ command, workspacePath: root, profile: 'safe' })).allowed, false, command);
+    assert.deepEqual(await evaluateCommand({ command, workspacePath: root, profile: 'standard' }), { allowed: true, profile: 'standard', reasonCode: 'STANDARD_PROFILE' }, command);
+  }
+  for (const command of [
+    'npx jest', 'npx eslint --fix .', 'yarn vitest', 'cargo fmt', 'prettier --write .', 'ruff check --fix src',
+    'git branch feature', 'git branch -D main', 'git grep -O vim foo', 'git log --output=review.log', 'git show --textconv HEAD',
+    'rg --pre ./helper foo', 'find . -delete', 'find . -exec touch x {} +', 'tail -f app.log', 'npm install',
+  ]) {
+    const decision = await evaluateCommand({ command, workspacePath: root, profile: 'standard' });
+    assert.equal(decision.allowed, false, command);
+    assert.equal(decision.reasonCode, 'COMMAND_NOT_ALLOWED', command);
+  }
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('secret detection matches secret files, not paths that mention secrets', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-secrets-'));
+  for (const command of ['node --test test/installer/credential-store.test.js', 'cat .env.example', 'cat src/secrets.ts', "grep -n 'TOKEN$' src/config.ts"]) {
+    assert.equal((await evaluateCommand({ command, workspacePath: root, profile: 'unrestricted' })).allowed, true, command);
+  }
+  for (const command of ['cat .env', 'cat config/.env.local', 'cat certs/server.pem', 'cat deploy/id_ed25519', 'cat .npmrc', 'cat credentials.json', 'grep x --file=.env', 'echo $PATH', 'cat "$HOME/x"']) {
+    const decision = await evaluateCommand({ command, workspacePath: root, profile: 'unrestricted' });
+    assert.equal(decision.allowed, false, command);
+    assert.equal(decision.reasonCode, 'SENSITIVE_PATH', command);
+  }
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('standard git log and show run with repository diff helpers disabled', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'policy-standard-log-textconv-'));
+  const marker = path.join(root, 'textconv-executed');
+  fs.writeFileSync(path.join(root, 'textconv.js'), `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed');\n`);
+  fs.writeFileSync(path.join(root, '.gitattributes'), '*.bin diff=probe\n');
+  fs.writeFileSync(path.join(root, 'fixture.bin'), 'before\n');
+  execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });
+  execFileSync('git', ['config', 'diff.probe.textconv', 'node textconv.js'], { cwd: root });
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'add', '.'], { cwd: root });
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'one'], { cwd: root });
+  for (const command of ['git log -p -1', 'git show HEAD']) {
+    const result = await runCommand(command, root, 5000, { profile: 'standard', allowedCommandPrefixes: [] });
+    assert.equal(result.exitCode, 0, result.stderr);
+  }
+  assert.equal(fs.existsSync(marker), false);
+  fs.rmSync(root, { recursive: true, force: true });
+});
