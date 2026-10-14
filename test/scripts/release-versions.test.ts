@@ -12,7 +12,7 @@ const RELEASE_VERSION = JSON.parse(
 /* Every installable artifact needs the same release version so marketplace and
    npm users receive the server build that was tested for that release. */
 test('all distributable package and plugin version sources are aligned', () => {
-  assert.equal(RELEASE_VERSION, '2.0.13');
+  assert.equal(RELEASE_VERSION, '3.0.0');
   const rootLock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
   assert.equal(rootLock.version, RELEASE_VERSION);
   assert.equal(rootLock.packages[''].version, RELEASE_VERSION);
@@ -26,17 +26,17 @@ test('all distributable package and plugin version sources are aligned', () => {
     'generate-plugin-claude.js',
     'generate-plugin-codex.js',
     'generate-plugin-opencode.js',
-    'generate-plugin-cursor.js'
+    'generate-plugin-cursor.js',
+    'generate-plugin-agensi.js'
   ]) {
     const source = fs.readFileSync(path.join(root, 'scripts', name), 'utf8');
     assert.match(source, new RegExp(`const VERSION = "${RELEASE_VERSION.replace(/\./g, '\\.')}"`));
   }
 });
 
-test('agent-facing skill documents both remote provider paths', () => {
+test('agent-facing skill documents remote provider path', () => {
   const generatedSkill = fs.readFileSync(path.join(root, 'skill', 'skill-example.md'), 'utf8');
   assert.match(generatedSkill, /openrouter-direct/);
-  assert.match(generatedSkill, /gateway-byok/);
 });
 
 /* The beta installer is a lifecycle tool, not only a first-run copier. Keep
@@ -52,8 +52,6 @@ test('packaged lifecycle exposes the complete installer surface', () => {
   assert.match(installerHelp, /uninstall --dry-run/);
 
   const installerReadme = fs.readFileSync(path.join(root, 'packages', 'installer', 'README.md'), 'utf8');
-  assert.match(installerReadme, /gateway-byok/);
-  assert.match(installerReadme, /OpenRouter key.*gateway/i);
   assert.match(installerReadme, /repair/);
   assert.match(installerReadme, /logs (?:status|prune|purge)/);
 });

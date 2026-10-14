@@ -22,7 +22,7 @@ const CLIENT_MANAGED_PATHS = {
   opencode: [...CLIENT_CONFIG_PATHS.opencode, path.join(".config", "opencode", "AGENTS.md"), path.join(".config", "opencode", "token-optimizer-server"), path.join(".config", "opencode", "skills", "token-optimizer")],
   cursor: [...CLIENT_CONFIG_PATHS.cursor, path.join(".cursor", "token-optimizer-server")],
 };
-const LEGACY_KEYS = ["LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_BYOK_MODEL", "OPENROUTER_API_KEY", "OPENROUTER_API_URL", "OPENROUTER_MODEL", "LOCAL_LLM_API_URL", "LOCAL_LLM_MODEL"];
+const LEGACY_KEYS = ["LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_BYOK_MODEL", "LLM_GATEWAY_SHARE_ANALYTICS", "OPENROUTER_API_KEY", "OPENROUTER_API_URL", "OPENROUTER_MODEL", "LOCAL_LLM_API_URL", "LOCAL_LLM_MODEL"];
 const LEGACY_SECRET_KEYS = ["LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_API_KEY"];
 
 /* Legacy inspection is intentionally bounded to the five supported client
@@ -223,12 +223,18 @@ function patchJsoncProvider(content, values) {
 }
 
 function createMigrationCredential(state, providerOptions, options, mode) {
-  if (!["gateway-token", "gateway-byok", "openrouter-direct"].includes(mode)) return { reference: null, owned: false, store: null };
+  if (mode !== "openrouter-direct") return { reference: null, owned: false, store: null };
   const kind = options.credentialStore || "native";
-  const secret = mode === "gateway-token" ? providerOptions.gatewayToken : (providerOptions.openrouterKey || providerOptions.byokKey);
-  const store = createCredentialStore(kind, { home: state.home, service: "token-optimizer", account: mode, ...(options.credentialStoreOptions || {}) });
-  const prior = store.get({ service: "token-optimizer", account: mode });
+  const secret = providerOptions.openrouterKey || providerOptions.byokKey;
+  const store = createCredentialStore(kind, { home: state.home, service: "token-optimizer", account: "openrouter-direct", ...(options.credentialStoreOptions || {}) });
+  const prior = store.get({ service: "token-optimizer", account: "openrouter-direct" });
   const reference = store.set(secret);
+  for (const account of ["gateway-token", "gateway-byok"]) {
+    try {
+      const legacyStore = createCredentialStore(kind, { home: state.home, service: "token-optimizer", account, ...(options.credentialStoreOptions || {}) });
+      legacyStore.delete({ service: "token-optimizer", account });
+    } catch (_) {}
+  }
   return { reference, owned: !prior, prior, store };
 }
 
@@ -241,15 +247,13 @@ async function authenticatedDoctor(plan, runtime, credentialRef) {
     const store = createCredentialStore(kind, { home: runtime.state.home, service: credentialRef.service, account: credentialRef.account, path: credentialRef.path, envVar: credentialRef.variable, ...(runtime.options.credentialStoreOptions || {}) });
     secret = store.get(credentialRef);
   }
-  if (["gateway-token", "gateway-byok", "openrouter-direct"].includes(mode) && !secret) throw new Error("post-migration doctor could not resolve credential reference");
+  if (mode === "openrouter-direct" && !secret) throw new Error("post-migration doctor could not resolve credential reference");
   const headers = {};
-  if (mode === "gateway-token") headers.Authorization = `Bearer ${secret}`;
-  else if (mode === "gateway-byok") headers["X-OpenRouter-Key"] = secret;
-  else if (mode === "openrouter-direct") headers.Authorization = `Bearer ${secret}`;
+  if (mode === "openrouter-direct") headers.Authorization = `Bearer ${secret}`;
   const healthProbe = runtime.options.healthProbe
     ? ((request) => runtime.options.healthProbe(request.url, { timeoutMs: request.timeoutMs, mode, headers, credentialRef }))
     : ((request) => defaultHealthProbe(request));
-  const performHealthProbe = mode !== "local" || Boolean(runtime.options.healthProbe);
+  const performHealthProbe = mode === "openrouter-direct" || (mode === "local" && Boolean(runtime.options.healthProbe));
   const inspect = runtime.options.inspectInstallation || inspectInstallation;
   const report = await inspect({ home: runtime.state.home, provider: mode, credentialRef, providerUrl: plan.effectiveProvider.apiUrl, performHealthProbe, healthProbe });
   const blocking = new Set(["PROVIDER_UNREACHABLE", "PROVIDER_AUTH_FAILED", "CREDENTIAL_MISSING", "CREDENTIAL_INACCESSIBLE"]);
@@ -258,19 +262,9 @@ async function authenticatedDoctor(plan, runtime, credentialRef) {
   return report;
 }
 
-async function authenticatedHealthProbe(url, headers, timeoutMs = 2500) {
-  const target = `${String(url).replace(/\/+$/, "").replace(/\/v1$/, "")}/health`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try { const response = await fetch(target, { headers, signal: controller.signal }); return { ok: response.ok }; }
-  finally { clearTimeout(timer); }
-}
-
 function providerOptionsFromState(state, choices, mode) {
   const env = state.env;
   const credentialRef = choices.credentialRef || env.TOKEN_OPTIMIZER_CREDENTIAL_REF;
-  if (mode === "gateway-token") return { provider: mode, credentialRef, gatewayUrl: choices.gatewayUrl || env.LLM_GATEWAY_URL, gatewayToken: choices.gatewayToken || env.LLM_GATEWAY_TOKEN };
-  if (mode === "gateway-byok") return { provider: mode, credentialRef, gatewayUrl: choices.gatewayUrl || env.LLM_GATEWAY_URL, byokKey: choices.byokKey || env.OPENROUTER_BYOK_KEY || env.OPENROUTER_API_KEY, byokModel: choices.byokModel || env.OPENROUTER_BYOK_MODEL };
   if (mode === "openrouter-direct") return { provider: mode, credentialRef, openrouterUrl: choices.openrouterUrl || env.OPENROUTER_API_URL, openrouterKey: choices.openrouterKey || choices.byokKey || env.OPENROUTER_API_KEY || env.OPENROUTER_BYOK_KEY, byokModel: choices.byokModel || env.OPENROUTER_MODEL || env.OPENROUTER_BYOK_MODEL };
   if (mode === "local") return { provider: mode, localApiUrl: choices.localApiUrl || env.LOCAL_LLM_API_URL, localModel: choices.localModel || env.LOCAL_LLM_MODEL };
   return { provider: "skip" };
@@ -302,6 +296,7 @@ function restoreBackup(backup) {
 }
 
 function cleanupLegacy(state) {
+  const keysToStrip = ["LLM_GATEWAY_URL", "LLM_GATEWAY_TOKEN", "OPENROUTER_BYOK_KEY", "OPENROUTER_BYOK_MODEL", "LLM_GATEWAY_SHARE_ANALYTICS"];
   for (const file of state.files) {
     const text = fs.readFileSync(file, "utf8");
     if (/\.toml$/i.test(file)) {
@@ -311,14 +306,22 @@ function cleanupLegacy(state) {
       const lines = text.split(/\r?\n/).filter((line) => {
         const section = line.match(/^\s*\[([^\]]+)]/);
         if (section) managed = section[1].replace(/["']/g, "") === "mcp_servers.token_optimizer" || section[1].replace(/["']/g, "") === "mcp_servers.token_optimizer.env";
-        return !(managed && LEGACY_SECRET_KEYS.some((key) => new RegExp(`^\\s*(?:["']${key}["']|${key})\\s*=`).test(line)));
+        return !(managed && keysToStrip.some((key) => new RegExp(`^\\s*(?:["']${key}["']|${key})\\s*=`).test(line)));
       });
       fs.writeFileSync(file, lines.join(newline) + (trailing && lines.at(-1) !== "" ? newline : ""));
       continue;
     }
-    const scoped = patchNamedObject(text, ["token_optimizer", "token-optimizer"], (object) => removeJsonProperties(object, LEGACY_SECRET_KEYS));
+    const scoped = patchNamedObject(text, ["token_optimizer", "token-optimizer"], (object) => removeJsonProperties(object, keysToStrip));
     const isClaudeSettings = file === path.join(state.home, ".claude", "settings.json");
-    fs.writeFileSync(file, scoped.changed || !isClaudeSettings ? scoped.content : patchTopLevelNamedObject(text, "env", (object) => removeJsonProperties(object, LEGACY_SECRET_KEYS)).content);
+    fs.writeFileSync(file, scoped.changed || !isClaudeSettings ? scoped.content : patchTopLevelNamedObject(text, "env", (object) => removeJsonProperties(object, keysToStrip)).content);
+  }
+  for (const kind of ["native", "config", "env"]) {
+    for (const account of ["gateway-token", "gateway-byok"]) {
+      try {
+        const store = createCredentialStore(kind, { home: state.home, service: "token-optimizer", account });
+        store.delete({ service: "token-optimizer", account });
+      } catch (_) {}
+    }
   }
 }
 

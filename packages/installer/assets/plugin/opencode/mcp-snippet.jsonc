@@ -6,8 +6,8 @@
       "${HOME}/.config/opencode/token-optimizer-server/start.js"
     ],
     "environment": {
-      "LLM_GATEWAY_URL": "{env:LLM_GATEWAY_URL}",
-      "LLM_GATEWAY_TOKEN": "{env:LLM_GATEWAY_TOKEN}"
+      "OPENROUTER_API_KEY": "{env:OPENROUTER_API_KEY}",
+      "OPENROUTER_MODEL": "{env:OPENROUTER_MODEL}"
     },
     "enabled": true
   }

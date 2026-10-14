@@ -4,7 +4,6 @@
       "command": "./server/start.sh",
       "args": [],
       "env": {
-        "LLM_GATEWAY_URL": "https://llm-proxy.lnf.gr/v1",
         "LOCAL_LLM_API_URL": "http://localhost:8080/v1",
         "LOCAL_LLM_MODEL": "local-model"
       }

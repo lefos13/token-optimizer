@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { buildStartJs } = require("./launcher-template");
+const { EXTRA_SKILLS, PASSTHROUGH_ENV, readSkillParts } = require("./skill-sources");
 
 /* Cursor plugin flow.
    Generates a portable token_optimizer bundle under plugin/cursor/ for Cursor
@@ -18,6 +19,7 @@ const { buildStartJs } = require("./launcher-template");
      plugin/cursor/server/package.json         (single runtime dep to install)
      plugin/cursor/server/start.sh             (self-locating launcher)
      plugin/cursor/rules/token-optimizer.mdc      (alwaysApply:true, project-scoped)
+     plugin/cursor/rules/token-optimizer-setup.mdc (agent-requested setup guide)
      plugin/cursor/mcp-snippet.json            (block to merge into mcp.json's "mcpServers")
      plugin/cursor/README.md
    This output is gitignored (see plugin/cursor/ in .gitignore) — like
@@ -58,7 +60,7 @@ try {
   fs.mkdirSync(rulesDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "2.0.13";
+  const VERSION = "3.0.0";
 
   /* Read the lockfile-pinned SDK version so generated bundles are identical
      after a clean npm ci, regardless of a maintainer's local node_modules. */
@@ -107,7 +109,7 @@ exec node "$ROOT/start.js"
   fs.writeFileSync(startJsPath, buildStartJs());
   fs.chmodSync(startJsPath, 0o755);
 
-  /* Same directive content as scripts/manage-gateway-config.js's
+  /* Same directive content as scripts/manage-defaults.js's
      DIRECTIVE_BLOCK, authored directly here since Cursor's rule format
      (.mdc frontmatter) differs from the Markdown-heading blocks written into
      CLAUDE.md/AGENTS.md/GEMINI.md. Keep the bullet list wording identical if
@@ -128,6 +130,14 @@ Skip only when the user explicitly says not to use it.
 `;
   fs.writeFileSync(path.join(rulesDir, "token-optimizer.mdc"), ruleMdc);
 
+  /* Cursor has no skills, so each extra skill becomes an agent-requested rule
+     (no globs, alwaysApply false): Cursor attaches it when its description
+     matches the request, e.g. "set up token optimizer". */
+  for (const skill of EXTRA_SKILLS) {
+    const { description, body } = readSkillParts(skill.source);
+    fs.writeFileSync(path.join(rulesDir, `${skill.name}.mdc`), `---\ndescription: ${description}\nalwaysApply: false\n---\n\n${body}`);
+  }
+
   const mcpSnippet = {
     mcpServers: {
       token_optimizer: {
@@ -138,8 +148,7 @@ Skip only when the user explicitly says not to use it.
            depending on which OS generated the file. Always forward-slash join instead. */
         args: [`${installedServerDir}/start.js`],
         env: {
-          LLM_GATEWAY_URL: "${env:LLM_GATEWAY_URL}",
-          LLM_GATEWAY_TOKEN: "${env:LLM_GATEWAY_TOKEN}",
+          ...Object.fromEntries(PASSTHROUGH_ENV.map((name) => [name, `\${env:${name}}`])),
         },
       },
     },
@@ -165,6 +174,8 @@ this bundle is installed by copying files and running the repo config manager.
   (\`start.sh\`) and a minimal \`package.json\`.
 - \`rules/token-optimizer.mdc\` — \`alwaysApply: true\` rule instructing the agent
   to use the \`token_optimizer\` tools by default.
+- \`rules/token-optimizer-setup.mdc\` — agent-requested setup guide (install,
+  verify, repair), rendered from \`skill/setup/SKILL.md\`.
 - \`mcp-snippet.json\` — the block the config manager writes into your
   \`mcp.json\`'s \`"mcpServers"\` object, also useful for manual installs.
 
@@ -177,22 +188,18 @@ this bundle is installed by copying files and running the repo config manager.
    cp -R plugin/cursor/server/* ~/.cursor/token-optimizer-server/
    \`\`\`
 
-2. Provide your gateway token from a repo clone:
+2. Merge \`mcp-snippet.json\` into \`~/.cursor/mcp.json\` (global, applies to
+   every project) or \`.cursor/mcp.json\` in a specific project. Export
+   \`OPENROUTER_API_KEY\` (and optionally \`OPENROUTER_MODEL\`) before launching
+   Cursor, or leave it unset to use a local OpenAI-compatible endpoint at
+   \`http://localhost:8080/v1\`. The npm installer
+   (\`npx --yes @softawarest/token-optimizer-installer\`) does all of this for you.
 
-   \`\`\`bash
-   npm run gateway:config -- setup
-   \`\`\`
-
-   This writes the \`token_optimizer\` MCP block and gateway environment into
-   \`~/.cursor/mcp.json\`. If you are not using the config manager, merge
-   \`mcp-snippet.json\` manually into \`~/.cursor/mcp.json\` (global, applies to
-   every project) or \`.cursor/mcp.json\` in a specific project.
-
-3. Copy the rule into each project where you want it enforced:
+3. Copy the rules into each project where you want them:
 
    \`\`\`bash
    mkdir -p .cursor/rules
-   cp plugin/cursor/rules/token-optimizer.mdc .cursor/rules/token-optimizer.mdc
+   cp plugin/cursor/rules/*.mdc .cursor/rules/
    \`\`\`
 
    **Limitation:** Cursor has no filesystem-writable *global* rule — only
@@ -208,8 +215,8 @@ this bundle is installed by copying files and running the repo config manager.
 first run only.
 
 To pick up changes, re-run \`npm run build:plugin:cursor\`, re-copy the
-\`server/\` contents, re-run \`npm run gateway:config -- setup\` if the MCP
-config shape changed, and re-copy \`rules/token-optimizer.mdc\` into each
+\`server/\` contents, re-merge \`mcp-snippet.json\` if the MCP
+config shape changed, and re-copy \`rules/*.mdc\` into each
 project using it.
 `;
   fs.writeFileSync(path.join(pluginDir, "README.md"), readme);

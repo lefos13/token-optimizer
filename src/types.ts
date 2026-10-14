@@ -102,12 +102,12 @@ export interface RunScoutArgs {
   contextLines?: number;
 }
 
-export type ProviderMode = 'local' | 'gateway-token' | 'gateway-byok' | 'openrouter-direct';
+export type ProviderMode = 'local' | 'openrouter-direct';
 export type ExecutionProfile = 'safe' | 'standard' | 'unrestricted';
 
 export interface TokenOptimizerConfig {
   provider?: Partial<{
-    mode: ProviderMode;
+    mode: ProviderMode | 'gateway-token' | 'gateway-byok';
     apiUrl: string;
     model: string;
     taskRouting: Partial<Record<LLMResponseTask, string>>;
@@ -134,7 +134,7 @@ export interface ConfigLayers {
 }
 
 export interface EffectiveConfig {
-  provider: { mode: ProviderMode; apiUrl: string; model: string; taskRouting?: Partial<Record<LLMResponseTask, string>>; credentialEnv?: string; credential?: string; byokCredential?: string; byokModel?: string };
+  provider: { mode: ProviderMode; apiUrl: string; model: string; taskRouting?: Partial<Record<LLMResponseTask, string>>; credentialEnv?: string; credential?: string };
   execution: { profile: ExecutionProfile; profileSource?: 'user' | 'project' | 'tool' | 'implicit-default'; allowedCommandPrefixes: string[]; autoDetectedCommands?: string[] };
   logs: { retentionDays: number; maxDiskMb: number; storageMode: 'raw-local' | 'redacted-local' };
   redaction: { rules: Array<{ pattern: string; flags?: string; category: string; replacement?: string }> };

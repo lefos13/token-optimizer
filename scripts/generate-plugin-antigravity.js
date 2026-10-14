@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { buildStartJs } = require("./launcher-template");
+const { copyExtraSkills } = require("./skill-sources");
 
 /* Antigravity plugin flow.
    Generates a complete, installable, portable Antigravity plugin under
@@ -88,7 +89,7 @@ try {
      install (Antigravity does not document version-gated update pulls the way
      Claude Code's marketplace install does, but keeping this accurate still
      matters for users diffing or re-staging the plugin folder). */
-  const VERSION = "2.0.13";
+  const VERSION = "3.0.0";
 
   /* Read the lockfile-pinned SDK version so generated bundles are identical
      after a clean npm ci, regardless of a maintainer's local node_modules. */
@@ -120,15 +121,15 @@ try {
      directory; self-contained plugin bundles only make sense if the host
      resolves bundled paths relative to the staged plugin root.
 
-     The gateway URL is baked as the default. The per-person LLM_GATEWAY_TOKEN
-     is written into the staged/global mcp_config.json by `npm run gateway:config`. */
+     Local endpoint defaults are baked in. The npm installer writes the
+     per-person provider settings (OpenRouter key or local endpoint) into the
+     global mcp_config.json. */
   const mcpConfigJson = {
     mcpServers: {
       token_optimizer: {
         command: "./server/start.sh",
         args: [],
         env: {
-          LLM_GATEWAY_URL: "https://llm-proxy.lnf.gr/v1",
           LOCAL_LLM_API_URL: "http://localhost:8080/v1",
           LOCAL_LLM_MODEL: "local-model",
         },
@@ -196,6 +197,7 @@ exec node "$ROOT/server/start.js"
     process.exit(1);
   }
   fs.copyFileSync(sourceSkill, destSkill);
+  copyExtraSkills(path.dirname(skillsDir));
 
   const readme = `# Token Optimizer plugin (Antigravity)
 
@@ -214,6 +216,7 @@ flooding chat context with raw logs.
 - \`mcp_config.json\` — registers the \`token_optimizer\` stdio server (tools exposed as \`mcp__token_optimizer__*\`), using the same \`mcpServers\` shape as Antigravity's global \`~/.gemini/config/mcp_config.json\`.
 - \`server/\` — the compiled MCP server plus a self-locating launcher (\`start.sh\`) and a minimal \`package.json\`.
 - \`skills/${SKILL_NAME}/SKILL.md\` — usage guidance, copied from \`skill/skill-example.md\`.
+- \`skills/token-optimizer-setup/SKILL.md\` — guided install/verify/repair, copied from \`skill/setup/SKILL.md\`.
 
 ## How the server runs (portable)
 
@@ -235,13 +238,13 @@ is also model-invoked automatically based on its description.
 
 ## LLM configuration
 
-**Centralized gateway (primary):** The plugin is preconfigured with the gateway URL (\`https://llm-proxy.lnf.gr/v1\`). Provide your per-person proxy token: from a repo clone run \`npm run gateway:config -- setup\` and paste the token (it is written to every client on your machine), or set \`LLM_GATEWAY_TOKEN\` manually in this client's config. Models are chosen centrally on the gateway; no client-side model configuration is needed.
+Choose one provider. The npm installer (\`npx --yes @softawarest/token-optimizer-installer\`) writes this configuration for you.
 
-> **JSON mode requirement:** All requests send \`response_format: { type: "json_object" }\`. The gateway (or local fallback model, if configured) is responsible for returning JSON-mode-compatible responses; end users do not choose or configure a model.
+**OpenRouter (your own key):** Set \`OPENROUTER_API_KEY\`. Optionally set \`OPENROUTER_MODEL\` to one OpenRouter \`provider/model\` (default \`openai/gpt-4o-mini\`). Prompts are redacted before they leave your machine.
 
-**Token Optimizer fallback:** The server uses a local OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`.
+**Local LLM:** Any OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`. If OpenRouter is unreachable, the server retries once against this local endpoint.
 
-Use \`npm run gateway:config\` to manage your gateway token across all clients on your machine.
+> **JSON mode requirement:** All requests send \`response_format: { type: "json_object" }\`. The selected model must return JSON-mode-compatible responses.
 
 ## Install
 

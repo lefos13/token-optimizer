@@ -1,9 +1,6 @@
 node_modules/
 dist/
 .test-build/
-gateway/dist/
-# Real gateway secrets staged for deploy-pm2.sh — never commit actual keys/tokens.
-gateway/deploy/gateway.env
 .codex-local-test-runs/
 # Antigravity plugin output is generated; not tracked.
 plugin/antigravity/
@@ -22,3 +19,6 @@ release-artifacts/
 # Local npm pack outputs are disposable verification artifacts.
 *.tgz
 .playwright-mcp/*
+
+# Agensi marketplace skill zip is generated; upload it by hand from the creator dashboard.
+plugin/agensi/

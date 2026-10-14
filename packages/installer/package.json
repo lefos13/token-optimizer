@@ -1,7 +1,7 @@
 {
   "name": "@softawarest/token-optimizer-installer",
-  "version": "2.0.13",
-  "description": "One-command installer for the Token Optimizer MCP server, skills, plugins, gateway config, and default-on instructions.",
+  "version": "3.0.0",
+  "description": "One-command installer for the Token Optimizer MCP server, skills, plugins, and default-on instructions.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lefos13/token-optimizer.git"

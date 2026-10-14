@@ -18,11 +18,13 @@ function writeFixtureAssets(root: string): void {
     'plugin/opencode/server/index.js': 'console.log("server")\n',
     'plugin/opencode/server/package.json': '{"name":"token-optimizer-server"}\n',
     'plugin/opencode/skills/token-optimizer/SKILL.md': '# Token Optimizer\n',
+    'plugin/opencode/skills/token-optimizer-setup/SKILL.md': '# Token Optimizer setup\n',
     'plugin/cursor/server/start.sh': '#!/usr/bin/env bash\n',
     'plugin/cursor/server/start.js': '#!/usr/bin/env node\n',
     'plugin/cursor/server/index.js': 'console.log("server")\n',
     'plugin/cursor/server/package.json': '{"name":"token-optimizer-server"}\n',
     'plugin/cursor/rules/token-optimizer.mdc': '---\nalwaysApply: true\n---\n',
+    'plugin/cursor/rules/token-optimizer-setup.mdc': '---\nalwaysApply: false\n---\n',
     'plugin/antigravity/plugin.json': '{"name":"token-optimizer"}\n',
     'plugin/antigravity/mcp_config.json': '{"mcpServers":{}}\n',
     'plugin/antigravity/server/start.js': '#!/usr/bin/env node\n',
@@ -33,6 +35,7 @@ function writeFixtureAssets(root: string): void {
     'plugin/codex/server/start.sh': '#!/usr/bin/env bash\n',
     'plugin/codex/server/start.js': '#!/usr/bin/env node\n',
     'plugin/codex/skills/token-optimizer/SKILL.md': '# Token Optimizer\n',
+    'plugin/codex/skills/token-optimizer-setup/SKILL.md': '# Token Optimizer setup\n',
     'plugin/codex/README.md': '# Codex\n',
     '.claude-plugin/marketplace.json': '{"name":"token-optimizer-marketplace"}\n',
     '.agents/plugins/marketplace.json': '{"name":"Softaware-marketplace"}\n',
@@ -63,21 +66,22 @@ test('installOpenCode copies server and skill, replaces legacy MCP config, and w
   installer.installOpenCode({
     home,
     assetsRoot,
-    gatewayToken: 'person-token',
+    provider: 'openrouter-direct',
+    openrouterKey: 'person-token',
     credentialStore: 'config',
-    gatewayUrl: 'https://llm-proxy.lnf.gr/v1',
     launchctlStatePath,
   });
 
   assert.ok(fs.existsSync(path.join(home, '.config', 'opencode', 'token-optimizer-server', 'start.sh')));
   assert.ok(fs.existsSync(path.join(home, '.config', 'opencode', 'skills', 'token-optimizer', 'SKILL.md')));
+  assert.ok(fs.existsSync(path.join(home, '.config', 'opencode', 'skills', 'token-optimizer-setup', 'SKILL.md')));
 
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   assert.ok(config.mcp.token_optimizer);
   assert.ok(!config.mcp.local_tester);
   assert.equal(config.mcp.codegraph.command[0], 'codegraph');
   assert.deepEqual(config.mcp.token_optimizer.command, ['node', path.join(home, '.config', 'opencode', 'token-optimizer-server', 'start.js')]);
-  assert.equal(config.mcp.token_optimizer.environment.LLM_GATEWAY_TOKEN, 'person-token');
+  assert.equal(config.mcp.token_optimizer.environment.OPENROUTER_API_KEY, 'person-token');
 
   const agents = fs.readFileSync(path.join(home, '.config', 'opencode', 'AGENTS.md'), 'utf8');
   assert.ok(agents.includes('TOKEN_OPTIMIZER_START'));
@@ -166,26 +170,26 @@ test('installer launchctl state clears stale BYOK key and model when the provide
   const home = tmpDir('to-installer-home-');
   const launchctlStatePath = path.join(home, 'launchctl.json');
 
-  installer.applyGatewayConfig({
+  installer.applyProviderConfig({
     home,
     clients: ['opencode'],
-    provider: 'gateway-byok',
-    byokKey: 'sk-or-v1-mykey',
+    provider: 'openrouter-direct',
+    openrouterKey: 'sk-or-v1-mykey',
     byokModel: 'openai/gpt-4o-mini',
     launchctlStatePath,
   });
-  installer.applyGatewayConfig({
+  installer.applyProviderConfig({
     home,
     clients: ['opencode'],
-    provider: 'gateway',
-    gatewayToken: 'person-token',
+    provider: 'local',
+    localApiUrl: 'http://localhost:8080/v1',
     launchctlStatePath,
   });
 
   const state = JSON.parse(fs.readFileSync(launchctlStatePath, 'utf8'));
-  assert.equal(state.LLM_GATEWAY_TOKEN, 'person-token');
-  assert.ok(!('OPENROUTER_BYOK_KEY' in state));
-  assert.ok(!('OPENROUTER_BYOK_MODEL' in state));
+  assert.equal(state.LOCAL_LLM_API_URL, 'http://localhost:8080/v1');
+  assert.ok(!('OPENROUTER_API_KEY' in state));
+  assert.ok(!('OPENROUTER_MODEL' in state));
 });
 
 test('an alternate --home never mutates the caller GUI session', () => {
@@ -207,18 +211,18 @@ test('installer writes a persistent RunAtLoad LaunchAgent so GUI env survives re
   const home = tmpDir('to-installer-home-');
   const launchctlStatePath = path.join(home, 'launchctl.json');
 
-  installer.applyGatewayConfig({
+  installer.applyProviderConfig({
     home,
     clients: ['opencode'],
-    provider: 'gateway',
-    gatewayToken: 'person-token',
+    provider: 'openrouter-direct',
+    openrouterKey: 'person-token',
     launchctlStatePath,
   });
 
   const plist = fs.readFileSync(launchAgentPath(home), 'utf8');
   assert.ok(plist.includes('<key>RunAtLoad</key>'));
   assert.ok(plist.includes('<true/>'));
-  assert.ok(plist.includes('launchctl setenv LLM_GATEWAY_TOKEN'));
+  assert.ok(plist.includes('launchctl setenv OPENROUTER_API_KEY'));
   assert.ok(plist.includes('person-token'));
 });
 
@@ -226,16 +230,16 @@ test('provider switch rewrites the LaunchAgent to only the current provider valu
   const home = tmpDir('to-installer-home-');
   const launchctlStatePath = path.join(home, 'launchctl.json');
 
-  installer.applyGatewayConfig({
-    home, clients: ['opencode'], provider: 'gateway-byok', byokKey: 'sk-or-v1-mykey', byokModel: 'openai/gpt-4o-mini', launchctlStatePath,
+  installer.applyProviderConfig({
+    home, clients: ['opencode'], provider: 'openrouter-direct', openrouterKey: 'sk-or-v1-mykey', byokModel: 'openai/gpt-4o-mini', launchctlStatePath,
   });
-  installer.applyGatewayConfig({
-    home, clients: ['opencode'], provider: 'gateway', gatewayToken: 'person-token', launchctlStatePath,
+  installer.applyProviderConfig({
+    home, clients: ['opencode'], provider: 'local', localApiUrl: 'http://localhost:8080/v1', launchctlStatePath,
   });
 
   const plist = fs.readFileSync(launchAgentPath(home), 'utf8');
-  assert.ok(plist.includes('LLM_GATEWAY_TOKEN'));
-  assert.ok(!plist.includes('OPENROUTER_BYOK_KEY'));
+  assert.ok(plist.includes('LOCAL_LLM_API_URL'));
+  assert.ok(!plist.includes('OPENROUTER_API_KEY'));
   assert.ok(!plist.includes('sk-or-v1-mykey'));
 });
 
@@ -243,12 +247,12 @@ test('a provider with no managed values removes any stale LaunchAgent', () => {
   const home = tmpDir('to-installer-home-');
   const launchctlStatePath = path.join(home, 'launchctl.json');
 
-  installer.applyGatewayConfig({
-    home, clients: ['opencode'], provider: 'gateway', gatewayToken: 'person-token', launchctlStatePath,
+  installer.applyProviderConfig({
+    home, clients: ['opencode'], provider: 'openrouter-direct', openrouterKey: 'person-token', launchctlStatePath,
   });
   assert.ok(fs.existsSync(launchAgentPath(home)));
 
-  installer.applyGatewayConfig({ home, clients: ['opencode'], provider: 'skip', launchctlStatePath });
+  installer.applyProviderConfig({ home, clients: ['opencode'], provider: 'skip', launchctlStatePath });
   assert.ok(!fs.existsSync(launchAgentPath(home)), 'stale LaunchAgent removed when no provider values remain');
 });
 
@@ -256,7 +260,7 @@ test('LaunchAgent plist shell-escapes values so special characters cannot break 
   const home = tmpDir('to-installer-home-');
   const launchctlStatePath = path.join(home, 'launchctl.json');
 
-  installer.applyGatewayConfig({
+  installer.applyProviderConfig({
     home,
     clients: ['opencode'],
     provider: 'local',
@@ -281,48 +285,33 @@ test('installCursor writes global MCP config and optional project rule', () => {
   installer.installCursor({
     home,
     assetsRoot,
-    gatewayToken: 'person-token',
-    gatewayUrl: 'https://llm-proxy.lnf.gr/v1',
+    provider: 'openrouter-direct',
+    openrouterKey: 'person-token',
     cursorProjects: [project],
     skipLaunchctl: true,
   });
 
   assert.ok(fs.existsSync(path.join(home, '.cursor', 'token-optimizer-server', 'start.js')));
   const config = JSON.parse(fs.readFileSync(path.join(home, '.cursor', 'mcp.json'), 'utf8'));
-  assert.equal(config.mcpServers.token_optimizer.env.LLM_GATEWAY_TOKEN, 'person-token');
+  assert.equal(config.mcpServers.token_optimizer.env.OPENROUTER_API_KEY, 'person-token');
   /* Windows-safe launch: node + start.js, never bash. */
   assert.equal(config.mcpServers.token_optimizer.command, 'node');
   assert.deepEqual(config.mcpServers.token_optimizer.args, [path.join(home, '.cursor', 'token-optimizer-server', 'start.js')]);
   assert.ok(fs.existsSync(path.join(project, '.cursor', 'rules', 'token-optimizer.mdc')));
+  assert.ok(fs.existsSync(path.join(project, '.cursor', 'rules', 'token-optimizer-setup.mdc')));
 });
 
-test('buildProviderValues: gateway needs a token, byok needs ONLY a key (no token), local and skip need neither', () => {
-  assert.throws(() => installer.buildProviderValues({ provider: 'gateway' }), /gatewayToken is required/);
-  assert.throws(() => installer.buildProviderValues({ provider: 'gateway-byok' }), /byokKey is required/);
-
-  const gateway = installer.buildProviderValues({ provider: 'gateway', gatewayToken: 'tok' });
-  assert.equal(gateway.LLM_GATEWAY_TOKEN, 'tok');
-  assert.equal(gateway.LLM_GATEWAY_URL, installer.DEFAULT_GATEWAY_URL);
-  assert.equal(gateway.OPENROUTER_BYOK_KEY, '');
-
-  /* byok needs no gatewayToken at all: the gateway does not authenticate a
-     BYOK-only caller, so writing one would be misleading. */
-  const byok = installer.buildProviderValues({
-    provider: 'gateway-byok',
-    byokKey: 'sk-or-key',
-    byokModel: ' openai/gpt-4o-mini ',
-  });
-  assert.equal(byok.LLM_GATEWAY_TOKEN, '');
-  assert.equal(byok.LLM_GATEWAY_URL, installer.DEFAULT_GATEWAY_URL);
-  assert.equal(byok.OPENROUTER_BYOK_KEY, 'sk-or-key');
-  assert.equal(byok.OPENROUTER_BYOK_MODEL, 'openai/gpt-4o-mini');
+test('buildProviderValues: rejects gateway, openrouter needs a key, local and skip need neither', () => {
+  assert.throws(() => installer.buildProviderValues({ provider: 'gateway' }), /Gateway support was removed/);
+  assert.throws(() => installer.buildProviderValues({ provider: 'gateway-byok' }), /Gateway support was removed/);
+  assert.throws(() => installer.buildProviderValues({ provider: 'openrouter-direct' }), /openrouterKey is required/);
 
   const direct = installer.buildProviderValues({ provider: 'openrouter-direct', byokKey: 'sk-or-direct', byokModel: 'openai/gpt-4.1-mini', openrouterUrl: 'https://openrouter.example/v1' });
   assert.equal(direct.OPENROUTER_API_KEY, 'sk-or-direct');
   assert.equal(direct.OPENROUTER_MODEL, 'openai/gpt-4.1-mini');
   assert.equal(direct.OPENROUTER_API_URL, 'https://openrouter.example/v1');
   assert.equal(direct.LLM_GATEWAY_URL, '');
-  assert.equal(direct.OPENROUTER_BYOK_MODEL, '');
+  assert.equal(direct.LLM_GATEWAY_TOKEN, '');
 
   const local = installer.buildProviderValues({ provider: 'local' });
   assert.deepEqual(Object.keys(local).sort(), [...installer.MANAGED_ENV_KEYS].sort());
@@ -336,8 +325,7 @@ test('buildProviderValues: gateway needs a token, byok needs ONLY a key (no toke
   const skip = installer.buildProviderValues({ provider: 'skip' });
   assert.equal(skip.TOKEN_OPTIMIZER_PROVIDER_MODE, '');
 
-  /* No explicit provider: inferred from whichever fields were supplied. */
-  assert.equal(installer.buildProviderValues({ gatewayToken: 'tok' }).LLM_GATEWAY_TOKEN, 'tok');
+  assert.throws(() => installer.buildProviderValues({ gatewayToken: 'tok' }), /Gateway support was removed/);
   assert.ok(Object.values(installer.buildProviderValues({})).every((v: unknown) => v === ''));
 });
 
@@ -353,10 +341,10 @@ test('native credential preparation writes only a reference across all five clie
   const options = {
     home,
     clients: ['all'],
-    provider: 'gateway-token',
-    gatewayToken: secret,
+    provider: 'openrouter-direct',
+    openrouterKey: secret,
     credentialStore: 'native',
-    credentialStoreOptions: { platform: 'darwin', available: true, account: 'gateway-token', execFileSync: (_bin: string, args: string[], processOptions: any) => { calls.push({ args, processOptions }); return ''; } },
+    credentialStoreOptions: { platform: 'darwin', available: true, account: 'openrouter-direct', execFileSync: (_bin: string, args: string[], processOptions: any) => { calls.push({ args, processOptions }); return ''; } },
     skipLaunchctl: true,
     skipClientCommands: true,
     assetsRoot,
@@ -379,7 +367,7 @@ test('native credential preparation writes only a reference across all five clie
 });
 
 test('native credential execution fails closed and plaintext requires an explicit store', () => {
-  const result = installer.applyChangePlan(installer.planInstallation({ provider: 'gateway-token', gatewayToken: 'fixture-credential-value', credentialStore: 'native', credentialStoreOptions: { platform: 'unknown' }, clients: ['opencode'] }));
+  const result = installer.applyChangePlan(installer.planInstallation({ provider: 'openrouter-direct', openrouterKey: 'fixture-credential-value', credentialStore: 'native', credentialStoreOptions: { platform: 'unknown' }, clients: ['opencode'] }));
   assert.match(result.error.message, /choose env or config explicitly/i);
   assert.equal(installer.prepareCredentialOptions({ provider: 'local' }).credentialRef, undefined);
 });
@@ -387,9 +375,9 @@ test('native credential execution fails closed and plaintext requires an explici
 test('a later install failure restores the credential that existed before the transaction', () => {
   const home = tmpDir('to-credential-rollback-');
   const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
-  const store = createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' });
+  const store = createCredentialStore('config', { home, service: 'token-optimizer', account: 'openrouter-direct' });
   store.set('prior-value');
-  const result = installer.applyChangePlan(installer.planInstallation({ home, clients: ['opencode'], assetsRoot: tmpDir('to-empty-assets-'), provider: 'gateway-token', gatewayToken: 'replacement-value', credentialStore: 'config', skipLaunchctl: true }));
+  const result = installer.applyChangePlan(installer.planInstallation({ home, clients: ['opencode'], assetsRoot: tmpDir('to-empty-assets-'), provider: 'openrouter-direct', openrouterKey: 'replacement-value', credentialStore: 'config', skipLaunchctl: true }));
   assert.ok(result.error);
   assert.equal(store.get(), 'prior-value');
 });
@@ -397,7 +385,7 @@ test('a later install failure restores the credential that existed before the tr
 test('provider-only config restores the prior credential when a client write fails', () => {
   const home = tmpDir('to-config-credential-rollback-');
   const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
-  const store = createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' });
+  const store = createCredentialStore('config', { home, service: 'token-optimizer', account: 'openrouter-direct' });
   store.set('prior-value');
   const target = path.join(home, '.config', 'opencode', 'opencode.jsonc');
   const mutableFs = require('node:fs');
@@ -407,7 +395,7 @@ test('provider-only config restores the prior credential when a client write fai
     return originalWrite(file, ...args);
   };
   try {
-    assert.throws(() => installer.applyProviderConfiguration({ home, clients: ['opencode'], provider: 'gateway-token', gatewayToken: 'replacement-value', credentialStore: 'config', skipLaunchctl: true }), /simulated client config failure/);
+    assert.throws(() => installer.applyProviderConfiguration({ home, clients: ['opencode'], provider: 'openrouter-direct', openrouterKey: 'replacement-value', credentialStore: 'config', skipLaunchctl: true }), /simulated client config failure/);
   } finally {
     mutableFs.writeFileSync = originalWrite;
   }
@@ -418,7 +406,7 @@ test('install manifest owns a newly created credential and uninstall removes it'
   const home = tmpDir('to-credential-uninstall-');
   const assetsRoot = tmpDir('to-credential-assets-');
   writeFixtureAssets(assetsRoot);
-  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'gateway-token', gatewayToken: 'installed-value', credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false });
+  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'openrouter-direct', openrouterKey: 'installed-value', credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false });
   const { readManifest } = require('../../../packages/installer/lib/manifest.js');
   const lifecycle = require('../../../packages/installer/lib/uninstall.js');
   const manifest = readManifest(home);
@@ -426,7 +414,7 @@ test('install manifest owns a newly created credential and uninstall removes it'
   const plan = lifecycle.planUninstall(manifest, lifecycle.currentStateFromManifest(manifest));
   lifecycle.applyLifecyclePlan(plan);
   const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
-  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' }).get(), null);
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'openrouter-direct' }).get(), null);
 });
 
 test('pre-existing credentials are restored and never claimed by the manifest', () => {
@@ -434,9 +422,9 @@ test('pre-existing credentials are restored and never claimed by the manifest', 
   const assetsRoot = tmpDir('to-existing-assets-');
   writeFixtureAssets(assetsRoot);
   const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
-  const store = createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' });
+  const store = createCredentialStore('config', { home, service: 'token-optimizer', account: 'openrouter-direct' });
   store.set('user-owned-value');
-  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'gateway-token', gatewayToken: 'temporary-value', credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false });
+  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'openrouter-direct', openrouterKey: 'temporary-value', credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false });
   const manifest = require('../../../packages/installer/lib/manifest.js').readManifest(home);
   assert.deepEqual(manifest.credentials, []);
 });
@@ -445,26 +433,25 @@ test('provider switch deletes the superseded owned credential and uninstall leav
   const home = tmpDir('to-provider-switch-owned-');
   const assetsRoot = tmpDir('to-provider-switch-assets-');
   writeFixtureAssets(assetsRoot);
-  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'gateway-token', gatewayToken: 'gateway-value', credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false });
+  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'openrouter-direct', openrouterKey: 'openrouter-value-1', credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false });
   const manifestApi = require('../../../packages/installer/lib/manifest.js');
   const before = manifestApi.readManifest(home);
-  const switched = installer.applyProviderConfiguration({ home, clients: ['opencode'], provider: 'gateway-byok', byokKey: 'byok-value', credentialStore: 'config', skipLaunchctl: true });
+  const switched = installer.applyProviderConfiguration({ home, clients: ['opencode'], provider: 'openrouter-direct', openrouterKey: 'openrouter-value-2', credentialStore: 'config', skipLaunchctl: true });
   manifestApi.writeManifest(home, { ...before, credentials: [{ reference: switched.credentialRef, ownership: 'installer' }] });
   const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
-  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' }).get(), null);
-  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-byok' }).get(), 'byok-value');
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'openrouter-direct' }).get(), 'openrouter-value-2');
   const lifecycle = require('../../../packages/installer/lib/uninstall.js');
   const active = manifestApi.readManifest(home);
-  assert.deepEqual(active.credentials.map((item: any) => item.reference.account), ['gateway-byok']);
+  assert.deepEqual(active.credentials.map((item: any) => item.reference.account), ['openrouter-direct']);
   lifecycle.applyLifecyclePlan(lifecycle.planUninstall(active, lifecycle.currentStateFromManifest(active)));
-  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-byok' }).get(), null);
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'openrouter-direct' }).get(), null);
 });
 
 test('failed provider switch restores the prior owned credential and removes the replacement', () => {
   const home = tmpDir('to-provider-switch-rollback-');
   const assetsRoot = tmpDir('to-provider-switch-rollback-assets-');
   writeFixtureAssets(assetsRoot);
-  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'gateway-token', gatewayToken: 'gateway-value', credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false });
+  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'openrouter-direct', openrouterKey: 'initial-value', credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false });
   const target = path.join(home, '.config', 'opencode', 'opencode.jsonc');
   const mutableFs = require('node:fs');
   const originalWrite = mutableFs.writeFileSync;
@@ -473,13 +460,12 @@ test('failed provider switch restores the prior owned credential and removes the
     return originalWrite(file, ...args);
   };
   try {
-    assert.throws(() => installer.applyProviderConfiguration({ home, clients: ['opencode'], provider: 'gateway-byok', byokKey: 'byok-value', credentialStore: 'config', skipLaunchctl: true }), /simulated switch failure/);
+    assert.throws(() => installer.applyProviderConfiguration({ home, clients: ['opencode'], provider: 'local', credentialStore: 'config', skipLaunchctl: true }), /simulated switch failure/);
   } finally {
     mutableFs.writeFileSync = originalWrite;
   }
   const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
-  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' }).get(), 'gateway-value');
-  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-byok' }).get(), null);
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'openrouter-direct' }).get(), 'initial-value');
 });
 
 test('successive installs transfer credential ownership without orphaning and roll back a failed switch', () => {
@@ -487,21 +473,19 @@ test('successive installs transfer credential ownership without orphaning and ro
   const assetsRoot = tmpDir('to-reinstall-provider-assets-');
   writeFixtureAssets(assetsRoot);
   const common = { home, assetsRoot, clients: ['opencode'], credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false };
-  installer.installSelectedClients({ ...common, provider: 'gateway-token', gatewayToken: 'gateway-value' });
-  assert.throws(() => installer.installSelectedClients({ ...common, assetsRoot: tmpDir('to-reinstall-missing-assets-'), provider: 'gateway-byok', byokKey: 'failed-byok-value' }));
+  installer.installSelectedClients({ ...common, provider: 'openrouter-direct', openrouterKey: 'key-1' });
+  assert.throws(() => installer.installSelectedClients({ ...common, assetsRoot: tmpDir('to-reinstall-missing-assets-'), provider: 'openrouter-direct', openrouterKey: 'failed-key' }));
   const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
-  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' }).get(), 'gateway-value');
-  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-byok' }).get(), null);
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'openrouter-direct' }).get(), 'key-1');
 
-  installer.installSelectedClients({ ...common, provider: 'gateway-byok', byokKey: 'byok-value' });
-  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' }).get(), null);
-  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-byok' }).get(), 'byok-value');
+  installer.installSelectedClients({ ...common, provider: 'openrouter-direct', openrouterKey: 'key-2' });
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'openrouter-direct' }).get(), 'key-2');
   const manifestApi = require('../../../packages/installer/lib/manifest.js');
   const lifecycle = require('../../../packages/installer/lib/uninstall.js');
   const manifest = manifestApi.readManifest(home);
-  assert.deepEqual(manifest.credentials.map((item: any) => item.reference.account), ['gateway-byok']);
+  assert.deepEqual(manifest.credentials.map((item: any) => item.reference.account), ['openrouter-direct']);
   lifecycle.applyLifecyclePlan(lifecycle.planUninstall(manifest, lifecycle.currentStateFromManifest(manifest)));
-  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-byok' }).get(), null);
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'openrouter-direct' }).get(), null);
 });
 
 test('successive install to local clears owned credential and manifest, while failure preserves both', () => {
@@ -509,14 +493,14 @@ test('successive install to local clears owned credential and manifest, while fa
   const assetsRoot = tmpDir('to-reinstall-local-assets-');
   writeFixtureAssets(assetsRoot);
   const common = { home, assetsRoot, clients: ['opencode'], credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false };
-  installer.installSelectedClients({ ...common, provider: 'gateway-token', gatewayToken: 'gateway-value' });
+  installer.installSelectedClients({ ...common, provider: 'openrouter-direct', openrouterKey: 'key-value' });
   assert.throws(() => installer.installSelectedClients({ ...common, assetsRoot: tmpDir('to-local-missing-assets-'), provider: 'local' }));
   const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
   const manifestApi = require('../../../packages/installer/lib/manifest.js');
-  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' }).get(), 'gateway-value');
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'openrouter-direct' }).get(), 'key-value');
   assert.equal(manifestApi.readManifest(home).credentials.length, 1);
   installer.installSelectedClients({ ...common, provider: 'local' });
-  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' }).get(), null);
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'openrouter-direct' }).get(), null);
   assert.deepEqual(manifestApi.readManifest(home).credentials, []);
 });
 
@@ -524,11 +508,11 @@ test('provider config to skip clears owned credential and persists empty ownersh
   const home = tmpDir('to-config-skip-');
   const assetsRoot = tmpDir('to-config-skip-assets-');
   writeFixtureAssets(assetsRoot);
-  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'gateway-token', gatewayToken: 'gateway-value', credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false });
+  installer.installSelectedClients({ home, assetsRoot, clients: ['opencode'], provider: 'openrouter-direct', openrouterKey: 'key-value', credentialStore: 'config', skipLaunchctl: true, skipClientCommands: true, defaults: false });
   const result = installer.applyProviderConfiguration({ home, clients: ['opencode'], provider: 'skip', credentialStore: 'config', skipLaunchctl: true });
   installer.persistProviderCredentialOwnership({ home }, result);
   const { createCredentialStore } = require('../../../packages/installer/lib/credential-store.js');
-  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'gateway-token' }).get(), null);
+  assert.equal(createCredentialStore('config', { home, service: 'token-optimizer', account: 'openrouter-direct' }).get(), null);
   assert.deepEqual(require('../../../packages/installer/lib/manifest.js').readManifest(home).credentials, []);
   assert.equal(result.credentialOwnershipCleared, true);
 });
@@ -620,7 +604,8 @@ test('installSelectedClients defaults to detected clients and does not write eve
   const installed = installer.installSelectedClients({
     home,
     assetsRoot,
-    gatewayToken: 'person-token',
+    provider: 'openrouter-direct',
+    openrouterKey: 'person-token',
     credentialStore: 'config',
     skipLaunchctl: true,
     skipClientCommands: true,
@@ -641,7 +626,8 @@ test('installClaude and installCodex copy marketplace assets and write config/de
     home,
     assetsRoot,
     installRoot,
-    gatewayToken: 'person-token',
+    provider: 'openrouter-direct',
+    openrouterKey: 'person-token',
     skipLaunchctl: true,
     skipClientCommands: true,
   });
@@ -649,7 +635,8 @@ test('installClaude and installCodex copy marketplace assets and write config/de
     home,
     assetsRoot,
     installRoot,
-    gatewayToken: 'person-token',
+    provider: 'openrouter-direct',
+    openrouterKey: 'person-token',
     skipLaunchctl: true,
     skipClientCommands: true,
   });
@@ -660,7 +647,7 @@ test('installClaude and installCodex copy marketplace assets and write config/de
   assert.ok(fs.existsSync(path.join(installRoot, 'plugin', 'codex', 'README.md')));
 
   const claude = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
-  assert.equal(claude.env.LLM_GATEWAY_TOKEN, 'person-token');
+  assert.equal(claude.env.OPENROUTER_API_KEY, 'person-token');
 
   /* CLI-free fallbacks (client CLIs skipped/unavailable): Claude gets a
      skills-directory plugin; Codex gets a config.toml server + skill copy. */
@@ -670,8 +657,9 @@ test('installClaude and installCodex copy marketplace assets and write config/de
   assert.ok(codexToml.includes('[mcp_servers.token_optimizer]'));
   assert.ok(codexToml.includes("command = 'node'"));
   assert.ok(codexToml.includes('start.js'));
-  assert.ok(codexToml.includes("LLM_GATEWAY_TOKEN = 'person-token'"));
+  assert.ok(codexToml.includes("OPENROUTER_API_KEY = 'person-token'"));
   assert.ok(fs.existsSync(path.join(home, '.codex', 'skills', 'token-optimizer', 'SKILL.md')));
+  assert.ok(fs.existsSync(path.join(home, '.codex', 'skills', 'token-optimizer-setup', 'SKILL.md')));
 
   const codexAgents = fs.readFileSync(path.join(home, '.codex', 'AGENTS.md'), 'utf8');
   assert.ok(codexAgents.includes('TOKEN_OPTIMIZER_START'));
@@ -698,7 +686,8 @@ test('installCodex writes the credential-bearing direct server after plugin CLI 
       home,
       assetsRoot,
       installRoot,
-      gatewayToken: 'person-token',
+      provider: 'openrouter-direct',
+      openrouterKey: 'person-token',
       skipLaunchctl: true,
     });
   } finally {
@@ -708,7 +697,7 @@ test('installCodex writes the credential-bearing direct server after plugin CLI 
   const codexToml = fs.readFileSync(path.join(home, '.codex', 'config.toml'), 'utf8');
   assert.ok(codexToml.includes("command = 'node'"));
   assert.ok(codexToml.includes(`start.js`));
-  assert.ok(codexToml.includes("LLM_GATEWAY_TOKEN = 'person-token'"));
+  assert.ok(codexToml.includes("OPENROUTER_API_KEY = 'person-token'"));
 });
 
 /* Codex is direct-only; installing its server must not add a marketplace MCP. */
@@ -734,7 +723,8 @@ test('installCodex does not create a second marketplace registration', () => {
       home,
       assetsRoot,
       installRoot,
-      gatewayToken: 'person-token',
+      provider: 'openrouter-direct',
+      openrouterKey: 'person-token',
       skipLaunchctl: true,
     });
   } finally {
@@ -768,7 +758,8 @@ test('installClaude refreshes an existing marketplace plugin with plugin update'
       home,
       assetsRoot,
       installRoot,
-      gatewayToken: 'person-token',
+      provider: 'openrouter-direct',
+      openrouterKey: 'person-token',
       skipLaunchctl: true,
     });
   } finally {
@@ -800,10 +791,9 @@ test('upsertCodexTomlServer replaces an existing section without touching other 
   ].join('\n');
   const installer2 = require('../../../packages/installer/lib/install-core.js');
   const next = installer2.upsertCodexTomlServer(existing, 'C:\\Users\\x\\start.js', {
-    LLM_GATEWAY_URL: 'https://llm-proxy.lnf.gr/v1',
-    LLM_GATEWAY_TOKEN: 'tok',
-    OPENROUTER_BYOK_KEY: '',
-    OPENROUTER_BYOK_MODEL: '',
+    OPENROUTER_API_KEY: 'tok',
+    OPENROUTER_API_URL: 'https://openrouter.ai/api/v1',
+    OPENROUTER_MODEL: '',
     LOCAL_LLM_API_URL: '',
     LOCAL_LLM_MODEL: '',
   });
@@ -812,7 +802,7 @@ test('upsertCodexTomlServer replaces an existing section without touching other 
   assert.ok(!next.includes('/old/start.sh'));
   assert.ok(!next.includes('https://old.example/v1'));
   assert.ok(next.includes("args = ['C:\\Users\\x\\start.js']"));
-  assert.ok(next.includes("LLM_GATEWAY_TOKEN = 'tok'"));
+  assert.ok(next.includes("OPENROUTER_API_KEY = 'tok'"));
   assert.equal((next.match(/\[mcp_servers\.token_optimizer\]/g) || []).length, 1);
 });
 

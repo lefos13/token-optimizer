@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { buildStartJs } = require("./launcher-template");
+const { copyExtraSkills, PASSTHROUGH_ENV } = require("./skill-sources");
 
 /* Claude Code plugin flow.
    Generates a complete, installable, portable Claude Code plugin under
@@ -23,6 +24,7 @@ const { buildStartJs } = require("./launcher-template");
      plugin/claude/server/package.json             (single runtime dep to install)
      plugin/claude/server/start.sh                 (installs deps + execs server)
      plugin/claude/skills/token-optimizer/SKILL.md
+     plugin/claude/skills/token-optimizer-setup/SKILL.md
      plugin/claude/README.md
    The marketplace catalog lives at the repo root so the repository is itself a
    valid marketplace (`claude plugin marketplace add <repo>`). Do not edit
@@ -74,7 +76,7 @@ try {
   /* Bump this on every meaningful change. Claude only pulls plugin updates
      when the version changes; keeping it static pins installs to the commit
      they were first installed from and updates become silent no-ops. */
-  const VERSION = "2.0.13";
+  const VERSION = "3.0.0";
 
   /* Pin the runtime dep to the version this repo was built and tested against. */
   /* Read the lockfile-pinned SDK version so generated bundles are identical
@@ -127,9 +129,9 @@ try {
      portable: it carries its own compiled server and resolves deps relative to
      the install dir rather than an absolute repo path.
 
-     Resolve the gateway token from the host-managed environment (Claude Code
-     expands ${VAR} placeholders from settings or launch environment), while the
-     gateway URL is defaulted to the primary endpoint. */
+     Resolve the OpenRouter key and model from the host-managed environment
+     (Claude Code expands ${VAR} placeholders from settings or launch
+     environment); without a key the server uses the local endpoint. */
   const mcpJson = {
     mcpServers: {
       token_optimizer: {
@@ -138,8 +140,7 @@ try {
         command: "node",
         args: ["${CLAUDE_PLUGIN_ROOT}/server/start.js"],
         env: {
-          LLM_GATEWAY_URL: "${LLM_GATEWAY_URL:-https://llm-proxy.lnf.gr/v1}",
-          LLM_GATEWAY_TOKEN: "${LLM_GATEWAY_TOKEN:-}",
+          ...Object.fromEntries(PASSTHROUGH_ENV.map((name) => [name, `\${${name}:-}`])),
           LOCAL_LLM_API_URL: "http://localhost:8080/v1",
           LOCAL_LLM_MODEL: "local-model",
         },
@@ -206,6 +207,7 @@ exec node "$ROOT/server/start.js"
     process.exit(1);
   }
   fs.copyFileSync(sourceSkill, destSkill);
+  copyExtraSkills(path.dirname(skillsDir));
 
   const readme = `# Token Optimizer plugin (Claude Code)
 
@@ -221,6 +223,7 @@ regressions, and scout code without flooding chat context with raw logs.
 - \`.mcp.json\` — registers the \`token_optimizer\` stdio server (tools exposed as \`mcp__token_optimizer__*\`).
 - \`server/\` — the compiled MCP server plus launchers (\`start.js\` cross-platform, \`start.sh\` POSIX) and a minimal \`package.json\`.
 - \`skills/${SKILL_NAME}/SKILL.md\` — usage guidance, copied from \`skill/skill-example.md\`.
+- \`skills/token-optimizer-setup/SKILL.md\` — guided install/verify/repair, copied from \`skill/setup/SKILL.md\`. Run it with \`/token-optimizer:token-optimizer-setup\`.
 
 ## How the server runs (portable)
 
@@ -239,15 +242,13 @@ automatically based on its description.
 
 ## LLM configuration
 
-**Centralized gateway (primary):** The plugin is preconfigured with the gateway URL (\`https://llm-proxy.lnf.gr/v1\`). Provide your per-person proxy token: from a repo clone run \`npm run gateway:config -- setup\` and paste the token (it is written to every client on your machine), or set \`LLM_GATEWAY_TOKEN\` manually in this client's config. Shared and issued gateway-token callers use the gateway-controlled task model.
+Choose one provider. The npm installer (\`npx --yes @softawarest/token-optimizer-installer\`) writes this configuration for you.
 
-**Bring your own OpenRouter key (BYOK):** Set \`OPENROUTER_BYOK_KEY\` instead of a gateway token. You may also set \`OPENROUTER_BYOK_MODEL\` to one OpenRouter \`provider/model\` for every request; leave it blank or unset to use the gateway's task-specific/default model selection.
+**OpenRouter (your own key):** Set \`OPENROUTER_API_KEY\`. Optionally set \`OPENROUTER_MODEL\` to one OpenRouter \`provider/model\` (default \`openai/gpt-4o-mini\`). Prompts are redacted before they leave your machine.
 
-> **JSON mode requirement:** All requests send \`response_format: { type: "json_object" }\`. The gateway (or local fallback model, if configured) is responsible for returning JSON-mode-compatible responses. Only BYOK callers may optionally select a model.
+**Local LLM:** Any OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`. If OpenRouter is unreachable, the server retries once against this local endpoint.
 
-**Token Optimizer fallback:** The server uses a local OpenAI-compatible endpoint. Defaults: \`LOCAL_LLM_API_URL=http://localhost:8080/v1\`, \`LOCAL_LLM_MODEL=local-model\`. Per-task overrides: \`LOCAL_LLM_VERDICT_MODEL\`, \`LOCAL_LLM_TRIAGE_MODEL\`, \`LOCAL_LLM_REVIEW_MODEL\`, \`LOCAL_LLM_DIGEST_MODEL\`, \`LOCAL_LLM_SCOUT_MODEL\`, \`LOCAL_LLM_QUERY_MODEL\`.
-
-Use \`npm run gateway:config\` to manage your gateway token across all clients on your machine.
+> **JSON mode requirement:** All requests send \`response_format: { type: "json_object" }\`. The selected model must return JSON-mode-compatible responses.
 
 ## Install
 

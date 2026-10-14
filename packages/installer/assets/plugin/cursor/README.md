@@ -14,6 +14,8 @@ this bundle is installed by copying files and running the repo config manager.
   (`start.sh`) and a minimal `package.json`.
 - `rules/token-optimizer.mdc` — `alwaysApply: true` rule instructing the agent
   to use the `token_optimizer` tools by default.
+- `rules/token-optimizer-setup.mdc` — agent-requested setup guide (install,
+  verify, repair), rendered from `skill/setup/SKILL.md`.
 - `mcp-snippet.json` — the block the config manager writes into your
   `mcp.json`'s `"mcpServers"` object, also useful for manual installs.
 
@@ -26,22 +28,18 @@ this bundle is installed by copying files and running the repo config manager.
    cp -R plugin/cursor/server/* ~/.cursor/token-optimizer-server/
    ```
 
-2. Provide your gateway token from a repo clone:
+2. Merge `mcp-snippet.json` into `~/.cursor/mcp.json` (global, applies to
+   every project) or `.cursor/mcp.json` in a specific project. Export
+   `OPENROUTER_API_KEY` (and optionally `OPENROUTER_MODEL`) before launching
+   Cursor, or leave it unset to use a local OpenAI-compatible endpoint at
+   `http://localhost:8080/v1`. The npm installer
+   (`npx --yes @softawarest/token-optimizer-installer`) does all of this for you.
 
-   ```bash
-   npm run gateway:config -- setup
-   ```
-
-   This writes the `token_optimizer` MCP block and gateway environment into
-   `~/.cursor/mcp.json`. If you are not using the config manager, merge
-   `mcp-snippet.json` manually into `~/.cursor/mcp.json` (global, applies to
-   every project) or `.cursor/mcp.json` in a specific project.
-
-3. Copy the rule into each project where you want it enforced:
+3. Copy the rules into each project where you want them:
 
    ```bash
    mkdir -p .cursor/rules
-   cp plugin/cursor/rules/token-optimizer.mdc .cursor/rules/token-optimizer.mdc
+   cp plugin/cursor/rules/*.mdc .cursor/rules/
    ```
 
    **Limitation:** Cursor has no filesystem-writable *global* rule — only
@@ -57,6 +55,6 @@ this bundle is installed by copying files and running the repo config manager.
 first run only.
 
 To pick up changes, re-run `npm run build:plugin:cursor`, re-copy the
-`server/` contents, re-run `npm run gateway:config -- setup` if the MCP
-config shape changed, and re-copy `rules/token-optimizer.mdc` into each
+`server/` contents, re-merge `mcp-snippet.json` if the MCP
+config shape changed, and re-copy `rules/*.mdc` into each
 project using it.

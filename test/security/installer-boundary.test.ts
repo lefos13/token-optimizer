@@ -13,7 +13,7 @@ const apply = require('../../../packages/installer/lib/apply-plan.js');
 test('dry-run plan is secret-free, immutable, and causes no mutation', () => {
   let mutations = 0;
   const secret = 'sk-or-fixture-secret';
-  const plan = plans.createChangePlan({ token: secret }, [plans.credentialOperation('gateway-byok', { value: secret }), plans.writeFileOperation('/tmp/fixture', 'hash')]);
+  const plan = plans.createChangePlan({ token: secret }, [plans.credentialOperation('openrouter-direct', { value: secret }), plans.writeFileOperation('/tmp/fixture', 'hash')]);
   assert.doesNotMatch(plans.formatChangePlan(plan, 'json'), /fixture-secret/);
   assert.equal(Object.isFrozen(plan), true);
   assert.equal(mutations, 0);
@@ -24,7 +24,7 @@ test('real CLI dry-run is secret-free and leaves isolated HOME unchanged', () =>
   const repository = path.resolve(__dirname, '../../../');
   const before = fs.readdirSync(home);
   const secret = 'sk-or-fixture-secret';
-  const result = spawnSync(process.execPath, [path.join(repository, 'packages/installer/bin/token-optimizer.js'), 'install', '--dry-run', '--json', '--provider', 'gateway-byok', '--byok-key', secret, '--clients', 'codex', '--home', home, '--skip-client-commands', '--skip-launchctl'], { cwd: repository, encoding: 'utf8', env: { PATH: process.env.PATH || '', HOME: home, TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK: '1' } });
+  const result = spawnSync(process.execPath, [path.join(repository, 'packages/installer/bin/token-optimizer.js'), 'install', '--dry-run', '--json', '--provider', 'openrouter-direct', '--openrouter-key', secret, '--clients', 'codex', '--home', home, '--skip-client-commands', '--skip-launchctl'], { cwd: repository, encoding: 'utf8', env: { PATH: process.env.PATH || '', HOME: home, TOKEN_OPTIMIZER_SKIP_UPDATE_CHECK: '1' } });
   assert.equal(result.status, 0, result.stderr); assert.doesNotMatch(`${result.stdout}${result.stderr}`, /fixture-secret/);
   assert.deepEqual(fs.readdirSync(home), before);
   fs.rmSync(home, { recursive: true, force: true });

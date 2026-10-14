@@ -1,8 +1,0 @@
-{
-  "extends": "./tsconfig.json",
-  "compilerOptions": {
-    "outDir": "./gateway/dist",
-    "rootDir": "./gateway/src"
-  },
-  "include": ["gateway/src/**/*"]
-}

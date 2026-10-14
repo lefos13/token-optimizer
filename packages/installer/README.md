@@ -44,27 +44,23 @@ and sensitive paths.
 
 ## Choosing a provider
 
-**A gateway/proxy token is not required** to use this tool. On a fresh install
-with no provider flags, the installer prompts for one of three providers, plus
-a skip option. A normal update preserves a usable installed choice; run
-`config` or pass a provider flag to change it:
+On a fresh install with no provider flags, the installer prompts for one of
+two providers, plus a skip option. A normal update preserves a usable installed
+choice; run `config` or pass a provider flag to change it:
 
-| Mode | Token needed? | Who pays for inference? | Limit |
-| --- | --- | --- | --- |
-| `gateway` | **Yes** — request + operator approval | The gateway operator | 20 calls/day by default (operator-adjustable) |
-| `byok` | **No, none at all** | You, via your own OpenRouter account | Unlimited |
-| `local` | **No, none at all** | Nobody — your own hardware | Unlimited |
+| Mode | Credential | Who pays for inference? |
+| --- | --- | --- |
+| `openrouter` | Your OpenRouter API key | You, via your own OpenRouter account |
+| `local` | None | Nobody — your own hardware |
 
-1. **Gateway access token** — shared infrastructure, requires an approved token.
-   Request one at [https://llm-proxy.lnf.gr/](https://llm-proxy.lnf.gr/).
-2. **Your own OpenRouter key (`byok`)** — get a key from
-   [openrouter.ai](https://openrouter.ai), no request or approval needed.
-   Unlimited usage, billed to your own account. The installer prompts for an
-   optional model to pin after the key, or accepts `--byok-model <model-id>`.
-3. **Local LLM only** — no token at all; point the tools at any
+1. **Your own OpenRouter key (`openrouter`)** — get a key from
+   [openrouter.ai](https://openrouter.ai). The installer prompts for an
+   optional model to pin after the key, or accepts
+   `--openrouter-model <model-id>`.
+2. **Local LLM only** — no credential at all; point the tools at any
    OpenAI-compatible endpoint you run yourself (e.g. llama.cpp, LM Studio,
    Ollama's OpenAI-compat API). Defaults to `http://localhost:8080/v1`.
-4. **Skip for now** — installs the MCP server with no provider configured;
+3. **Skip for now** — installs the MCP server with no provider configured;
    finish later with `token-optimizer config`.
 
 Remote requests are always redacted before leaving your machine, and results
@@ -73,7 +69,10 @@ values). If your provider is unavailable or returns something invalid, exit
 codes remain authoritative and the tool reports a conservative "uncertain"
 result rather than inventing a verdict.
 
-If you migrated from an older setup, your OpenRouter key may still route through the gateway (`gateway-byok`) — that routing is preserved as-is; switch to a direct key (`byok`) if you'd rather it never cross the gateway. See the
+The shared gateway was retired in 3.0.0. Re-running the installer migrates an
+older gateway BYOK key to direct OpenRouter automatically; a gateway token alone
+cannot be migrated, so the installer warns and asks you to choose OpenRouter or
+a local LLM with `token-optimizer config`. See the
 [main README](../../README.md#security) and
 [threat model](../../docs/security/threat-model.md) for the full security
 design.
@@ -119,11 +118,10 @@ npx @softawarest/token-optimizer-installer --clients opencode,cursor
 npx @softawarest/token-optimizer-installer --clients all --cursor-project /path/to/project
 npx @softawarest/token-optimizer-installer --local
 npx @softawarest/token-optimizer-installer --local --local-url http://localhost:11434/v1 --local-model llama3
-npx @softawarest/token-optimizer-installer --byok-key sk-or-...
-npx @softawarest/token-optimizer-installer --byok-key sk-or-... --byok-model provider/model
+npx @softawarest/token-optimizer-installer --openrouter-key sk-or-...
+npx @softawarest/token-optimizer-installer --openrouter-key sk-or-... --openrouter-model provider/model
 npx @softawarest/token-optimizer-installer --provider skip
-npx @softawarest/token-optimizer-installer config --token <token>
-npx @softawarest/token-optimizer-installer config --byok-key sk-or-...
+npx @softawarest/token-optimizer-installer config --openrouter-key sk-or-...
 npx @softawarest/token-optimizer-installer defaults --clients claude,codex,opencode
 ```
 

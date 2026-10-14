@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { buildStartJs } = require("./launcher-template");
+const { copyExtraSkills, PASSTHROUGH_ENV } = require("./skill-sources");
 
 /* opencode plugin flow.
    Generates a portable token_optimizer bundle under plugin/opencode/ for opencode
@@ -18,6 +19,7 @@ const { buildStartJs } = require("./launcher-template");
      plugin/opencode/server/package.json         (single runtime dep to install)
      plugin/opencode/server/start.sh             (self-locating launcher)
      plugin/opencode/skills/token-optimizer/SKILL.md
+     plugin/opencode/skills/token-optimizer-setup/SKILL.md
      plugin/opencode/mcp-snippet.jsonc           (block to merge into opencode.jsonc's "mcp")
      plugin/opencode/README.md
    This output is gitignored (see plugin/opencode/ in .gitignore) — like
@@ -63,7 +65,7 @@ try {
   fs.mkdirSync(skillsDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "2.0.13";
+  const VERSION = "3.0.0";
 
   /* Read the lockfile-pinned SDK version so generated bundles are identical
      after a clean npm ci, regardless of a maintainer's local node_modules. */
@@ -119,10 +121,11 @@ exec node "$ROOT/start.js"
     process.exit(1);
   }
   fs.copyFileSync(sourceSkill, destSkill);
+  copyExtraSkills(path.dirname(skillsDir));
 
   /* opencode's config docs (opencode.ai/docs/config) show "{env:VAR}" style
      interpolation for pulling values from the process environment at
-     runtime, so the token never has to be hardcoded here. */
+     runtime, so the OpenRouter key never has to be hardcoded here. */
   const mcpSnippet = {
     token_optimizer: {
       type: "local",
@@ -132,8 +135,7 @@ exec node "$ROOT/start.js"
          depending on which OS generated the file. Always forward-slash join instead. */
       command: ["node", `${installedServerDir}/start.js`],
       environment: {
-        LLM_GATEWAY_URL: "{env:LLM_GATEWAY_URL}",
-        LLM_GATEWAY_TOKEN: "{env:LLM_GATEWAY_TOKEN}",
+        ...Object.fromEntries(PASSTHROUGH_ENV.map((name) => [name, `{env:${name}}`])),
       },
       enabled: true,
     },
@@ -161,6 +163,8 @@ running the repo config manager.
 - \`skills/${SKILL_NAME}/SKILL.md\` — usage guidance, copied from
   \`skill/skill-example.md\`. opencode discovers skills from \`SKILL.md\` files
   under fixed paths — see Install below.
+- \`skills/token-optimizer-setup/SKILL.md\` — guided install/verify/repair,
+  copied from \`skill/setup/SKILL.md\`.
 - \`mcp-snippet.jsonc\` — the block the config manager writes into your
   \`opencode.jsonc\`'s \`"mcp"\` object, also useful for manual installs.
 
@@ -173,29 +177,23 @@ running the repo config manager.
    cp -R plugin/opencode/server/* ~/.config/opencode/token-optimizer-server/
    \`\`\`
 
-2. Copy the skill so opencode discovers it globally:
+2. Copy the skills so opencode discovers them globally:
 
    \`\`\`bash
-   mkdir -p ~/.config/opencode/skills/${SKILL_NAME}
-   cp -R plugin/opencode/skills/${SKILL_NAME}/* ~/.config/opencode/skills/${SKILL_NAME}/
+   mkdir -p ~/.config/opencode/skills
+   cp -R plugin/opencode/skills/* ~/.config/opencode/skills/
    \`\`\`
 
-3. Provide your gateway token from a repo clone:
-
-   \`\`\`bash
-   npm run gateway:config -- setup
-   \`\`\`
-
-   This writes the \`token_optimizer\` MCP block and gateway environment into
-   \`~/.config/opencode/opencode.jsonc\`. If you are not using the config
-   manager, merge \`mcp-snippet.jsonc\` manually and set
-   \`LLM_GATEWAY_TOKEN\` / \`LLM_GATEWAY_URL\` in your own shell/session
-   environment before launching opencode.
+3. Merge \`mcp-snippet.jsonc\` into \`~/.config/opencode/opencode.jsonc\`.
+   Export \`OPENROUTER_API_KEY\` (and optionally \`OPENROUTER_MODEL\`) before
+   launching opencode, or leave it unset to use a local OpenAI-compatible
+   endpoint at \`http://localhost:8080/v1\`. The npm installer
+   (\`npx --yes @softawarest/token-optimizer-installer\`) does all of this for you.
 
 4. Optional: make Token Optimizer default-on for opencode:
 
    \`\`\`bash
-   npm run gateway:config -- enable-defaults
+   npm run defaults:config -- enable-defaults
    \`\`\`
 
    This writes the standing directive to \`~/.config/opencode/AGENTS.md\`.
@@ -207,7 +205,7 @@ first run only (to install the bundled server's single runtime dependency into
 a \`.data/\` directory next to itself).
 
 To pick up changes, re-run \`npm run build:plugin:opencode\`, re-copy the
-\`server/\` and \`skills/\` contents, and re-run \`npm run gateway:config -- setup\`
+\`server/\` and \`skills/\` contents, and re-merge \`mcp-snippet.jsonc\`
 if the MCP config shape changed.
 `;
   fs.writeFileSync(path.join(pluginDir, "README.md"), readme);

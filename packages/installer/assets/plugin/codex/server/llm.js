@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.GATEWAY_PROVIDER_NAME = exports.providerHealth = exports.resolveProvider = void 0;
+exports.providerHealth = exports.resolveProvider = void 0;
 exports.getLLMUsage = getLLMUsage;
 exports.getLLMMetadata = getLLMMetadata;
 exports.attachLLMUsage = attachLLMUsage;
@@ -21,7 +21,6 @@ Object.defineProperty(exports, "providerHealth", { enumerable: true, get: functi
 const LLM_USAGE = Symbol('llmUsage');
 const LLM_METADATA = Symbol('llmMetadata');
 const LOCAL_PROVIDER_NAME = 'local-openai-compatible';
-exports.GATEWAY_PROVIDER_NAME = 'gateway';
 const DEFAULT_API_URL = 'http://localhost:8080/v1';
 const DEFAULT_MODEL = 'local-model';
 const TASK_MODEL_ENV = {
@@ -131,28 +130,6 @@ function resolveLocalProvider(taskType, context = {}) {
     const effective = context.effectiveConfig || (0, config_1.resolveEffectiveConfig)({ workspacePath: context.workspacePath, env: process.env });
     return (0, providers_1.resolveProvider)({ ...effective.provider, mode: 'local', apiUrl: process.env.LOCAL_LLM_API_URL || DEFAULT_API_URL, model: '' }, taskType);
 }
-/* Gateway is the centralized proxy: it pins the model per task type via
-   X-Task-Type. Two ways to use it:
-   - LLM_GATEWAY_TOKEN: a revocable proxy/issued token (not the real upstream
-     key); the operator's OpenRouter account pays and daily limits apply.
-   - OPENROUTER_BYOK_KEY: the caller's own OpenRouter key, sent as
-     X-OpenRouter-Key; the caller's own account pays, usage is unlimited, and
-     no proxy token is needed at all — the gateway only proxies and pins the
-     model, it never authenticates a BYOK-only caller. An optional model
-     header is sent only on the user-funded BYOK path. Either value alone is
-     enough to engage the gateway; both may be set together. */
-/* Legacy environment resolution remains available through resolveProvider(taskType);
-   callers using EffectiveConfig should pass the provider object explicitly. */
-function resolveGatewayProvider(taskType) {
-    const token = process.env.LLM_GATEWAY_TOKEN;
-    const url = process.env.LLM_GATEWAY_URL;
-    const byokKey = process.env.OPENROUTER_BYOK_KEY;
-    const byokModel = process.env.OPENROUTER_BYOK_MODEL?.trim();
-    if (!url || (!token && !byokKey)) {
-        return null;
-    }
-    return (0, providers_1.resolveProvider)({ mode: token ? 'gateway-token' : 'gateway-byok', apiUrl: url, model: 'gateway-managed', credentialEnv: token ? 'LLM_GATEWAY_TOKEN' : 'OPENROUTER_BYOK_KEY' }, taskType);
-}
 function combineLLMUsage(usage1, usage2) {
     if (!usage1)
         return usage2;
@@ -237,8 +214,8 @@ async function callChatCompletion(provider, systemPrompt, userPrompt, inheritedR
     if (!rawContent) {
         throw new Error('Empty response from LLM');
     }
-    /* The gateway (and upstream provider) echo the model that actually ran; prefer it so
-       analytics/metadata reflect central config without any client update. */
+    /* Upstream provider echoes the model that actually ran; prefer it so
+       analytics/metadata reflect the active model without client overrides. */
     const responseModel = typeof data.model === 'string' && data.model ? data.model : provider.model;
     const metadata = metadataFromProvider(provider, Date.now() - start);
     if (provider.mode !== 'local' && outbound.redaction) {
@@ -251,7 +228,7 @@ async function callChatCompletion(provider, systemPrompt, userPrompt, inheritedR
         metadata
     };
 }
-/* Resolve provider, attempt the call. If the primary provider is the gateway and the call
+/* Resolve provider, attempt the call. If the primary provider is remote (openrouter-direct) and the call
    fails, retry once with the local provider and surface the fallback reason in metadata. */
 async function callWithFallback(taskType, systemPrompt, userPrompt, context = {}) {
     const effective = context.effectiveConfig || (0, config_1.resolveEffectiveConfig)({ workspacePath: context.workspacePath });

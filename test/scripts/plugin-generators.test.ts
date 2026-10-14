@@ -8,7 +8,7 @@ const root = path.resolve(__dirname, '..', '..', '..');
 const releaseVersion = JSON.parse(
   fs.readFileSync(path.join(root, 'package.json'), 'utf8'),
 ).version;
-assert.equal(releaseVersion, '2.0.13');
+assert.equal(releaseVersion, '3.0.0');
 const generators = [
   'generate-plugin-antigravity.js',
   'generate-plugin-claude.js',
@@ -35,13 +35,19 @@ test('every plugin generator carries the release version and delegates POSIX sta
   }
 });
 
-test('Codex marketplace configuration forwards the OpenRouter BYOK credentials', () => {
+test('Codex marketplace configuration forwards the OpenRouter credentials', () => {
   const source = readGenerator('generate-plugin-codex.js');
   const envVars = source.match(/env_vars:\s*\[([\s\S]*?)\]/)?.[1] || '';
-  assert.match(envVars, /OPENROUTER_BYOK_KEY/);
-  assert.match(envVars, /OPENROUTER_BYOK_MODEL/);
+  assert.match(envVars, /OPENROUTER_API_KEY/);
   assert.match(envVars, /OPENROUTER_MODEL/);
   assert.match(envVars, /OPENROUTER_API_URL/);
+  assert.doesNotMatch(envVars, /GATEWAY|BYOK/);
+});
+
+test('no generated client configuration references the retired gateway', () => {
+  for (const name of ['antigravity', 'claude', 'codex', 'opencode', 'cursor', 'agensi']) {
+    assert.doesNotMatch(readGenerator(`generate-plugin-${name}.js`), /LLM_GATEWAY|llm-proxy|gateway:config|BYOK/i);
+  }
 });
 
 test('generated server bundles include every runtime module required by llm.js', () => {
@@ -109,4 +115,29 @@ test('generated plugin and installer server entrypoints load successfully', () =
       assert.doesNotMatch(result.stderr, /MaxListenersExceededWarning/, `${bundle} ${label} emitted listener warning`);
     }
   }
+});
+
+test('every client bundle ships the setup skill (Cursor as an agent-requested rule)', () => {
+  const setup = path.join('skills', 'token-optimizer-setup', 'SKILL.md');
+  for (const bundle of ['antigravity', 'claude', 'codex', 'opencode']) {
+    const file = path.join(root, 'plugin', bundle, setup);
+    assert.ok(fs.existsSync(file), `${bundle} is missing ${setup}`);
+    assert.match(fs.readFileSync(file, 'utf8'), /^name: token-optimizer-setup$/m);
+  }
+  const rule = fs.readFileSync(path.join(root, 'plugin', 'cursor', 'rules', 'token-optimizer-setup.mdc'), 'utf8');
+  assert.match(rule, /^---\ndescription: .+\nalwaysApply: false\n---\n/);
+  assert.doesNotMatch(rule, /^name:/m);
+});
+
+test('Agensi package is one skill whose root SKILL.md routes to the setup reference', () => {
+  const result = spawnSync(process.execPath, [path.join(root, 'scripts', 'generate-plugin-agensi.js')], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const bundle = path.join(root, 'plugin', 'agensi', 'token-optimizer');
+  assert.deepEqual(fs.readdirSync(path.join(root, 'plugin', 'agensi')).filter((entry) => !entry.endsWith('.zip')), ['token-optimizer']);
+  const skill = fs.readFileSync(path.join(bundle, 'SKILL.md'), 'utf8');
+  assert.match(skill, /^---\nname: token-optimizer\n/);
+  assert.match(skill, /references\/setup\.md/);
+  const setup = fs.readFileSync(path.join(bundle, 'references', 'setup.md'), 'utf8');
+  assert.match(setup, /^# Token Optimizer setup/);
+  assert.doesNotMatch(setup, /^name:|disable-model-invocation/m);
 });

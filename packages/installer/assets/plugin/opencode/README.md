@@ -16,6 +16,8 @@ running the repo config manager.
 - `skills/token-optimizer/SKILL.md` — usage guidance, copied from
   `skill/skill-example.md`. opencode discovers skills from `SKILL.md` files
   under fixed paths — see Install below.
+- `skills/token-optimizer-setup/SKILL.md` — guided install/verify/repair,
+  copied from `skill/setup/SKILL.md`.
 - `mcp-snippet.jsonc` — the block the config manager writes into your
   `opencode.jsonc`'s `"mcp"` object, also useful for manual installs.
 
@@ -28,29 +30,23 @@ running the repo config manager.
    cp -R plugin/opencode/server/* ~/.config/opencode/token-optimizer-server/
    ```
 
-2. Copy the skill so opencode discovers it globally:
+2. Copy the skills so opencode discovers them globally:
 
    ```bash
-   mkdir -p ~/.config/opencode/skills/token-optimizer
-   cp -R plugin/opencode/skills/token-optimizer/* ~/.config/opencode/skills/token-optimizer/
+   mkdir -p ~/.config/opencode/skills
+   cp -R plugin/opencode/skills/* ~/.config/opencode/skills/
    ```
 
-3. Provide your gateway token from a repo clone:
-
-   ```bash
-   npm run gateway:config -- setup
-   ```
-
-   This writes the `token_optimizer` MCP block and gateway environment into
-   `~/.config/opencode/opencode.jsonc`. If you are not using the config
-   manager, merge `mcp-snippet.jsonc` manually and set
-   `LLM_GATEWAY_TOKEN` / `LLM_GATEWAY_URL` in your own shell/session
-   environment before launching opencode.
+3. Merge `mcp-snippet.jsonc` into `~/.config/opencode/opencode.jsonc`.
+   Export `OPENROUTER_API_KEY` (and optionally `OPENROUTER_MODEL`) before
+   launching opencode, or leave it unset to use a local OpenAI-compatible
+   endpoint at `http://localhost:8080/v1`. The npm installer
+   (`npx --yes @softawarest/token-optimizer-installer`) does all of this for you.
 
 4. Optional: make Token Optimizer default-on for opencode:
 
    ```bash
-   npm run gateway:config -- enable-defaults
+   npm run defaults:config -- enable-defaults
    ```
 
    This writes the standing directive to `~/.config/opencode/AGENTS.md`.
@@ -62,5 +58,5 @@ first run only (to install the bundled server's single runtime dependency into
 a `.data/` directory next to itself).
 
 To pick up changes, re-run `npm run build:plugin:opencode`, re-copy the
-`server/` and `skills/` contents, and re-run `npm run gateway:config -- setup`
+`server/` and `skills/` contents, and re-merge `mcp-snippet.jsonc`
 if the MCP config shape changed.
