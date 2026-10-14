@@ -50,7 +50,7 @@ const execution_metadata_1 = require("./execution-metadata");
 const log_store_1 = require("./log-store");
 const server = new index_js_1.Server({
     name: 'token-optimizer-mcp',
-    version: '3.0.0',
+    version: '3.1.0',
 }, {
     capabilities: {
         tools: {},
@@ -420,7 +420,7 @@ async function handleToolCall(request) {
                 const output = {
                     verdict: 'fail', confidence: 1, validationOutcome: 'not_run', commandsRun: commandsToRun,
                     summary: `Validation was not run because the active ${effective.execution.profile} profile blocked the command (${reason}).`,
-                    failures: [{ file: null, reason: 'The command was blocked by execution policy before validation started.', suggestedFix: effective.execution.profile === 'safe' ? 'Add the exact validation command to the user allowlist or select the standard profile.' : 'Use a detected validation command or add the exact command to the user allowlist.' }],
+                    failures: [{ file: null, reason: 'The command was blocked by execution policy before validation started.', suggestedFix: metadata.policyHint?.fix || 'Use a detected validation command or add the exact command to the user allowlist.' }],
                     runId, rawLogPath: suiteResult.rawLogPath, needsRawLogs: false, likelyRelevantToRecentChanges: false,
                     effectiveProfile: effective.execution.profile, profileSource: effective.execution.profileSource,
                     ...metadata, providerStatus: 'not_used'

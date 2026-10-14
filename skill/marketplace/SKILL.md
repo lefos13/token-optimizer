@@ -70,8 +70,10 @@ the normal commands yourself and summarize the output.
 - A non-zero exit code is a failure, whatever the model says.
 - If `llmAvailable` is `false`, treat the summary as unavailable and fall back
   to exit codes, `grep_log`, or a small raw-log slice.
-- `validationOutcome: not_run` means the execution policy blocked the command;
-  it is not a test failure. Shell chaining, redirection, and Git mutations are
-  blocked by default; batch checks with `testCommands` instead of `&&`.
+- `validationOutcome: not_run` or `executionStatus: blocked` means the
+  execution policy blocked the command; it is not a test failure. Read
+  `policyHint`: if it has an `allowCommand`, ask the user before running it,
+  since it widens their policy. Pipes, chaining, and redirection are blocked in
+  every profile; batch checks with `testCommands` instead of `&&`.
 - Changed-file review findings are advisory; verify them before acting.
 - Do not paste raw logs into the conversation when the verdict is actionable.

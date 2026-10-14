@@ -28,6 +28,7 @@ const { planRepair, planUninstall, currentStateFromManifest, applyLifecyclePlan,
 const { statusLogs, pruneLogs, purgeLogs } = require("../lib/logs");
 const { planMigrationFromHome, migrateInstallation } = require("../lib/migration");
 const { createRegistrationAdapter, createFilesystemMarketplaceAdapter, createServiceAdapter } = require("../lib/lifecycle-adapters");
+const executionPolicy = require("../lib/execution-policy");
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -66,6 +67,16 @@ async function main() {
     if (!operation) throw new Error(`Unsupported logs command: ${action}`);
     const report = await operation;
     console.log(args.json === true ? JSON.stringify(report, null, 2) : `${action}: ${report.removed.length} removed, ${report.freedBytes} bytes freed`);
+    return;
+  }
+
+  if (command === "allow") {
+    runAllowCommand(args);
+    return;
+  }
+
+  if (command === "profile") {
+    await runProfileCommand(args);
     return;
   }
 
@@ -133,10 +144,12 @@ async function main() {
       : await resolveProviderOptions(args, rl);
     const providerWarnings = args["dry-run"] === true ? [] : await validateProviderBeforeMutation({ ...providerOptions, home: args.home });
     const defaults = args.defaults !== "false" && args["no-defaults"] !== true;
+    const profile = command === "install" ? await resolveInstallProfile(args, rl) : undefined;
     const options = {
       home: args.home,
       clients,
       ...providerOptions,
+      ...(profile ? { profile } : {}),
       defaults,
       cursorProjects: parseList(args["cursor-project"] || args.cursorProject || ""),
       skipClientCommands: args["skip-client-commands"] === true,
@@ -204,6 +217,74 @@ async function main() {
       applyDefaultDirectives(options);
       console.log("Default-on instructions written.");
     }
+  } finally {
+    rl.close();
+  }
+}
+
+/* Execution profile chosen at install time. An explicit --profile always
+   applies. Interactive fresh installs ask, explaining what each profile lets
+   the agent run; an existing choice is kept on reinstall. Non-interactive
+   installs without --profile keep the existing value or default to standard. */
+async function resolveInstallProfile(args, rl) {
+  if (args.profile !== undefined) return executionPolicy.normalizeProfile(args.profile);
+  if (args["dry-run"] === true || args.json === true || !process.stdin.isTTY) return undefined;
+  const current = executionPolicy.readPolicy(args.home).profile;
+  if (current) {
+    console.log(`Keeping execution profile "${current}". Change it any time with \`token-optimizer profile\`.`);
+    return undefined;
+  }
+  return promptForProfile(rl);
+}
+
+function promptForProfile(rl) {
+  return executionPolicy.promptForProfile((prompt) => ask(rl, prompt), (line) => console.log(line));
+}
+
+function printAllowList(policy) {
+  console.log(`Execution profile: ${policy.profile || "standard (default)"}`);
+  if (!policy.allowedCommandPrefixes.length) console.log("No extra allowed command prefixes.");
+  else for (const prefix of policy.allowedCommandPrefixes) console.log(`  allow: ${prefix}`);
+}
+
+/* `allow` edits only the user allowlist. Entries are command prefixes: the
+   command must equal the prefix or start with it plus a space, and deny-first
+   checks (chaining, secrets, network, paths outside the workspace) still apply. */
+function runAllowCommand(args) {
+  if (args.list === true || (!args._[1] && args.remove === undefined)) {
+    const policy = executionPolicy.readPolicy(args.home);
+    if (args.json === true) console.log(JSON.stringify(policy, null, 2));
+    else printAllowList(policy);
+    return;
+  }
+  if (args.remove !== undefined) {
+    const result = executionPolicy.removeAllowedPrefix(args.home, args.remove === true ? args._[1] : args.remove);
+    console.log(args.json === true ? JSON.stringify(result, null, 2) : result.removed ? `Removed "${result.prefix}" from the allowlist.` : `"${result.prefix}" was not in the allowlist.`);
+    return;
+  }
+  const result = executionPolicy.addAllowedPrefix(args.home, args._.slice(1).join(" "));
+  console.log(args.json === true ? JSON.stringify(result, null, 2) : result.added ? `Allowed commands starting with "${result.prefix}". Restart is not required.` : `"${result.prefix}" is already allowed.`);
+}
+
+async function runProfileCommand(args) {
+  const requested = args._[1];
+  if (requested) {
+    const result = executionPolicy.setProfile(args.home, requested);
+    console.log(args.json === true ? JSON.stringify(result, null, 2) : `Execution profile set to "${result.profile}". Restart is not required.`);
+    return;
+  }
+  const policy = executionPolicy.readPolicy(args.home);
+  if (args.json === true || !process.stdin.isTTY) {
+    if (args.json === true) console.log(JSON.stringify({ ...policy, descriptions: executionPolicy.PROFILE_DESCRIPTIONS }, null, 2));
+    else printAllowList(policy);
+    return;
+  }
+  printAllowList(policy);
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const profile = await promptForProfile(rl);
+    executionPolicy.setProfile(args.home, profile);
+    console.log(`Execution profile set to "${profile}". Restart is not required.`);
   } finally {
     rl.close();
   }
@@ -541,6 +622,8 @@ function printHelp() {
   token-optimizer install --local
   token-optimizer config --openrouter-key <key>
   token-optimizer defaults --clients claude,codex,opencode
+  token-optimizer profile [safe|standard|unrestricted]
+  token-optimizer allow "<command prefix>" | --list | --remove "<command prefix>"
   token-optimizer status [--json] [--strict] [--workspace <absolute-path>]
   token-optimizer doctor [--json] [--strict] [--workspace <absolute-path>]
   token-optimizer repair [--home <path>] [--dry-run] [--verbose|--quiet]
@@ -559,6 +642,7 @@ prompts for one of two providers, plus a skip option:
                with \`token-optimizer config\`.
 
 Options:
+  --profile <name>             Execution profile: standard (default), safe, or unrestricted. Interactive installs ask.
   --provider <mode>            openrouter (or openrouter-direct, byok), local, or skip. Overrides prompting.
   --migrate                    Detect v1 state, back it up privately, and migrate transactionally.
   --credential-store <kind>    native (default), env, or config. env/config are explicit plaintext opt-ins.

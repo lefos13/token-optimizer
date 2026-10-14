@@ -33,14 +33,31 @@ restored. A stale environment variable or inaccessible saved credential does
 not count as a usable installation and cannot suppress the provider menu.
 Restart affected clients after a successful update.
 
-Installation also creates `~/.config/token-optimizer/config.json` with the
-recommended `standard` execution profile when no profile is already selected.
-Existing profile choices and unrelated settings are preserved. Standard mode
-allows detected build, typecheck, format-check, lint, and test commands,
-targeted `node --test ...` runs, and
-read-only `git diff ...` inspection while continuing to reject arbitrary Node
-scripts, Git mutations, command chaining, redirection, destructive commands,
-and sensitive paths.
+Installation also creates `~/.config/token-optimizer/config.json` with your
+execution profile. Interactive fresh installs ask which profile to use;
+reinstalls keep the existing choice, and `--profile <safe|standard|unrestricted>`
+sets it explicitly. Choosing `unrestricted` interactively requires typing
+`unrestricted` to confirm.
+
+- **standard** (default): detected build, typecheck, format-check, lint, and
+  test commands; common runners invoked directly (tsc, vitest, jest, pytest,
+  cargo, go, eslint, ruff, ...); and read-only inspection (git status/log/diff,
+  ls, grep, cat). No package installs, in-place fixers, or arbitrary scripts.
+- **safe**: only the prefixes you add with `allow`.
+- **unrestricted**: any command.
+
+Every profile still rejects command chaining, pipes, redirection, network
+tools, destructive commands, secret files, and paths outside the workspace.
+
+```bash
+npx @softawarest/token-optimizer-installer profile               # show and change interactively
+npx @softawarest/token-optimizer-installer profile unrestricted
+npx @softawarest/token-optimizer-installer allow "npm install"   # allow a command prefix
+npx @softawarest/token-optimizer-installer allow --list
+npx @softawarest/token-optimizer-installer allow --remove "npm install"
+```
+
+Changes apply on the next tool call without restarting the client.
 
 ## Choosing a provider
 

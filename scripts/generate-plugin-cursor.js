@@ -60,7 +60,7 @@ try {
   fs.mkdirSync(rulesDir, { recursive: true });
   fs.mkdirSync(serverDir, { recursive: true });
 
-  const VERSION = "3.0.0";
+  const VERSION = "3.1.0";
 
   /* Read the lockfile-pinned SDK version so generated bundles are identical
      after a clean npm ci, regardless of a maintainer's local node_modules. */

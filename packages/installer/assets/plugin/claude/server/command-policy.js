@@ -3,10 +3,16 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.suggestAllowPrefix = suggestAllowPrefix;
 exports.evaluateCommand = evaluateCommand;
 const promises_1 = __importDefault(require("node:fs/promises"));
 const node_path_1 = __importDefault(require("node:path"));
-const sensitivePathPattern = /(^|[\s"'])~\/(?:\.ssh|\.aws|\.config|\.gnupg)|(^|[\s"'])\/(?:etc|proc|sys|dev|root)(?:\/|\s|$)|(?:^|[\/_.-])(credentials?|secrets?|private[_-]?key|id_rsa)(?:[./_\s-]|$)|\.env(?:\.|$)/i;
+const sensitivePathPattern = /(^|[\s"'])~\/(?:\.ssh|\.aws|\.config|\.gnupg)|(^|[\s"'])\/(?:etc|proc|sys|dev|root)(?:\/|\s|$)/i;
+/* Secret-bearing files are matched by basename, so ordinary source and test
+   paths that merely mention "credential" or "secret" stay usable while real
+   secret stores (.env, keys, credential files) remain unreadable. Committed
+   templates such as .env.example are not secrets. */
+const secretFilePattern = /^(?:\.env(?:\.(?!(?:example|sample|template|dist|defaults)$)[^\\/]+)?|id_(?:rsa|dsa|ecdsa|ed25519)|[^\\/]+\.(?:pem|key|p12|pfx|jks|keystore)|credentials(?:\.json)?|secrets?\.(?:json|ya?ml|env)|\.npmrc|\.netrc|\.pgpass|\.git-credentials)$/i;
 const environmentDumpPattern = /^(?:env|printenv|set)(?:\s|$)|\b(?:env|printenv)\s+.*(?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL)/i;
 const networkPattern = /\b(?:curl|wget|nc|netcat|socat|scp|ssh|ftp|telnet)\b/i;
 const destructivePattern = /(?:\b(?:mkfs|fdisk|shutdown|reboot)\b|\bgit\s+(?:reset\s+--hard|clean\s+-fd)|\bdd\s+if=)/i;
@@ -37,6 +43,18 @@ function hasDestructiveRm(command) {
     const flags = args.slice(1).filter((arg) => arg.startsWith('-') && !arg.startsWith('--'));
     return flags.some((flag) => flag.includes('r')) && flags.some((flag) => flag.includes('f'));
 }
+function referencesSecretFile(command) {
+    return tokens(command).some((token) => {
+        const value = token.includes('=') ? token.slice(token.indexOf('=') + 1) : token;
+        const basename = value.split(/[\\/]/).pop() || '';
+        return secretFilePattern.test(basename);
+    });
+}
+/* Single-quoted text is literal in POSIX shells, so `grep 'end$'` is not an
+   expansion. cmd.exe has no single-quote grouping, so nothing is stripped there. */
+function withoutLiteralSegments(command, platform) {
+    return platform === 'win32' ? command : command.replace(/'[^']*'/g, "''");
+}
 function matchesPrefix(command, prefixes = []) {
     const normalized = command.trim();
     return prefixes.some((prefix) => {
@@ -44,30 +62,107 @@ function matchesPrefix(command, prefixes = []) {
         return candidate.length > 0 && (normalized === candidate || normalized.startsWith(`${candidate} `));
     });
 }
+const anyArgs = () => true;
+const firstArgIn = (...names) => (rest) => names.includes(rest[0]);
+const withoutFlags = (rule, ...flags) => (rest) => rule(rest) && !rest.some((arg) => flags.some((flag) => arg === flag || arg.startsWith(`${flag}=`)));
+const requiresFlag = (...flags) => (rest) => rest.some((arg) => flags.includes(arg));
 /*
- * The installer default should support common narrow validation and inspection
- * work without turning standard into an arbitrary-command profile. Git diff
- * options that can write output or invoke repository-configured helpers remain
- * excluded; the deny-first checks still apply before this recognition step.
+ * Standard is the installer default: common validation runners and read-only
+ * inspection run without per-project allowlist entries. Rules recognize the
+ * tool plus a validating subcommand; flags that write files in place (--fix,
+ * --write), run arbitrary helpers, or redirect output stay excluded. The
+ * deny-first checks (paths, secrets, network, chaining) always run before this.
  */
-function matchesStandardProfileCommand(command) {
-    const args = tokens(command);
-    if ((args[0] === 'node' || args[0] === 'node.exe') && args[1] === '--test') {
-        const optionsThatLoadOrWrite = [
-            '-e', '--eval', '-p', '--print', '-r', '--require', '--import',
-            '--loader', '--experimental-loader', '--env-file', '--env-file-if-exists',
-            '--test-reporter-destination',
-        ];
-        return !args.slice(2).some((arg) => optionsThatLoadOrWrite.some((option) => arg === option || arg.startsWith(`${option}=`)));
+const VALIDATION_TOOLS = {
+    tsc: anyArgs, 'vue-tsc': anyArgs,
+    vitest: anyArgs, jest: anyArgs, mocha: anyArgs,
+    playwright: firstArgIn('test'),
+    eslint: withoutFlags(anyArgs, '--fix', '--fix-dry-run', '--output-file', '-o'),
+    stylelint: withoutFlags(anyArgs, '--fix', '--output-file', '-o'),
+    prettier: withoutFlags(requiresFlag('--check', '-c', '--list-different', '-l'), '--write', '-w'),
+    biome: withoutFlags(firstArgIn('check', 'lint', 'ci'), '--write', '--apply', '--apply-unsafe', '--fix'),
+    pytest: anyArgs, mypy: anyArgs, pyright: anyArgs, flake8: anyArgs,
+    ruff: (rest) => (rest[0] === 'check' && !rest.includes('--fix')) || (rest[0] === 'format' && rest.includes('--check')),
+    black: requiresFlag('--check'),
+    cargo: (rest) => ['test', 'check', 'clippy', 'build', 'nextest'].includes(rest[0]) || (rest[0] === 'fmt' && rest.includes('--check')),
+    go: firstArgIn('test', 'vet', 'build'),
+    dotnet: firstArgIn('test', 'build'),
+    mvn: firstArgIn('test', 'verify', 'compile'), './mvnw': firstArgIn('test', 'verify', 'compile'),
+    gradle: firstArgIn('test', 'build', 'check'), './gradlew': firstArgIn('test', 'build', 'check'),
+};
+const GIT_FORBIDDEN_OPTIONS = ['--output', '--ext-diff', '--textconv', '-O', '--open-files-in-pager', '--exec', '--upload-pack'];
+const GIT_BRANCH_MUTATIONS = ['-d', '-D', '--delete', '-m', '-M', '--move', '-c', '-C', '--copy', '-f', '--force', '-u', '--set-upstream-to', '--unset-upstream', '--edit-description'];
+const INSPECTION_TOOLS = {
+    git: (rest) => {
+        const options = rest.slice(1);
+        if (options.some((arg) => GIT_FORBIDDEN_OPTIONS.some((option) => arg === option || arg.startsWith(`${option}=`))))
+            return false;
+        if (['status', 'log', 'show', 'diff', 'blame', 'ls-files', 'rev-parse', 'grep', 'shortlog'].includes(rest[0]))
+            return true;
+        /* Listing branches is read-only; any positional name or mutation flag creates, renames, or deletes one. */
+        return rest[0] === 'branch' && options.every((arg) => arg.startsWith('-') && !GIT_BRANCH_MUTATIONS.includes(arg));
+    },
+    ls: anyArgs, pwd: anyArgs, wc: anyArgs, cat: anyArgs, head: anyArgs, tree: anyArgs, grep: anyArgs,
+    tail: withoutFlags(anyArgs, '-f', '-F', '--follow'),
+    rg: withoutFlags(anyArgs, '--pre', '--pre-glob'),
+    find: withoutFlags(anyArgs, '-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0', '-fprintf', '-fls'),
+};
+/* Package-runner wrappers are accepted only when the tool is already installed
+   in the workspace, so recognition can never trigger a registry download.
+   Bare `yarn <name>` is excluded because yarn resolves package scripts first. */
+const PACKAGE_RUNNERS = [
+    { prefix: ['npx', '--no-install'] }, { prefix: ['npx'] }, { prefix: ['pnpm', 'exec'] }, { prefix: ['bunx'] },
+];
+async function localBinExists(workspacePath, tool) {
+    if (!/^[a-z0-9@][a-z0-9._/-]*$/i.test(tool))
+        return false;
+    for (const name of [tool, `${tool}.cmd`]) {
+        try {
+            await promises_1.default.access(node_path_1.default.join(workspacePath, 'node_modules', '.bin', name));
+            return true;
+        }
+        catch { /* try next */ }
     }
-    if (!/^git\s+diff(?:\s|$)/.test(command.trim()))
+    return false;
+}
+function matchesNodeTest(args) {
+    if ((args[0] !== 'node' && args[0] !== 'node.exe') || args[1] !== '--test')
         return false;
-    if (args[0] !== 'git' || args[1] !== 'diff')
+    const optionsThatLoadOrWrite = [
+        '-e', '--eval', '-p', '--print', '-r', '--require', '--import',
+        '--loader', '--experimental-loader', '--env-file', '--env-file-if-exists',
+        '--test-reporter-destination',
+    ];
+    return !args.slice(2).some((arg) => optionsThatLoadOrWrite.some((option) => arg === option || arg.startsWith(`${option}=`)));
+}
+function matchesPythonModule(args) {
+    if (!/^python(?:3(?:\.\d+)?)?(?:\.exe)?$/.test(args[0] || '') || args[1] !== '-m')
         return false;
-    return !args.slice(2).some((arg) => arg === '--ext-diff'
-        || arg === '--textconv'
-        || arg === '--output'
-        || arg.startsWith('--output='));
+    const [module, ...rest] = args.slice(2);
+    if (module === 'unittest')
+        return true;
+    return ['pytest', 'mypy', 'ruff', 'black', 'flake8'].includes(module) && VALIDATION_TOOLS[module](rest);
+}
+async function matchesStandardProfileCommand(command, workspacePath) {
+    const args = tokens(command);
+    if (matchesNodeTest(args) || matchesPythonModule(args))
+        return true;
+    const runner = PACKAGE_RUNNERS.find(({ prefix }) => prefix.every((part, index) => args[index] === part));
+    if (runner) {
+        const [tool, ...rest] = args.slice(runner.prefix.length);
+        return Boolean(tool && VALIDATION_TOOLS[tool]?.(rest) && await localBinExists(workspacePath, tool));
+    }
+    const [tool, ...rest] = args;
+    const rule = Object.prototype.hasOwnProperty.call(VALIDATION_TOOLS, tool) ? VALIDATION_TOOLS[tool]
+        : Object.prototype.hasOwnProperty.call(INSPECTION_TOOLS, tool) ? INSPECTION_TOOLS[tool] : undefined;
+    return Boolean(rule && rule(rest));
+}
+/* A copy-pasteable allowlist prefix for a command the profile rejected: the
+   executable plus its subcommand when the second token is a plain word. */
+function suggestAllowPrefix(command) {
+    const args = tokens(command.trim());
+    const second = args[1];
+    return second && /^[a-z][a-z0-9:_-]*$/i.test(second) ? `${args[0]} ${second}` : args[0] || '';
 }
 /* runner.ts always spawns with shell:true, which resolves to cmd.exe on win32, not a POSIX
  * shell. cmd.exe does not treat backslash as an escape character and does not treat single
@@ -146,8 +241,8 @@ function isWithin(candidate, workspace) {
 }
 /* This is a deny-first command policy, not an operating-system sandbox. It
    rejects dangerous syntax and paths before evaluating a profile allow rule. */
-async function pathDenial(command, workspacePath) {
-    if (/(?:\$HOME|\$\{HOME\}|\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})/.test(command))
+async function pathDenial(command, workspacePath, platform) {
+    if (/(?:\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})/.test(withoutLiteralSegments(command, platform)))
         return 'SENSITIVE_PATH';
     if (/(^|[\s"'])~\/(?:\.ssh|\.aws|\.config|\.gnupg)/i.test(command))
         return 'SENSITIVE_PATH';
@@ -162,7 +257,7 @@ async function pathDenial(command, workspacePath) {
         if (!isWithin(canonical, workspace))
             return 'WORKSPACE_ESCAPE';
     }
-    if (sensitivePathPattern.test(command) || environmentDumpPattern.test(command))
+    if (sensitivePathPattern.test(command) || environmentDumpPattern.test(command) || referencesSecretFile(command))
         return 'SENSITIVE_PATH';
     return undefined;
 }
@@ -171,7 +266,8 @@ function deny(profile, reasonCode, message) {
 }
 async function evaluateCommand(input) {
     const command = input.command.trim();
-    const deniedPath = await pathDenial(command, input.workspacePath);
+    const platform = input.platform ?? process.platform;
+    const deniedPath = await pathDenial(command, input.workspacePath, platform);
     if (deniedPath)
         return deny(input.profile, deniedPath, deniedPath === 'SENSITIVE_PATH' ? 'Command references a sensitive path.' : 'Command references a path outside the workspace.');
     if (nestedShellPattern.test(command))
@@ -180,7 +276,7 @@ async function evaluateCommand(input) {
         return deny(input.profile, 'DESTRUCTIVE_PATTERN', 'Destructive command pattern is not permitted.');
     if (networkPattern.test(command) || /(?:^|\s)(?:>|>>).*https?:\/\//i.test(command))
         return deny(input.profile, 'NETWORK_EXFILTRATION', 'Network access or exfiltration is not permitted.');
-    const syntax = scanShellSyntax(command, input.platform ?? process.platform);
+    const syntax = scanShellSyntax(command, platform);
     if (syntax.composition || syntax.unmatchedQuote)
         return deny(input.profile, 'SHELL_METACHARACTER', syntax.unmatchedQuote ? 'Unmatched shell quote is not permitted.' : 'Command chaining, substitution, and redirection are not permitted.');
     if (input.profile === 'unrestricted')
@@ -189,7 +285,7 @@ async function evaluateCommand(input) {
         return { allowed: true, profile: input.profile, reasonCode: 'ALLOWLIST_MATCH' };
     if (input.profile === 'standard' && matchesPrefix(command, input.autoDetectedCommands))
         return { allowed: true, profile: input.profile, reasonCode: 'AUTO_DETECTED' };
-    if (input.profile === 'standard' && matchesStandardProfileCommand(command))
+    if (input.profile === 'standard' && await matchesStandardProfileCommand(command, input.workspacePath))
         return { allowed: true, profile: input.profile, reasonCode: 'STANDARD_PROFILE' };
     return deny(input.profile, 'COMMAND_NOT_ALLOWED', 'Command is not permitted by the active profile.');
 }

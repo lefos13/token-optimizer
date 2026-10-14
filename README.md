@@ -57,18 +57,30 @@ codebase, validate a change, or diagnose a failure. The main tools are:
 - `run_regression_check` — compares auto-detected validation against a local
   baseline.
 
-The installer creates a private user policy with the `standard` execution
-profile. That profile permits workspace-detected build, typecheck, format-check,
-lint, and test commands whether they are auto-detected or supplied explicitly.
-It also
-recognizes targeted `node --test ...` commands and read-only `git diff ...`
-inspection; Git mutations and arbitrary Node scripts still require an explicit
-user allowlist or the `unrestricted` profile. Shell chaining and other dangerous
-shell syntax remain blocked. Use the optional
-`testCommands` array to submit several independent checks in one verdict call;
-each command is still policy-checked separately. A blocked verdict has
-`validationOutcome: not_run`; it means validation never started, not that the
-project failed.
+## Choosing what the agent may run
+
+The installer asks which commands Token Optimizer may run for your agent:
+
+| Profile | What the agent may run |
+| --- | --- |
+| `standard` (recommended) | Your project's build/test/lint scripts, common test runners and linters (vitest, jest, pytest, cargo, go, tsc, eslint, ruff, ...), and read-only inspection (git status/log/diff, ls, grep, cat). |
+| `safe` | Only commands you allow explicitly. |
+| `unrestricted` | Any command. Use only for repositories you trust. |
+
+Every profile still blocks command chaining, pipes, redirection, network
+tools, secret files such as `.env` or keys, and paths outside the workspace.
+Change your choice any time; it applies on the next tool call:
+
+```bash
+npx @softawarest/token-optimizer-installer profile standard
+npx @softawarest/token-optimizer-installer allow "npm install"
+npx @softawarest/token-optimizer-installer allow --list
+npx @softawarest/token-optimizer-installer allow --remove "npm install"
+```
+
+When a command is blocked, the tool result says why and, if it can be
+allowed, includes the exact `allow` command. Your agent should ask you before
+running it.
 
 Tool run logs and private analytics are stored under
 `<workspace>/.codex-local-test-runs/`. Run `npm run analytics:ui` from a clone

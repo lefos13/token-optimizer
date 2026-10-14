@@ -66,15 +66,18 @@ function deriveSignalFromExit(code, signal) {
     return null;
 }
 /*
- * Git enables repository-configured textconv filters for ordinary diffs. A
- * standard-profile inspection must remain non-extensible after authorization,
- * so execute the requested diff with both helper mechanisms disabled while
- * retaining the caller's original command in result and audit metadata.
+ * Git enables repository-configured textconv filters for ordinary diffs, and
+ * log/show/blame reuse that machinery. A standard-profile inspection must
+ * remain non-extensible after authorization, so execute it with both helper
+ * mechanisms disabled while retaining the caller's original command in result
+ * and audit metadata. Blame only supports --no-textconv.
  */
 function hardenStandardCommand(command, policyReasonCode) {
     if (policyReasonCode !== 'STANDARD_PROFILE')
         return command;
-    return command.replace(/^(\s*git\s+diff)(?=\s|$)/, '$1 --no-ext-diff --no-textconv');
+    return command
+        .replace(/^(\s*git\s+(?:diff|log|show))(?=\s|$)/, '$1 --no-ext-diff --no-textconv')
+        .replace(/^(\s*git\s+blame)(?=\s|$)/, '$1 --no-textconv');
 }
 /**
  * Runs a single shell command inside the workspacePath, capturing all stdout and stderr.
