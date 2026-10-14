@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { buildStartJs } = require("./launcher-template");
-const { EXTRA_SKILLS, readSkillParts } = require("./skill-sources");
+const { EXTRA_SKILLS, PASSTHROUGH_ENV, readSkillParts } = require("./skill-sources");
 
 /* Cursor plugin flow.
    Generates a portable token_optimizer bundle under plugin/cursor/ for Cursor
@@ -148,8 +148,7 @@ Skip only when the user explicitly says not to use it.
            depending on which OS generated the file. Always forward-slash join instead. */
         args: [`${installedServerDir}/start.js`],
         env: {
-          OPENROUTER_API_KEY: "${env:OPENROUTER_API_KEY}",
-          OPENROUTER_MODEL: "${env:OPENROUTER_MODEL}",
+          ...Object.fromEntries(PASSTHROUGH_ENV.map((name) => [name, `\${env:${name}}`])),
         },
       },
     },

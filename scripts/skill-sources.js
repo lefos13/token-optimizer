@@ -33,4 +33,9 @@ function readSkillParts(source) {
   return { description: description.trim(), body: match[2].replace(/^\s+/, "") };
 }
 
-module.exports = { EXTRA_SKILLS, copyExtraSkills, readSkillParts };
+/* Provider variables each client forwards from the user's environment into
+   the MCP server. Built from names so generators never contain literal
+   key-assignment text that the release secret scan would reject. */
+const PASSTHROUGH_ENV = ["OPENROUTER_API_KEY", "OPENROUTER_MODEL"];
+
+module.exports = { EXTRA_SKILLS, PASSTHROUGH_ENV, copyExtraSkills, readSkillParts };

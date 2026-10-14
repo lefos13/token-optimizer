@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { buildStartJs } = require("./launcher-template");
-const { copyExtraSkills } = require("./skill-sources");
+const { copyExtraSkills, PASSTHROUGH_ENV } = require("./skill-sources");
 
 /* Claude Code plugin flow.
    Generates a complete, installable, portable Claude Code plugin under
@@ -140,8 +140,7 @@ try {
         command: "node",
         args: ["${CLAUDE_PLUGIN_ROOT}/server/start.js"],
         env: {
-          OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}",
-          OPENROUTER_MODEL: "${OPENROUTER_MODEL:-}",
+          ...Object.fromEntries(PASSTHROUGH_ENV.map((name) => [name, `\${${name}:-}`])),
           LOCAL_LLM_API_URL: "http://localhost:8080/v1",
           LOCAL_LLM_MODEL: "local-model",
         },

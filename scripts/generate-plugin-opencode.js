@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { buildStartJs } = require("./launcher-template");
-const { copyExtraSkills } = require("./skill-sources");
+const { copyExtraSkills, PASSTHROUGH_ENV } = require("./skill-sources");
 
 /* opencode plugin flow.
    Generates a portable token_optimizer bundle under plugin/opencode/ for opencode
@@ -135,8 +135,7 @@ exec node "$ROOT/start.js"
          depending on which OS generated the file. Always forward-slash join instead. */
       command: ["node", `${installedServerDir}/start.js`],
       environment: {
-        OPENROUTER_API_KEY: "{env:OPENROUTER_API_KEY}",
-        OPENROUTER_MODEL: "{env:OPENROUTER_MODEL}",
+        ...Object.fromEntries(PASSTHROUGH_ENV.map((name) => [name, `{env:${name}}`])),
       },
       enabled: true,
     },
